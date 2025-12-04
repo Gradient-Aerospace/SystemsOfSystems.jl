@@ -1,0 +1,33 @@
+name = "SystemsOfSystems"
+uuid = "444f41de-88f0-45df-a3dd-0849e84f1dfe"
+version = "0.1.0"
+authors = ["Tucker McClure <tucker@gradient.team>"]
+
+[workspace]
+projects = ["test"]
+
+[deps]
+Dimensions = "5f902022-033a-44bd-a904-0a49265d4d22"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[weakdeps]
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+HDF5Vectors = "7098961b-d60d-42aa-8832-e11a9f96377b"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+SystemsOfSystemsHDF5Ext = ["HDF5", "HDF5Vectors"]
+SystemsOfSystemsMakieExt = "Makie"
+
+[compat]
+HDF5 = "0.17.2"
+Makie = "0.24.7"
+OrderedCollections = "1.8.1"
+ProgressMeter = "1.11.0"
+Random = "1.11.0"
+
+[sources]
+Dimensions = {url = "https://github.com/Gradient-Aerospace/Dimensions.jl"}
+HDF5Vectors = {url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}
