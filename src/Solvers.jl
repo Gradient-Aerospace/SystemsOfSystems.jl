@@ -122,7 +122,7 @@ function solve(ommd, solver::Solvers.RungeKutta4, t_last, t_next, msd_km1, rates
         msd_k,
         rates = k1,
         stop = UnknownStopReason(),
-        t_next_suggested = t_completed + solver.options.dt,
+        t_next_suggested = t_next + solver.options.dt,
     )
     
 end
