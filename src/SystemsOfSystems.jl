@@ -18,7 +18,7 @@
 # - [x] Add a close_fcn.
 # - [ ] Figure out how to log the RNG state in a way we could load later.
 # - [ ] Figure out how to capture console output.
-# - [ ] Attach a license.
+# - [x] Attach a license.
 
 module SystemsOfSystems
 
@@ -39,40 +39,74 @@ using .TimeSeriesStuff
 """
 TODO
 """
-@kwdef struct ModelDescription{T}
-    type::Type{T} = Nothing # This could actually be any function that takes kwargs.
-    constants::NamedTuple = (;)
-    continuous_states::NamedTuple = (;)
-    discrete_states::NamedTuple = (;)
-    continuous_outputs::NamedTuple = (;)
-    discrete_outputs::NamedTuple = (;)
-    continuous_random_variables::NamedTuple = (;)
-    discrete_random_variables::NamedTuple = (;)
-    models::NamedTuple = (;)
-    t_next::Real = 0
+struct ModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+    type::Type{T} # This could actually be any function that takes kwargs.
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
+    t_next::Rational{Int64}
 end
+ModelDescription(;
+    type = Nothing,
+    constants = (;),
+    continuous_states = (;),
+    discrete_states = (;),
+    continuous_outputs = (;),
+    discrete_outputs = (;),
+    continuous_random_variables = (;),
+    discrete_random_variables = (;),
+    models = (;),
+    t_next = 0//1,
+    kwargs...
+) = ModelDescription(
+    type, constants,
+    continuous_states, discrete_states,
+    continuous_outputs, discrete_outputs,
+    continuous_random_variables, discrete_random_variables,
+    models,
+    rationalize(t_next),
+)
 
 """
 TODO
 """
-@kwdef struct RatesOutput
-    rates::NamedTuple = (;)
-    outputs::NamedTuple = (;) # Should this be continuous_outputs?
-    models = (;)
-    t_next::Real = 0
-    stop::Union{Bool, String} = false
+struct RatesOutput{RT, OT, MT}
+    rates::RT
+    outputs::OT # Should this be continuous_outputs?
+    models::MT
+    t_next::Rational{Int64}
+    stop::Bool # Or stop reason. TODO: I don't love the allocations here. This rest of this can be a bits type.
 end
+RatesOutput(;
+    rates = (;),
+    outputs = (;),
+    models = (;),
+    t_next = 0//1, # TODO: Why is this here?
+    stop = false,
+) = RatesOutput(rates, outputs, models, rationalize(t_next), stop)
 
 """
 TODO
 """
-@kwdef struct UpdatesOutput
-    updates::NamedTuple = (;)
-    outputs::NamedTuple = (;) # Should this be discrete_outputs?
-    models = (;)
-    t_next::Real = 0
-    stop::Union{Bool, String} = false
+struct UpdatesOutput{UT, OT, MT}
+    updates::UT
+    outputs::OT # Should this be discrete_outputs?
+    models::MT
+    t_next::Rational{Int64}
+    stop::Bool
 end
+UpdatesOutput(;
+    updates = (;),
+    outputs = (;),
+    models = (;),
+    t_next = 0//1,
+    stop = false,
+) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
 
 """
 TODO
@@ -128,13 +162,13 @@ end
 # not continuous_random_variables.)
 #
 # TODO: Should all of these named tuples have parameters for types?
-struct ModelStateDescription{T}
-    constants::NamedTuple
-    continuous_states::NamedTuple
-    discrete_states::NamedTuple
-    continuous_random_variables::NamedTuple
-    discrete_random_variables::NamedTuple
-    models::NamedTuple
+@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
     t_next::Rational{Int64}
 end
 ModelStateDescription{T}(;
@@ -145,45 +179,44 @@ ModelStateDescription{T}(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-) where {T} = ModelStateDescription{T}(
+) where {T} = ModelStateDescription{T, typeof(constants), typeof(continuous_states), typeof(discrete_states), typeof(continuous_random_variables), typeof(discrete_random_variables), typeof(models)}(
     constants, continuous_states, discrete_states,
     continuous_random_variables, discrete_random_variables, models,
     rationalize(t_next),
 )
 
-function model(desc::ModelStateDescription{T}) where {T}
-
-    # Get the model form for the sub-models first.
-    models = map(model, desc.models)
-
-    # Now construct the named tuple containing all of the relevant fields.
-    nt = (;
+# This has no allocations for bits types.
+function model(desc::ModelStateDescription{Nothing})
+    return (;
         desc.constants...,
         desc.continuous_states...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
-        models...,
+        map(model, desc.models)...,
     )
-
-    # If a type was provided, splat the named tuple into the type constructor. Note that
-    # because of the type parameter, the compiler will hardcode only the useful branch.
-    if T === Nothing
-        return nt
-    else
-        return T(; nt...)
-    end
-
 end
 
-function copy_model_state_description_except(md::ModelStateDescription{T}; kwargs...) where {T}
-    return ModelStateDescription{T}(;
-        constants = md.constants,
-        continuous_states = md.continuous_states,
-        discrete_states = md.discrete_states,
-        continuous_random_variables = md.continuous_random_variables,
-        discrete_random_variables = md.discrete_random_variables,
-        models = md.models,
-        t_next = md.t_next,
+# This has no allocations for bits types.
+function model(desc::ModelStateDescription{T}) where {T}
+    return T(;
+        desc.constants...,
+        desc.continuous_states...,
+        desc.discrete_states...,
+        desc.discrete_random_variables...,
+        map(model, desc.models)...,
+    )
+end
+
+# This has no allocations for bits types.
+function copy_model_state_description_except(md::T; kwargs...) where {T <: ModelStateDescription}
+    return T(;
+        md.constants,
+        md.continuous_states,
+        md.discrete_states,
+        md.continuous_random_variables,
+        md.discrete_random_variables,
+        md.models,
+        md.t_next,
         kwargs...
     )
 end
@@ -234,7 +267,7 @@ TODO
 @kwdef struct SimOptions
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
-    monitors::Vector{Monitors.AbstractMonitorOptions} = [Monitors.ProgressBarOptions(),]
+    monitors::Vector{Monitors.AbstractMonitorOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
     # catch_error::Bool = true
 end
@@ -290,33 +323,40 @@ end
 # The Loop #
 ############
 
-function draw_wc(t_last, t_next, ommd::ModelDescription{T}, msd::Union{ModelDescription, ModelStateDescription}) where {T}
-    return ModelStateDescription{T}(;
-        constants = msd.constants,
-        continuous_states = msd.continuous_states,
-        discrete_states = msd.discrete_states,
+function draw_wc(t_last, t_next, ommd::MDT, msd::MSDT) where {MDT <: ModelDescription, MSDT <: ModelStateDescription}
+    return copy_model_state_description_except(msd;
         continuous_random_variables = map(drvf -> drvf(t_last, t_next), ommd.continuous_random_variables),
-        discrete_random_variables = msd.discrete_random_variables,
-        models = NamedTuple(
-            mn => draw_wc(t_last, t_next, ommd.models[mn], msd.models[mn])
-            for mn in keys(ommd.models)
+        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
+            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+                draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+            end
         ),
-        t_next = msd.t_next,
     )
 end
 
-function draw_wd(t, ommd::ModelDescription{T}, msd::Union{ModelDescription, ModelStateDescription}) where {T}
+function draw_wd(t, ommd::ModelDescription{T}, md::ModelDescription) where {T}
     return ModelStateDescription{T}(;
-        constants = msd.constants,
-        continuous_states = msd.continuous_states,
-        discrete_states = msd.discrete_states,
-        continuous_random_variables = msd.continuous_random_variables,
+        md.constants,
+        md.continuous_states,
+        md.discrete_states,
+        md.continuous_random_variables,
         discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
         models = NamedTuple(
-            mn => draw_wd(t, ommd.models[mn], msd.models[mn])
+            mn => draw_wd(t, ommd.models[mn], md.models[mn])
             for mn in keys(ommd.models)
         ),
-        t_next = msd.t_next,
+        md.t_next,
+    )
+end
+
+function draw_wd(t, ommd::MDT, msd::MSDT) where {MDT <: ModelDescription, MSDT <: ModelStateDescription}
+    return copy_model_state_description_except(msd;
+        discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
+        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
+            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+                draw_wd(t, ommd_submodel, msd_submodel)
+            end
+        ),
     )
 end
 
@@ -370,19 +410,40 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-function update(msd::ModelStateDescription{T}, updates_output) where {T}
+# function update(msd::ModelStateDescription{T}, updates_output) where {T}
+#     return copy_model_state_description_except(
+#         msd;
+#         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
+#         discrete_states = NamedTuple(
+#             f => haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
+#             for f in keys(msd.discrete_states)
+#         ),
+#         models = NamedTuple(
+#             f => haskey(updates_output.models, f) ? update(msd.models[f], updates_output.models[f]) : msd.models[f]
+#             for f in keys(msd.models)
+#         ),
+#         t_next = iszero(updates_output.t_next) ? msd.t_next : rationalize(updates_output.t_next), # If there's no t_next, keep the last one.
+#     )
+# end
+
+function update(msd::MSDT, updates_output) where {MSDT <: ModelStateDescription}
     return copy_model_state_description_except(
         msd;
-        # TODO: Are continuous-time states allows to change here? Seems like we should allow that.
-        discrete_states = NamedTuple(
-            f => haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
-            for f in keys(msd.discrete_states)
+        # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
+        # This does not seem to allocate for bits types:
+        discrete_states = NamedTuple{fieldnames(fieldtype(MSDT, :discrete_states))}(
+            map(fieldnames(fieldtype(MSDT, :discrete_states))) do f
+                haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
+            end
         ),
-        models = NamedTuple(
-            f => haskey(updates_output.models, f) ? update(msd.models[f], updates_output.models[f]) : msd.models[f]
-            for f in keys(msd.models)
+        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
+            map(fieldnames(fieldtype(MSDT, :models))) do f
+                haskey(updates_output.models, f) ?
+                    update(msd.models[f], updates_output.models[f]) :
+                    msd.models[f]
+            end
         ),
-        t_next = iszero(updates_output.t_next) ? msd.t_next : updates_output.t_next, # If there's no t_next, keep the last one.
+        t_next = iszero(updates_output.t_next) ? msd.t_next : rationalize(updates_output.t_next), # If there's no t_next, keep the last one.
     )
 end
 
@@ -502,7 +563,7 @@ function simulate(
     # Use those descriptions to build up the time histories.
     log, mh = create_log(options.log, model_description, options.time_dimension)
 
-    # Now that the time histories are started, we have no further use of the 
+    # Now that the time histories are started, we have no further use of the
     # VariableDescriptions. Strip those out for the "original minimal model description".
     # We'll always keep this original description around for its random-variable functions.
     ommd = strip_fluff_from_model_description(model_description)
