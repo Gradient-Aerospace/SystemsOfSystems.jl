@@ -35,41 +35,71 @@ SystemsOfSystems.describe(stop::SolverFailedToConverge) = "The solver failed to 
 # Helpers #
 ###########
 
-# There's a lot of room for improvement of these propagators.
+# These propagate for a single derivative.
 
-function propagate(msd::ModelStateDescription{T}, dt, rates_output::RatesOutput) where {T}
+function propagate_variable(x::T, dt, x_dot::T) where {T}
+    return (x .+ dt .* x_dot)::T # Just to be clear, this shouldn't change the type.
+end
+
+function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
+    return NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            propagate_variable(x[f], dt, x_dot[f])
+        end
+    )
+end
+
+function propagate(msd::MSDT, dt, rates_output::RatesOutput) where {MSDT <: ModelStateDescription}
     return copy_model_state_description_except(
         msd;
-        continuous_states = NamedTuple(
-            f => msd.continuous_states[f] + dt * rates_output.rates[f]
-            for f in keys(msd.continuous_states)
-        ),
-        models = NamedTuple(
-            f => haskey(rates_output.models, f) ? propagate(msd.models[f], dt, rates_output.models[f]) : msd.models[f]
-            for f in keys(msd.models)
+        continuous_states = propagate_set(msd.continuous_states, dt, rates_output.rates),
+        models = NamedTuple{keys(msd.models)}(
+            map(keys(msd.models)) do f
+                if haskey(rates_output.models, f)
+                    propagate(msd.models[f], dt, rates_output.models[f])
+                else
+                    msd.models[f]
+                end
+            end
         ),
     )
 end
 
-function propagate(msd::ModelStateDescription{T}, gains::Tuple, rates_outputs::Tuple) where {T}
-    # println("propagating a $T")
+# These propagate for a set of derivatives.
+
+function propagate_variable(x::T, gains, x_dot::NTuple{N, T}) where {T, N}
+    return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
+end
+
+function propagate_set(x::T1, gains, x_dot::NTuple{N, T2}) where {T1, T2, N}
+    return NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            propagate_variable(x[f], gains, getfield.(x_dot, f))
+        end
+    )
+end
+
+# `submodels` is a named tuple of ModelStateDescriptions.
+# `gains` is a tuple of gains.
+# `rates_output` is a tuple (one for each gain) of named tuples holding the RatesOutput
+# of each of the submodels (for submodels that have such an output).
+function propagate_models(submodels::T1, gains, rates_outputs) where {T1}
+    return NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            if haskey(rates_outputs[1], f) # If we have derivatives for this state...
+                propagate(submodels[f], gains, getfield.(rates_outputs, f))
+            else
+                submodels[f]
+            end
+        end
+    )
+end
+
+function propagate(msd::ModelStateDescription, gains::Tuple, rates_outputs::Tuple)
     return copy_model_state_description_except(
         msd;
-        continuous_states = NamedTuple(
-            f => (
-                msd.continuous_states[f] + 
-                sum(g * ro.rates[f] for (g, ro) in zip(gains, rates_outputs))
-            )
-            for f in keys(msd.continuous_states)
-        ),
-        models = NamedTuple(
-            f => if haskey(rates_outputs[1].models, f)
-                propagate(msd.models[f], gains, Tuple(ro.models[f] for ro in rates_outputs))
-            else
-                msd.models[f]
-            end
-            for f in keys(msd.models)
-        ),
+        continuous_states = propagate_set(msd.continuous_states, gains, map(el -> el.rates, rates_outputs)),
+        models = propagate_models(msd.models, gains, map(el -> el.models, rates_outputs)),
     )
 end
 
@@ -124,7 +154,7 @@ function solve(ommd, solver::Solvers.RungeKutta4, t_last, t_next, msd_km1, rates
         stop = UnknownStopReason(),
         t_next_suggested = t_next + solver.options.dt,
     )
-    
+
 end
 
 ###################
@@ -144,7 +174,7 @@ struct DormandPrince54Options <: AbstractSolverOptions
     rel_tol::Float64
 end
 DormandPrince54Options(;
-    initial_dt = 1//1, 
+    initial_dt = 1//1,
     max_dt = 1//0,
     abs_tol = 1e-3, # TODO: Figure out what's most common for these.
     rel_tol = 1e-5,
@@ -300,7 +330,7 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
         stop = stop,
         t_next_suggested = rationalize(t_next_suggested),
     )
-    
+
 end
 
 end

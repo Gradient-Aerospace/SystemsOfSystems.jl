@@ -323,10 +323,10 @@ end
 # The Loop #
 ############
 
-function draw_wc(t_last, t_next, ommd::MDT, msd::MSDT) where {MDT <: ModelDescription, MSDT <: ModelStateDescription}
+function draw_wc(t_last, t_next, ommd::ModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         continuous_random_variables = map(drvf -> drvf(t_last, t_next), ommd.continuous_random_variables),
-        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
+        models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
             end
@@ -334,6 +334,7 @@ function draw_wc(t_last, t_next, ommd::MDT, msd::MSDT) where {MDT <: ModelDescri
     )
 end
 
+# TODO: We haven't pulled out allocations here since this only happens once, but we could.
 function draw_wd(t, ommd::ModelDescription{T}, md::ModelDescription) where {T}
     return ModelStateDescription{T}(;
         md.constants,
@@ -349,10 +350,10 @@ function draw_wd(t, ommd::ModelDescription{T}, md::ModelDescription) where {T}
     )
 end
 
-function draw_wd(t, ommd::MDT, msd::MSDT) where {MDT <: ModelDescription, MSDT <: ModelStateDescription}
+function draw_wd(t, ommd::ModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
-        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
+        models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wd(t, ommd_submodel, msd_submodel)
             end
@@ -410,34 +411,18 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-# function update(msd::ModelStateDescription{T}, updates_output) where {T}
-#     return copy_model_state_description_except(
-#         msd;
-#         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-#         discrete_states = NamedTuple(
-#             f => haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
-#             for f in keys(msd.discrete_states)
-#         ),
-#         models = NamedTuple(
-#             f => haskey(updates_output.models, f) ? update(msd.models[f], updates_output.models[f]) : msd.models[f]
-#             for f in keys(msd.models)
-#         ),
-#         t_next = iszero(updates_output.t_next) ? msd.t_next : rationalize(updates_output.t_next), # If there's no t_next, keep the last one.
-#     )
-# end
-
-function update(msd::MSDT, updates_output) where {MSDT <: ModelStateDescription}
+function update(msd::ModelStateDescription, updates_output)
     return copy_model_state_description_except(
         msd;
         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
         # This does not seem to allocate for bits types:
-        discrete_states = NamedTuple{fieldnames(fieldtype(MSDT, :discrete_states))}(
-            map(fieldnames(fieldtype(MSDT, :discrete_states))) do f
+        discrete_states = NamedTuple{keys(msd.discrete_states)}(
+            map(keys(msd.discrete_states)) do f
                 haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
             end
         ),
-        models = NamedTuple{fieldnames(fieldtype(MSDT, :models))}(
-            map(fieldnames(fieldtype(MSDT, :models))) do f
+        models = NamedTuple{keys(msd.models)}(
+            map(keys(msd.models)) do f
                 haskey(updates_output.models, f) ?
                     update(msd.models[f], updates_output.models[f]) :
                     msd.models[f]

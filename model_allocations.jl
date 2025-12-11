@@ -5,8 +5,12 @@ using SystemsOfSystems: SystemsOfSystems, ModelStateDescription, model, copy_mod
     a::Int64
     b::Float64
     c::Float64
-    x::NTuple{3, Float64}
+    x::Float64
 end
+
+# # This is cheating, but that's probably fine. (Do we need to .* in the solver?)
+# Base.:*(a::Real, b::NTuple{N, T}) where {N, T <: Real} = a .* b
+# Base.:+(a::NTuple{N, T}, b::NTuple{N, T}) where {N, T <: Real} = a .+ b
 
 @kwdef struct MyOuterType
     c::Float64
@@ -24,7 +28,7 @@ function set_up_msd(k)
                     a = k,
                 ),
                 continuous_states = (;
-                    x = (1., 2., 3.),
+                    x = 1.,
                 ),
                 discrete_states = (;
                     b = float(k),
@@ -123,7 +127,7 @@ ommd = SystemsOfSystems.ModelDescription(;
                 a = 0,
             ),
             continuous_states = (;
-                x = (1., 2., 3.),
+                x = 1.,
             ),
             discrete_states = (;
                 b = 0.,
@@ -178,4 +182,51 @@ updated_msds = Vector{typeof(prototype)}(undef, n)
 update_msds!(updated_msds, msds)
 @time update_msds!(updated_msds, msds)
 
-# To test: solve
+function rates(t, model)
+    return SystemsOfSystems.RatesOutput(;
+        models = (;
+            inner = SystemsOfSystems.RatesOutput(;
+                rates = (;
+                    x = 2.,
+                ),
+            ),
+        ),
+    )
+end
+
+function propagate_msd(msd, k)
+    rates_output = rates(0//1, model(msd))
+    return SystemsOfSystems.Solvers.propagate(msd, 1//1, rates_output)
+end
+
+function propagate_msds!(msds_out, msds_in)
+    for k in eachindex(msds_out)
+        msds_out[k] = propagate_msd(msds_in[k], k)
+    end
+end
+
+println("propagate")
+updated_msds = Vector{typeof(prototype)}(undef, n)
+propagate_msds!(updated_msds, msds)
+@time propagate_msds!(updated_msds, msds)
+
+function propagate2_msd(msd, k)
+    rates_output = rates(0//1, model(msd))
+    return SystemsOfSystems.Solvers.propagate(msd, (1., 1.), (rates_output, rates_output))
+end
+
+function propagate2_msds!(msds_out, msds_in)
+    for k in eachindex(msds_out)
+        msds_out[k] = propagate2_msd(msds_in[k], k)
+    end
+end
+
+println("propagate2")
+updated_msds = Vector{typeof(prototype)}(undef, n)
+propagate2_msds!(updated_msds, msds)
+@time propagate2_msds!(updated_msds, msds)
+
+solver = SystemsOfSystems.Solvers.create_solver(SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1//1), msd)
+
+# println("solve")
+# SystemsOfSystems.Solvers.solve(ommd, solver, 0//1, 1//1, msd, rates, 100//1)
