@@ -1,3 +1,7 @@
 [deps]
 SystemsOfSystems = "444f41de-88f0-45df-a3dd-0849e84f1dfe"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+HDF5Vectors = "7098961b-d60d-42aa-8832-e11a9f96377b"
+
+[sources]
+HDF5Vectors = {url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}

@@ -305,12 +305,12 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # Internal Utilities #
 ######################
 
-function recursively_reduce(op, desc, value) # desc is anything with .models.
-    for m in desc.models # Run on submodels first.
-        value = recursively_reduce(op, m, value)
-    end
-    return op(desc, value) # Now do this model.
-end
+# function recursively_reduce(op, desc, value) # desc is anything with .models.
+#     for m in desc.models # Run on submodels first.
+#         value = recursively_reduce(op, m, value)
+#     end
+#     return op(desc, value) # Now do this model.
+# end
 
 # function recursive_map(f, desc)
 #     return (;
@@ -411,24 +411,76 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-function update(msd::ModelStateDescription, updates_output)
+function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
+    return NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            if hasfield(T2, f)
+                updated_discrete_states[f]
+            else
+                discrete_states[f]
+            end
+        end
+    )
+end
+
+# Note: the return type parameter here helps this to not allocate, but it might be overly
+# restrictive. If types can change, should MSD know about that ahead of time?
+#
+# `submodels` is a named tuple of MSDs.
+# `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
+#
+function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
+
+    # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
+    # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
+    # operation). However, in order to make this operation efficient, we'll build a
+    # "complete" set of updates, where every model is listed, and if it wasn't in the
+    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
+    # we'll have a named tuple that matches submodels in fields (including their order),
+    # and we can just map out `update` function to the corresponding submodels and updates.
+    #
+    # This is one of our more tedious concessions to efficiency, but honestly, it's not all
+    # that bad.
+    #
+    complete_submodels_updates = NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            if hasfield(T2, f)
+                submodels_updates[f]
+            else
+                UpdatesOutput()
+            end
+        end
+    )
+
+    # Now this map doesn't allocate at all:
+    return map(update, submodels, complete_submodels_updates)
+
+end
+
+# If there's no t_next, keep the last one.
+function update_model_t_next(last_t_next, updated_t_next)
+    iszero(updated_t_next) ? last_t_next : updated_t_next # TODO: How do we want to indicate that there is no new t_next?
+end
+
+function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
     return copy_model_state_description_except(
         msd;
         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-        # This does not seem to allocate for bits types:
-        discrete_states = NamedTuple{keys(msd.discrete_states)}(
-            map(keys(msd.discrete_states)) do f
-                haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
-            end
-        ),
-        models = NamedTuple{keys(msd.models)}(
-            map(keys(msd.models)) do f
-                haskey(updates_output.models, f) ?
-                    update(msd.models[f], updates_output.models[f]) :
-                    msd.models[f]
-            end
-        ),
-        t_next = iszero(updates_output.t_next) ? msd.t_next : rationalize(updates_output.t_next), # If there's no t_next, keep the last one.
+        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
+        models = update_submodels(msd.models, updates_output.models),
+        t_next = update_model_t_next(msd.t_next, updates_output.t_next),
+    )
+end
+
+function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
+    t_next_from_this_model = if msd.t_next > t_last
+        msd.t_next
+    else
+        1//0 # If t_next is in the past, it no longer limits us.
+    end
+    return minimum(
+        find_soonest_t_next_from_models(t_last, el) for el in msd.models;
+        init = t_next_from_this_model,
     )
 end
 
@@ -439,24 +491,18 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     # Assume the next stop is the next time a user asked for a stop (which might be the end
     # time).
     k_next_requested_stop = findfirst(>(t_last), t)
-    if !isnothing(k_next_requested_stop)
-        t_next = t[k_next_requested_stop]
+    t_next_from_user = if !isnothing(k_next_requested_stop)
+        t[k_next_requested_stop]
     else
-        t_next = last(t)
+        last(t)
     end
-
-    # But if the integrator suggested a sooner time, take that.
-    t_next = min(t_next, t_next_suggested)
 
     # Ask all of the models what time they want to stop next, and take the soonest.
-    t_next = recursively_reduce(msd, t_next) do el, t_next_so_far
-        # TODO: Should we use Inf instead of 0 for "whatever t_next is fine with me"?
-        if iszero(el.t_next)
-            return t_next_so_far
-        else
-            return min(t_next_so_far, rationalize(el.t_next))
-        end
-    end
+    t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
+
+    # Get the soonest from what the user asked for, what the integrator suggested, and what
+    # the models requested.
+    t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
 
     # Perform the continuous-time update from t_last to t_next.
     # println("Stepping from $t_last to $t_next.")
@@ -506,16 +552,19 @@ end
 function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_end
+    t_next_suggested = get_initial_time_step(solver)
     stop = UnknownStopReason()
-    while isa(stop, UnknownStopReason)
-        try
-            t_completed, msd, stop, t_next_suggested = step!(mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd, solver, monitors, t_end, t_next_suggested)
-        catch err
-            trace = stacktrace(catch_backtrace())
-            showerror(stderr, err, trace)
-            stop = EncounteredError(float(t_completed), err, trace)
+    try
+        while isa(stop, UnknownStopReason)
+            t_completed, msd, stop, t_next_suggested = step!(
+                mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
+                solver, monitors, t_end, t_next_suggested,
+            )
         end
+    catch err
+        trace = stacktrace(catch_backtrace())
+        showerror(stderr, err, trace)
+        stop = EncounteredError(float(t_completed), err, trace)
     end
     return (t_completed, msd, stop)
 end

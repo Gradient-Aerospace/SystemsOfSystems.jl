@@ -198,7 +198,7 @@ end
 gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 
 # TODO: Consider making a getindex that breaks apart a single string into model and var.
-# This implies that subtypes of AbstractLog would implement get_model_history instead of 
+# This implies that subtypes of AbstractLog would implement get_model_history instead of
 # get_index. An alternative is to implement `get_dict` and let AbstractLog take care of all
 # of the dict-like interface.
 # function Base.getindex(log::AbstractLog, k)
@@ -244,9 +244,9 @@ function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::Vari
     return TimeSeries(
         var.title,
         Float64[],
-        T[], 
+        T[],
         time_dimension,
-        var.dimensions, 
+        var.dimensions,
         join("/" * el for el in breadcrumbs),
         discrete,
     )
@@ -255,7 +255,7 @@ function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::T, t
     return TimeSeries(
         join("/" * el for el in breadcrumbs), # Let the slug be the title.
         Float64[],
-        T[], 
+        T[],
         time_dimension,
         Dimension[], # TODO: Attempt to automatically list dimensions?
         join("/" * el for el in breadcrumbs),

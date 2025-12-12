@@ -66,19 +66,9 @@ function copy_msds!(copied_msds, msds)
     end
 end
 
-function find_t_next(msd)
-    return SystemsOfSystems.recursively_reduce(msd, 0//1) do el, t_next_so_far
-        if iszero(el.t_next)
-            return t_next_so_far
-        else
-            return min(t_next_so_far, rationalize(el.t_next))
-        end
-    end
-end
-
 function populate_t_next!(t_next, msd)
     for k in eachindex(t_next)
-        t_next[k] = find_t_next(msd)
+        t_next[k] = SystemsOfSystems.find_soonest_t_next(1//1, msd)
     end
 end
 
@@ -114,31 +104,34 @@ t_next = Vector{Rational{Int64}}(undef, 1)
 populate_t_next!(t_next, msd)
 @time populate_t_next!(t_next, msd)
 
-rng = Xoshiro(1)
-ommd = SystemsOfSystems.ModelDescription(;
-    type = MyOuterType,
-    constants = (;
-        c = 6.,
-    ),
-    models = (;
-        inner = SystemsOfSystems.ModelDescription(;
-            type = MyType,
-            constants = (;
-                a = 0,
-            ),
-            continuous_states = (;
-                x = 1.,
-            ),
-            discrete_states = (;
-                b = 0.,
-            ),
-            discrete_random_variables = (;
-                c = (t) -> 0.,
-            ),
-            t_next = 0//1,
+function my_init()
+    rng = Xoshiro(1)
+    return SystemsOfSystems.ModelDescription(;
+        type = MyOuterType,
+        constants = (;
+            c = 6.,
         ),
-    ),
-)
+        models = (;
+            inner = SystemsOfSystems.ModelDescription(;
+                type = MyType,
+                constants = (;
+                    a = 0,
+                ),
+                continuous_states = (;
+                    x = 1.,
+                ),
+                discrete_states = (;
+                    b = 0.,
+                ),
+                discrete_random_variables = (;
+                    c = (t) -> randn(rng),
+                ),
+                t_next = 0//1,
+            ),
+        ),
+    )
+end
+ommd = my_init()
 
 msd = prototype
 
@@ -228,5 +221,12 @@ propagate2_msds!(updated_msds, msds)
 
 solver = SystemsOfSystems.Solvers.create_solver(SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1//1), msd)
 
-# println("solve")
-# SystemsOfSystems.Solvers.solve(ommd, solver, 0//1, 1//1, msd, rates, 100//1)
+function foo(ommd, solver, msd, rates)
+    solution = SystemsOfSystems.Solvers.solve(ommd, solver, 0//1, 1//1, msd, rates, 100//1)
+    return isbits(solution)
+end
+
+println("solve")
+bar = foo(ommd, solver, msd, rates)
+@time bar = foo(ommd, solver, msd, rates)
+@show bar

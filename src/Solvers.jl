@@ -3,7 +3,7 @@ TODO
 """
 module Solvers
 
-export create_solver, solve
+export create_solver, get_initial_time_step, solve
 
 using ..SystemsOfSystems: ModelStateDescription, RatesOutput, AbstractStopReason, UnknownStopReason, model, draw_wc, copy_model_state_description_except
 import SystemsOfSystems
@@ -16,11 +16,11 @@ abstract type AbstractSolverOptions end
 abstract type AbstractSolver end
 
 # This is what the "solve" method is expected to output.
-@kwdef struct SolverOutputs
+@kwdef struct SolverOutputs{T1 <: ModelStateDescription, T2 <: RatesOutput}
     t_completed::Rational{Int64}
-    msd_km1::ModelStateDescription
-    msd_k::ModelStateDescription
-    rates::RatesOutput
+    msd_km1::T1
+    msd_k::T1
+    rates::T2
     stop::AbstractStopReason
     t_next_suggested::Rational{Int64}
 end
@@ -49,29 +49,44 @@ function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
     )
 end
 
-function propagate(msd::MSDT, dt, rates_output::RatesOutput) where {MSDT <: ModelStateDescription}
+function propagate_models(submodels::NamedTuple, dt, rates_output::NamedTuple)
+
+    # A user's RatesOutput's model entry could contain the models in any order. Here, we
+    # build a named tuple that matches the order of the original set of submodels. Plus, if
+    # an entry is missing, we fill it in with a blank RatesOutput(). This lets us simply
+    # `map` below.
+    complete_rates_output = NamedTuple{fieldnames(typeof(submodels))}(
+        map(fieldnames(typeof(submodels))) do f
+            if hasfield(typeof(rates_output), f)
+                rates_output[f]
+            else
+                RatesOutput()
+            end
+        end
+    )
+
+    # Now this is a simple map and doesn't allocate.
+    return map((sm, ro) -> propagate(sm, dt, ro), submodels, complete_rates_output)
+
+end
+
+function propagate(msd::ModelStateDescription, dt, rates_output::RatesOutput)
     return copy_model_state_description_except(
         msd;
         continuous_states = propagate_set(msd.continuous_states, dt, rates_output.rates),
-        models = NamedTuple{keys(msd.models)}(
-            map(keys(msd.models)) do f
-                if haskey(rates_output.models, f)
-                    propagate(msd.models[f], dt, rates_output.models[f])
-                else
-                    msd.models[f]
-                end
-            end
-        ),
+        models = propagate_models(msd.models, dt, rates_output.models),
     )
 end
 
 # These propagate for a set of derivatives.
 
 function propagate_variable(x::T, gains, x_dot::NTuple{N, T}) where {T, N}
+    # println("propagate_variable for $T")
     return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
 end
 
-function propagate_set(x::T1, gains, x_dot::NTuple{N, T2}) where {T1, T2, N}
+function propagate_set(x::T1, gains, x_dot::Tuple) where {T1}
+    # println("propagate_set for $T1 and $(typeof(x_dot))")
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
             propagate_variable(x[f], gains, getfield.(x_dot, f))
@@ -83,23 +98,38 @@ end
 # `gains` is a tuple of gains.
 # `rates_output` is a tuple (one for each gain) of named tuples holding the RatesOutput
 # of each of the submodels (for submodels that have such an output).
-function propagate_models(submodels::T1, gains, rates_outputs) where {T1}
-    return NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if haskey(rates_outputs[1], f) # If we have derivatives for this state...
-                propagate(submodels[f], gains, getfield.(rates_outputs, f))
-            else
-                submodels[f]
+function propagate_models(submodels::NamedTuple, gains::Tuple, rates_outputs::Tuple)
+
+    # println("propagate_models for $T1")
+
+    complete_rates_outputs = map(rates_outputs) do ro
+        NamedTuple{fieldnames(typeof(submodels))}(
+            map(fieldnames(typeof(submodels))) do f
+                # fieldtype(typeof(rates_outputs), 1)
+                if hasfield(typeof(ro), f) # If we have derivatives for this state...
+                    # println("We have a RatesOutput for $f")
+                    getfield(ro, f) # Get it for all of them.
+                else
+                    # println("We DON'T have a RatesOutput for $f")
+                    RatesOutput()
+                end
             end
-        end
+        )
+    end
+
+    return map(
+        (sm, ro...) -> propagate(sm, gains, ro),
+        submodels, complete_rates_outputs...
     )
+
 end
 
-function propagate(msd::ModelStateDescription, gains::Tuple, rates_outputs::Tuple)
+function propagate(msd::ModelStateDescription{T}, gains::Tuple, rates_outputs::Tuple) where {T}
+    # println("propagate for $T")
     return copy_model_state_description_except(
         msd;
-        continuous_states = propagate_set(msd.continuous_states, gains, map(el -> el.rates, rates_outputs)),
-        models = propagate_models(msd.models, gains, map(el -> el.models, rates_outputs)),
+        continuous_states = propagate_set(msd.continuous_states, gains, getfield.(rates_outputs, :rates)),
+        models = propagate_models(msd.models, gains, getfield.(rates_outputs, :models)),
     )
 end
 
@@ -119,7 +149,9 @@ struct RungeKutta4 <: AbstractSolver
 end
 create_solver(options::RungeKutta4Options, msd::ModelStateDescription) = RungeKutta4(options)
 
-function solve(ommd, solver::Solvers.RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
+get_initial_time_step(solver::RungeKutta4) = solver.options.dt
+
+function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
 
     # Make the draws for the continuous-time function.
     msd_km1_with_draws = draw_wc(t_last, t_next, ommd, msd_km1)
@@ -130,8 +162,11 @@ function solve(ommd, solver::Solvers.RungeKutta4, t_last, t_next, msd_km1, rates
 
     # If there's no actual work to do here, skip the calculations.
     if t_last == t_next
+
         msd_k = msd_km1_with_draws
+
     else
+
         dt    = t_next - t_last
         msd2  = propagate(msd1, dt/2, k1)
         k2    = rates_fcn(t_last + dt/2, model(msd2))
@@ -139,11 +174,21 @@ function solve(ommd, solver::Solvers.RungeKutta4, t_last, t_next, msd_km1, rates
         k3    = rates_fcn(t_last + dt, model(msd3))
         msd4  = propagate(msd1, dt, k3)
         k4    = rates_fcn(t_last + dt, model(msd4))
-        msd_k = propagate(
-            msd_km1_with_draws,
-            (dt/6, dt/3, dt/3, dt/6),
-            (k1, k2, k3, k4),
-        )
+
+        # This seems more efficient:
+        # propagate(
+        #     msd_km1_with_draws,
+        #     (dt/6, dt/3, dt/3, dt/6),
+        #     (k1, k2, k3, k4),
+        # )
+
+        # But this doesn't allocate and is actually slightly faster.
+        msd_k = msd_km1_with_draws
+        msd_k = propagate(msd_k, dt/6, k1)
+        msd_k = propagate(msd_k, dt/3, k2)
+        msd_k = propagate(msd_k, dt/3, k3)
+        msd_k = propagate(msd_k, dt/6, k4)
+
     end
 
     return SolverOutputs(;
@@ -190,6 +235,8 @@ struct DormandPrince54 <: AbstractSolver
 end
 create_solver(options::DormandPrince54Options, msd::ModelStateDescription) = DormandPrince54(options)
 
+get_initial_time_step(solver::DormandPrince54) = solver.options.initial_dt
+
 # This returns how much of the allowable error tolerance was "used" by this intergration
 # step, reporting only the worst case (largest fraction of tolerance used).
 function get_max_normalized_error(solver, msd1, msd2, max_so_far)
@@ -227,7 +274,7 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
         (8/9, 19372/6561, −25360/2187, 64448/6561, −212/729),
         (1., 9017/3168, −355/33, 46732/5247, 49/176, −5103/18656),
         (1., 35/384, 0., 500/1113, 125/192, −2187/6784, 11/84),
-        (35/384, 0., 500/1113, 125/192, −2187/6784, 11/84), # The first-same-as-last property is useless here due to the discrete update.
+        (35/384, 0., 500/1113, 125/192, −2187/6784, 11/84, 0.), # The first-same-as-last property is useless here due to the discrete update.
         (5179/57600, 0., 7571/16695, 393/640, −92097/339200, 187/2100, 1/40),
     )
 
