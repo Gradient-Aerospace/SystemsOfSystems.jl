@@ -81,12 +81,10 @@ end
 # These propagate for a set of derivatives.
 
 function propagate_variable(x::T, gains, x_dot::NTuple{N, T}) where {T, N}
-    # println("propagate_variable for $T")
     return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
 end
 
 function propagate_set(x::T1, gains, x_dot::Tuple) where {T1}
-    # println("propagate_set for $T1 and $(typeof(x_dot))")
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
             propagate_variable(x[f], gains, getfield.(x_dot, f))
@@ -99,33 +97,24 @@ end
 # `rates_output` is a tuple (one for each gain) of named tuples holding the RatesOutput
 # of each of the submodels (for submodels that have such an output).
 function propagate_models(submodels::NamedTuple, gains::Tuple, rates_outputs::Tuple)
-
-    # println("propagate_models for $T1")
-
     complete_rates_outputs = map(rates_outputs) do ro
         NamedTuple{fieldnames(typeof(submodels))}(
             map(fieldnames(typeof(submodels))) do f
-                # fieldtype(typeof(rates_outputs), 1)
                 if hasfield(typeof(ro), f) # If we have derivatives for this state...
-                    # println("We have a RatesOutput for $f")
                     getfield(ro, f) # Get it for all of them.
                 else
-                    # println("We DON'T have a RatesOutput for $f")
                     RatesOutput()
                 end
             end
         )
     end
-
     return map(
         (sm, ro...) -> propagate(sm, gains, ro),
         submodels, complete_rates_outputs...
     )
-
 end
 
 function propagate(msd::ModelStateDescription{T}, gains::Tuple, rates_outputs::Tuple) where {T}
-    # println("propagate for $T")
     return copy_model_state_description_except(
         msd;
         continuous_states = propagate_set(msd.continuous_states, gains, getfield.(rates_outputs, :rates)),
@@ -205,9 +194,6 @@ end
 ###################
 # DormandPrince54 #
 ###################
-
-# TODO: We could let each model provide its own error function, with its own absolute and
-# relative tolerances.
 
 """
 TODO

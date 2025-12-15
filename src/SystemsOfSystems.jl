@@ -1,25 +1,3 @@
-# TODO:
-#
-# - [x] Create the Logger interface.
-# - [x] Figure out performance.
-# - [x] Use an HDF5Logger.
-# - [x] Load an HDF5 log.
-# - [x] Save constants too.
-# - [x] Figure out the time dimension.
-# - [x] Move HDF5Log to an extension.
-# - [x] Make functions for plotting time series.
-# - [x] Make the loop a function.
-# - [x] Add a try-catch.
-# - [x] Encapsulate the RK4 solver.
-# - [x] Make DP54.
-# - [x] Tidy up solver interface.
-# - [x] Implement a progress bar.
-# - [x] Make a NullLog.
-# - [x] Add a close_fcn.
-# - [ ] Figure out how to log the RNG state in a way we could load later.
-# - [ ] Figure out how to capture console output.
-# - [x] Attach a license.
-
 module SystemsOfSystems
 
 export simulate, SimOptions, Solvers, Monitors, Logs
@@ -79,16 +57,14 @@ struct RatesOutput{RT, OT, MT}
     rates::RT
     outputs::OT # Should this be continuous_outputs?
     models::MT
-    t_next::Rational{Int64}
-    stop::Bool # Or stop reason. TODO: I don't love the allocations here. This rest of this can be a bits type.
+    stop::Bool # Or stop reason. TODO: I don't love the allocations here. The rest of this can be a bits type.
 end
 RatesOutput(;
     rates = (;),
     outputs = (;),
     models = (;),
-    t_next = 0//1, # TODO: Why is this here?
     stop = false,
-) = RatesOutput(rates, outputs, models, rationalize(t_next), stop)
+) = RatesOutput(rates, outputs, models, stop)
 
 """
 TODO
