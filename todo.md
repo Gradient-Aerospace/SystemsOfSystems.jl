@@ -14,7 +14,7 @@
 - [x] Test both solvers.
 - [x] Test all logs.
 - [x] Test continuous-only sims.
-- [ ] Test discrete-only sims.
+- [x] Test discrete-only sims.
 - [x] Test hybrid sims.
 - [x] Test without VariableDescriptions.
 - [x] Test with VariableDescriptions.
@@ -26,6 +26,8 @@
 - [ ] Test very long sims to make sure steps keep working as expected.
 - [ ] Test for type stability.
 - [ ] Test documentation with jldoctest.
+- [ ] Test non-zero start times.
+- [x] Test the close function.
 
 ## Features
 

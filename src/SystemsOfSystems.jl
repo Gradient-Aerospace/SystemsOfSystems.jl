@@ -586,8 +586,8 @@ function simulate(
     model_prototype;
     t, # Any collection; sim starts at first(t) and goes to last(t) and breaks at everything in between.
     init_fcn, # Turns the prototype into a model description, which can be turned into a model
-    rates_fcn,
-    updates_fcn,
+    rates_fcn = (args...) -> RatesOutput(),
+    updates_fcn = (args...) -> UpdatesOutput(),
     close_fcn = (t, model) -> nothing,
     seed = 0,
     options::SimOptions = SimOptions(),

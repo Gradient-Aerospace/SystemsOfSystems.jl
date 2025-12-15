@@ -51,7 +51,6 @@ include("control_system_demo.jl")
                 ),
             )
         end,
-        updates_fcn = (t, model) -> UpdatesOutput(),
         t = (0, t_end),
         options = SimOptions(;
             solver,
@@ -82,6 +81,50 @@ include("control_system_demo.jl")
     end
 
     Logs.close_log(history.log)
+
+end
+
+# Here's a discrete-only sim.
+@testset failfast = false "discrete exponential" begin
+
+    is_closed = [false,]
+
+    # We'll simulate a pure (and discrete) exponential decay and compare to the known answer.
+    time_constant = 2.
+    t_end = 5.
+    history, t, model = simulate(
+        nothing;
+        init_fcn = (args...) -> ModelDescription(
+            discrete_states = (;
+                x = 1.,
+                t = 0.,
+            ),
+            t_next = 0.1,
+        ),
+        updates_fcn = (t, model) -> UpdatesOutput(;
+            updates = (;
+                t = t,
+                x = exp(-(t - model.t)/time_constant) * model.x
+            ),
+            t_next = 1.5 * t, # Just for fun, steps change size.
+        ),
+        close_fcn = (t, model) -> begin
+            is_closed[1] = true
+        end,
+        t = (0, t_end),
+    )
+
+    # Test the final state.
+    @test t == t_end
+    @test model.x ≈ exp(-t_end/time_constant) atol=1e-4
+
+    @test history["/"]["x"].time[1] == 0.
+    @test history["/"]["x"].data[1] == 1.
+    @test history["/"]["x"].data[end] == model.x
+    @test is_closed[1] == true
+
+    # Test our weird stepping strategy.
+    history["/"]["x"].time == vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
 
 end
 
