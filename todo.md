@@ -13,11 +13,15 @@
 
 - [x] Test both solvers.
 - [x] Test all logs.
-- [ ] Test systems of systems.
+- [x] Test continuous-only sims.
+- [ ] Test discrete-only sims.
+- [x] Test hybrid sims.
+- [x] Test without VariableDescriptions.
+- [x] Test with VariableDescriptions.
+- [x] Test monitor.
+- [x] Test systems of systems.
 - [ ] Test random variables.
 - [ ] Test all the types we intend to support.
-- [ ] Test with VariableDescriptions.
-- [ ] Test monitor.
 - [ ] Test plots.
 - [ ] Test very long sims to make sure steps keep working as expected.
 - [ ] Test for type stability.

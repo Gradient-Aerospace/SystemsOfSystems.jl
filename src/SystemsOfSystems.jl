@@ -301,6 +301,12 @@ Base.values(history::SimHistory) = values(history.log)
 Base.pairs(history::SimHistory) = pairs(history.log)
 # TODO: There's more stuff we could pass through.
 
+# We could allow a user to "close" a history, just passing along the call to the log,
+# so that they don't have to worry about the internal log, but I'm not sure what the point
+# is. The history has fields for a reason. The log is the only thing that needs to be
+# closed, and it's reasonable to ask for that directly.
+# Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
+
 ######################
 # Internal Utilities #
 ######################

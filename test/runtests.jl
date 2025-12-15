@@ -7,6 +7,11 @@ using SystemsOfSystems: Solvers, Logs, Monitors
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
 
+
+include("control_system_demo.jl")
+
+
+# This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 
     dt_rk4 = 0.1
@@ -80,6 +85,7 @@ mkpath(joinpath(@__DIR__, out_dir))
 
 end
 
+# Here's a sim with a single hybrid model.
 @testset "closed loop control" begin
 
     # We'll simulate a closed-loop control system to test hybrid systems.
