@@ -1,25 +1,3 @@
-# TODO:
-#
-# - [x] Create the Logger interface.
-# - [x] Figure out performance.
-# - [x] Use an HDF5Logger.
-# - [x] Load an HDF5 log.
-# - [x] Save constants too.
-# - [x] Figure out the time dimension.
-# - [x] Move HDF5Log to an extension.
-# - [x] Make functions for plotting time series.
-# - [x] Make the loop a function.
-# - [x] Add a try-catch.
-# - [x] Encapsulate the RK4 solver.
-# - [x] Make DP54.
-# - [x] Tidy up solver interface.
-# - [x] Implement a progress bar.
-# - [x] Make a NullLog.
-# - [x] Add a close_fcn.
-# - [ ] Figure out how to log the RNG state in a way we could load later.
-# - [ ] Figure out how to capture console output.
-# - [ ] Attach a license.
-
 module SystemsOfSystems
 
 export simulate, SimOptions, Solvers, Monitors, Logs
@@ -39,40 +17,72 @@ using .TimeSeriesStuff
 """
 TODO
 """
-@kwdef struct ModelDescription{T}
-    type::Type{T} = Nothing # This could actually be any function that takes kwargs.
-    constants::NamedTuple = (;)
-    continuous_states::NamedTuple = (;)
-    discrete_states::NamedTuple = (;)
-    continuous_outputs::NamedTuple = (;)
-    discrete_outputs::NamedTuple = (;)
-    continuous_random_variables::NamedTuple = (;)
-    discrete_random_variables::NamedTuple = (;)
-    models::NamedTuple = (;)
-    t_next::Real = 0
+struct ModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+    type::Type{T} # This could actually be any function that takes kwargs.
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
+    t_next::Rational{Int64}
 end
+ModelDescription(;
+    type = Nothing,
+    constants = (;),
+    continuous_states = (;),
+    discrete_states = (;),
+    continuous_outputs = (;),
+    discrete_outputs = (;),
+    continuous_random_variables = (;),
+    discrete_random_variables = (;),
+    models = (;),
+    t_next = 0//1,
+    kwargs...
+) = ModelDescription(
+    type, constants,
+    continuous_states, discrete_states,
+    continuous_outputs, discrete_outputs,
+    continuous_random_variables, discrete_random_variables,
+    models,
+    rationalize(t_next),
+)
 
 """
 TODO
 """
-@kwdef struct RatesOutput
-    rates::NamedTuple = (;)
-    outputs::NamedTuple = (;) # Should this be continuous_outputs?
-    models = (;)
-    t_next::Real = 0
-    stop::Union{Bool, String} = false
+struct RatesOutput{RT, OT, MT}
+    rates::RT
+    outputs::OT # Should this be continuous_outputs?
+    models::MT
+    stop::Bool # Or stop reason. TODO: I don't love the allocations here. The rest of this can be a bits type.
 end
+RatesOutput(;
+    rates = (;),
+    outputs = (;),
+    models = (;),
+    stop = false,
+) = RatesOutput(rates, outputs, models, stop)
 
 """
 TODO
 """
-@kwdef struct UpdatesOutput
-    updates::NamedTuple = (;)
-    outputs::NamedTuple = (;) # Should this be discrete_outputs?
-    models = (;)
-    t_next::Real = 0
-    stop::Union{Bool, String} = false
+struct UpdatesOutput{UT, OT, MT}
+    updates::UT
+    outputs::OT # Should this be discrete_outputs?
+    models::MT
+    t_next::Rational{Int64}
+    stop::Bool
 end
+UpdatesOutput(;
+    updates = (;),
+    outputs = (;),
+    models = (;),
+    t_next = 0//1,
+    stop = false,
+) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
 
 """
 TODO
@@ -128,13 +138,13 @@ end
 # not continuous_random_variables.)
 #
 # TODO: Should all of these named tuples have parameters for types?
-struct ModelStateDescription{T}
-    constants::NamedTuple
-    continuous_states::NamedTuple
-    discrete_states::NamedTuple
-    continuous_random_variables::NamedTuple
-    discrete_random_variables::NamedTuple
-    models::NamedTuple
+@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
     t_next::Rational{Int64}
 end
 ModelStateDescription{T}(;
@@ -145,45 +155,44 @@ ModelStateDescription{T}(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-) where {T} = ModelStateDescription{T}(
+) where {T} = ModelStateDescription{T, typeof(constants), typeof(continuous_states), typeof(discrete_states), typeof(continuous_random_variables), typeof(discrete_random_variables), typeof(models)}(
     constants, continuous_states, discrete_states,
     continuous_random_variables, discrete_random_variables, models,
     rationalize(t_next),
 )
 
-function model(desc::ModelStateDescription{T}) where {T}
-
-    # Get the model form for the sub-models first.
-    models = map(model, desc.models)
-
-    # Now construct the named tuple containing all of the relevant fields.
-    nt = (;
+# This has no allocations for bits types.
+function model(desc::ModelStateDescription{Nothing})
+    return (;
         desc.constants...,
         desc.continuous_states...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
-        models...,
+        map(model, desc.models)...,
     )
-
-    # If a type was provided, splat the named tuple into the type constructor. Note that
-    # because of the type parameter, the compiler will hardcode only the useful branch.
-    if T === Nothing
-        return nt
-    else
-        return T(; nt...)
-    end
-
 end
 
-function copy_model_state_description_except(md::ModelStateDescription{T}; kwargs...) where {T}
-    return ModelStateDescription{T}(;
-        constants = md.constants,
-        continuous_states = md.continuous_states,
-        discrete_states = md.discrete_states,
-        continuous_random_variables = md.continuous_random_variables,
-        discrete_random_variables = md.discrete_random_variables,
-        models = md.models,
-        t_next = md.t_next,
+# This has no allocations for bits types.
+function model(desc::ModelStateDescription{T}) where {T}
+    return T(;
+        desc.constants...,
+        desc.continuous_states...,
+        desc.discrete_states...,
+        desc.discrete_random_variables...,
+        map(model, desc.models)...,
+    )
+end
+
+# This has no allocations for bits types.
+function copy_model_state_description_except(md::T; kwargs...) where {T <: ModelStateDescription}
+    return T(;
+        md.constants,
+        md.continuous_states,
+        md.discrete_states,
+        md.continuous_random_variables,
+        md.discrete_random_variables,
+        md.models,
+        md.t_next,
         kwargs...
     )
 end
@@ -234,7 +243,7 @@ TODO
 @kwdef struct SimOptions
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
-    monitors::Vector{Monitors.AbstractMonitorOptions} = [Monitors.ProgressBarOptions(),]
+    monitors::Vector{Monitors.AbstractMonitorOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
     # catch_error::Bool = true
 end
@@ -268,16 +277,22 @@ Base.values(history::SimHistory) = values(history.log)
 Base.pairs(history::SimHistory) = pairs(history.log)
 # TODO: There's more stuff we could pass through.
 
+# We could allow a user to "close" a history, just passing along the call to the log,
+# so that they don't have to worry about the internal log, but I'm not sure what the point
+# is. The history has fields for a reason. The log is the only thing that needs to be
+# closed, and it's reasonable to ask for that directly.
+# Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
+
 ######################
 # Internal Utilities #
 ######################
 
-function recursively_reduce(op, desc, value) # desc is anything with .models.
-    for m in desc.models # Run on submodels first.
-        value = recursively_reduce(op, m, value)
-    end
-    return op(desc, value) # Now do this model.
-end
+# function recursively_reduce(op, desc, value) # desc is anything with .models.
+#     for m in desc.models # Run on submodels first.
+#         value = recursively_reduce(op, m, value)
+#     end
+#     return op(desc, value) # Now do this model.
+# end
 
 # function recursive_map(f, desc)
 #     return (;
@@ -290,33 +305,41 @@ end
 # The Loop #
 ############
 
-function draw_wc(t_last, t_next, ommd::ModelDescription{T}, msd::Union{ModelDescription, ModelStateDescription}) where {T}
-    return ModelStateDescription{T}(;
-        constants = msd.constants,
-        continuous_states = msd.continuous_states,
-        discrete_states = msd.discrete_states,
+function draw_wc(t_last, t_next, ommd::ModelDescription, msd::ModelStateDescription)
+    return copy_model_state_description_except(msd;
         continuous_random_variables = map(drvf -> drvf(t_last, t_next), ommd.continuous_random_variables),
-        discrete_random_variables = msd.discrete_random_variables,
-        models = NamedTuple(
-            mn => draw_wc(t_last, t_next, ommd.models[mn], msd.models[mn])
-            for mn in keys(ommd.models)
+        models = NamedTuple{keys(msd.models)}(
+            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+                draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+            end
         ),
-        t_next = msd.t_next,
     )
 end
 
-function draw_wd(t, ommd::ModelDescription{T}, msd::Union{ModelDescription, ModelStateDescription}) where {T}
+# TODO: We haven't pulled out allocations here since this only happens once, but we could.
+function draw_wd(t, ommd::ModelDescription{T}, md::ModelDescription) where {T}
     return ModelStateDescription{T}(;
-        constants = msd.constants,
-        continuous_states = msd.continuous_states,
-        discrete_states = msd.discrete_states,
-        continuous_random_variables = msd.continuous_random_variables,
+        md.constants,
+        md.continuous_states,
+        md.discrete_states,
+        md.continuous_random_variables,
         discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
         models = NamedTuple(
-            mn => draw_wd(t, ommd.models[mn], msd.models[mn])
+            mn => draw_wd(t, ommd.models[mn], md.models[mn])
             for mn in keys(ommd.models)
         ),
-        t_next = msd.t_next,
+        md.t_next,
+    )
+end
+
+function draw_wd(t, ommd::ModelDescription, msd::ModelStateDescription)
+    return copy_model_state_description_except(msd;
+        discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
+        models = NamedTuple{keys(msd.models)}(
+            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+                draw_wd(t, ommd_submodel, msd_submodel)
+            end
+        ),
     )
 end
 
@@ -370,19 +393,76 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-function update(msd::ModelStateDescription{T}, updates_output) where {T}
+function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
+    return NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            if hasfield(T2, f)
+                updated_discrete_states[f]
+            else
+                discrete_states[f]
+            end
+        end
+    )
+end
+
+# Note: the return type parameter here helps this to not allocate, but it might be overly
+# restrictive. If types can change, should MSD know about that ahead of time?
+#
+# `submodels` is a named tuple of MSDs.
+# `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
+#
+function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
+
+    # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
+    # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
+    # operation). However, in order to make this operation efficient, we'll build a
+    # "complete" set of updates, where every model is listed, and if it wasn't in the
+    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
+    # we'll have a named tuple that matches submodels in fields (including their order),
+    # and we can just map out `update` function to the corresponding submodels and updates.
+    #
+    # This is one of our more tedious concessions to efficiency, but honestly, it's not all
+    # that bad.
+    #
+    complete_submodels_updates = NamedTuple{fieldnames(T1)}(
+        map(fieldnames(T1)) do f
+            if hasfield(T2, f)
+                submodels_updates[f]
+            else
+                UpdatesOutput()
+            end
+        end
+    )
+
+    # Now this map doesn't allocate at all:
+    return map(update, submodels, complete_submodels_updates)
+
+end
+
+# If there's no t_next, keep the last one.
+function update_model_t_next(last_t_next, updated_t_next)
+    iszero(updated_t_next) ? last_t_next : updated_t_next # TODO: How do we want to indicate that there is no new t_next?
+end
+
+function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
     return copy_model_state_description_except(
         msd;
-        # TODO: Are continuous-time states allows to change here? Seems like we should allow that.
-        discrete_states = NamedTuple(
-            f => haskey(updates_output.updates, f) ? updates_output.updates[f] : msd.discrete_states[f]
-            for f in keys(msd.discrete_states)
-        ),
-        models = NamedTuple(
-            f => haskey(updates_output.models, f) ? update(msd.models[f], updates_output.models[f]) : msd.models[f]
-            for f in keys(msd.models)
-        ),
-        t_next = iszero(updates_output.t_next) ? msd.t_next : updates_output.t_next, # If there's no t_next, keep the last one.
+        # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
+        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
+        models = update_submodels(msd.models, updates_output.models),
+        t_next = update_model_t_next(msd.t_next, updates_output.t_next),
+    )
+end
+
+function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
+    t_next_from_this_model = if msd.t_next > t_last
+        msd.t_next
+    else
+        1//0 # If t_next is in the past, it no longer limits us.
+    end
+    return minimum(
+        find_soonest_t_next_from_models(t_last, el) for el in msd.models;
+        init = t_next_from_this_model,
     )
 end
 
@@ -393,24 +473,18 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     # Assume the next stop is the next time a user asked for a stop (which might be the end
     # time).
     k_next_requested_stop = findfirst(>(t_last), t)
-    if !isnothing(k_next_requested_stop)
-        t_next = t[k_next_requested_stop]
+    t_next_from_user = if !isnothing(k_next_requested_stop)
+        t[k_next_requested_stop]
     else
-        t_next = last(t)
+        last(t)
     end
-
-    # But if the integrator suggested a sooner time, take that.
-    t_next = min(t_next, t_next_suggested)
 
     # Ask all of the models what time they want to stop next, and take the soonest.
-    t_next = recursively_reduce(msd, t_next) do el, t_next_so_far
-        # TODO: Should we use Inf instead of 0 for "whatever t_next is fine with me"?
-        if iszero(el.t_next)
-            return t_next_so_far
-        else
-            return min(t_next_so_far, rationalize(el.t_next))
-        end
-    end
+    t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
+
+    # Get the soonest from what the user asked for, what the integrator suggested, and what
+    # the models requested.
+    t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
 
     # Perform the continuous-time update from t_last to t_next.
     # println("Stepping from $t_last to $t_next.")
@@ -460,16 +534,19 @@ end
 function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_end
+    t_next_suggested = get_initial_time_step(solver)
     stop = UnknownStopReason()
-    while isa(stop, UnknownStopReason)
-        try
-            t_completed, msd, stop, t_next_suggested = step!(mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd, solver, monitors, t_end, t_next_suggested)
-        catch err
-            trace = stacktrace(catch_backtrace())
-            showerror(stderr, err, trace)
-            stop = EncounteredError(float(t_completed), err, trace)
+    try
+        while isa(stop, UnknownStopReason)
+            t_completed, msd, stop, t_next_suggested = step!(
+                mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
+                solver, monitors, t_end, t_next_suggested,
+            )
         end
+    catch err
+        trace = stacktrace(catch_backtrace())
+        showerror(stderr, err, trace)
+        stop = EncounteredError(float(t_completed), err, trace)
     end
     return (t_completed, msd, stop)
 end
@@ -485,8 +562,8 @@ function simulate(
     model_prototype;
     t, # Any collection; sim starts at first(t) and goes to last(t) and breaks at everything in between.
     init_fcn, # Turns the prototype into a model description, which can be turned into a model
-    rates_fcn,
-    updates_fcn,
+    rates_fcn = (args...) -> RatesOutput(),
+    updates_fcn = (args...) -> UpdatesOutput(),
     close_fcn = (t, model) -> nothing,
     seed = 0,
     options::SimOptions = SimOptions(),
@@ -502,7 +579,7 @@ function simulate(
     # Use those descriptions to build up the time histories.
     log, mh = create_log(options.log, model_description, options.time_dimension)
 
-    # Now that the time histories are started, we have no further use of the 
+    # Now that the time histories are started, we have no further use of the
     # VariableDescriptions. Strip those out for the "original minimal model description".
     # We'll always keep this original description around for its random-variable functions.
     ommd = strip_fluff_from_model_description(model_description)

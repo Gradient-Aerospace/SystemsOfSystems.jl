@@ -91,7 +91,7 @@ function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescriptio
             constant_group["units"] = String[d.label for d in v.dimensions]
         else
             constant_group["title"] = join(["/" * el for el in breadcrumbs], string(k))
-            vec = create_hdf5_vector(constant_group, "value", typeof(v.value); chunk_length = 1)
+            vec = create_hdf5_vector(constant_group, "value", typeof(v); chunk_length = 1)
             push!(vec, v)
             constant_group["labels"] = String[]
             constant_group["units"] = String[]
@@ -120,8 +120,10 @@ function create_log(options::HDF5LogOptions, model_description, time_dimension)
 end
 
 function close_log(log::HDF5Log)
-    close(log.fid)
-    log.fid = nothing # TODO: What's the point of this?
+    if !isnothing(log.fid) && isopen(log.fid)
+        close(log.fid)
+        log.fid = nothing # TODO: What's the point of this?
+    end
 end
 
 function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
