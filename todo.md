@@ -21,6 +21,7 @@
 - [x] Test monitor.
 - [x] Test systems of systems.
 - [x] Test the close function.
+- [x] Test "missing" outputs.
 - [ ] Test random variables.
 - [ ] Test all the types we intend to support.
 - [ ] Test plots.

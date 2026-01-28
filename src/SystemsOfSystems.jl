@@ -13,6 +13,8 @@ using .TimeSeriesStuff
 # User Function Outputs #
 #########################
 
+# TODO: Is there a BareModelDescription type too? This can be the flexible thing returned
+# from initialization instead.
 # AKA InitOutput
 """
 TODO
@@ -40,7 +42,6 @@ ModelDescription(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-    kwargs...
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
@@ -88,7 +89,7 @@ UpdatesOutput(;
 TODO
 """
 struct VariableDescription{T}
-    value::T
+    value::Union{Missing, T}
     title::String
     dimensions::Vector{Dimension}
     # record::Bool # To let users decide on a per-model basis if they want this model to log anything at all. Or, let this be a set of symbols to record.

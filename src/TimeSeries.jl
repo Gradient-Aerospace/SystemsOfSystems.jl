@@ -29,6 +29,8 @@ TODO
 end
 
 # TODO: Should this be push!(ts, (t, x)) to follow the push!(coll, el) pattern?
+function Base.push!(ts::TimeSeries, t, x::Missing)
+end
 function Base.push!(ts::TimeSeries, t, x)
     push!(ts.time, t)
     push!(ts.data, x)
