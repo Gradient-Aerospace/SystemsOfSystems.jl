@@ -26,6 +26,9 @@ end
 
 """
 TODO
+
+This combines multiple time series in a single plot. The input is a vector of
+string-time-series pairs, where the string becomes the legend label for the plot.
 """
 function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false)
 
@@ -69,6 +72,27 @@ function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; ski
 
     return f
 
+end
+
+# Plot all of the dimensions of all of the time series stacked vertically.
+function SystemsOfSystems.plot_ts(tss::Vector{<:TimeSeries})
+    f = Figure()
+    count = 0
+    for ts in tss
+        t = collect(ts.time)
+        data = collect(ts.data)
+        plot_fcn = ts.discrete ? stairs! : lines!
+        for (k, dim) in enumerate(ts.dimensions)
+            a = Axis(f[count + k, 1];
+                xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
+                title = k == 1 ? ts.title : "",
+                ylabel = "$(dim.label) ($(dim.units))",
+            )
+            plot_fcn(a, t, [getdim(el, k) for el in data]; label = dim.label)
+        end
+        count += length(ts.dimensions)
+    end
+    return f
 end
 
 end
