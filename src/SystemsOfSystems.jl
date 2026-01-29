@@ -4,7 +4,8 @@ export simulate, SimOptions, Solvers, Monitors, Logs
 export ModelDescription, VariableDescription, is_regular_step_triggering
 export RatesOutput, UpdatesOutput
 
-using Random: Xoshiro
+using Random: Xoshiro, AbstractRNG
+import Random
 
 include("TimeSeries.jl")
 using .TimeSeriesStuff
@@ -13,23 +14,22 @@ using .TimeSeriesStuff
 # User Function Outputs #
 #########################
 
-# TODO: Is there a BareModelDescription type too? This can be the flexible thing returned
-# from initialization instead.
-# AKA InitOutput
+# TODO: A potential name here is InitOutput for consistency.
 """
 TODO
 """
-struct ModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
-    type::Type{T} # This could actually be any function that takes kwargs.
-    constants::CT
-    continuous_states::XCT
-    discrete_states::XDT
-    continuous_outputs::YCT
-    discrete_outputs::YDT
-    continuous_random_variables::WCT
-    discrete_random_variables::WDT
-    models::MT
-    t_next::Rational{Int64}
+struct ModelDescription
+    type
+    constants
+    continuous_states
+    discrete_states
+    continuous_outputs
+    discrete_outputs
+    continuous_random_variables
+    discrete_random_variables
+    models
+    t_next
+    rng::Union{Nothing, AbstractRNG}
 end
 ModelDescription(;
     type = Nothing,
@@ -42,14 +42,32 @@ ModelDescription(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
+    rng = nothing, # User can specify what they want, or nothing to inherit an RNG based on their breadcrumbs.
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
     models,
-    rationalize(t_next),
+    rationalize(t_next), rng,
 )
+
+"""
+TODO
+"""
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+    type::Type{T} # This could actually be any function that takes kwargs.
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
+    t_next::Rational{Int64}
+    rng::Xoshiro
+end
 
 """
 TODO
@@ -98,11 +116,31 @@ struct VariableDescription{T}
     VariableDescription{T}(value; title, dimensions) where {T} = new{T}(value, title, Dimension[dimensions...])
 end
 
+"""
+TODO
+"""
+struct BranchingSeed
+    salt::Int64
+    breadcrumbs::String
+end
+export BranchingSeed
+
+"""
+TODO
+"""
+function branch(seed::BranchingSeed, name::String)
+    return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
+end
+export branch
+
+"Creates a Xoshiro with the seed and name from the given BranchingSeed."
+Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
+
 strip_fluff_from_variable(var) = var
 strip_fluff_from_variable(var::VariableDescription) = var.value
 
-function strip_fluff_from_model_description(desc::ModelDescription)
-    return ModelDescription(;
+function strip_fluff_from_model_description(desc::ModelDescription, seed::BranchingSeed)
+    return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
         continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
@@ -111,8 +149,14 @@ function strip_fluff_from_model_description(desc::ModelDescription)
         discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
         continuous_random_variables = map(strip_fluff_from_variable, desc.continuous_random_variables),
         discrete_random_variables = map(strip_fluff_from_variable, desc.discrete_random_variables),
-        models = map(strip_fluff_from_model_description, desc.models),
+        models = NamedTuple(
+            field => strip_fluff_from_model_description(
+                desc.models[field], branch(seed, string(field)),
+            )
+            for field in fieldnames(typeof(desc.models))
+        ),
         t_next = desc.t_next,
+        rng = isnothing(desc.rng) ? Xoshiro(seed) : desc.rng,
     )
 end
 
@@ -306,9 +350,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # The Loop #
 ############
 
-function draw_wc(t_last, t_next, ommd::ModelDescription, msd::ModelStateDescription)
+function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
-        continuous_random_variables = map(drvf -> drvf(t_last, t_next), ommd.continuous_random_variables),
+        continuous_random_variables = map(drvf -> drvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables),
         models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
@@ -317,25 +361,25 @@ function draw_wc(t_last, t_next, ommd::ModelDescription, msd::ModelStateDescript
     )
 end
 
-# TODO: We haven't pulled out allocations here since this only happens once, but we could.
-function draw_wd(t, ommd::ModelDescription{T}, md::ModelDescription) where {T}
+# We haven't pulled out allocations here since this only happens once, but we could.
+function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
     return ModelStateDescription{T}(;
-        md.constants,
-        md.continuous_states,
-        md.discrete_states,
-        md.continuous_random_variables,
-        discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
+        ommd.constants,
+        ommd.continuous_states,
+        ommd.discrete_states,
+        ommd.continuous_random_variables,
+        discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple(
-            mn => draw_wd(t, ommd.models[mn], md.models[mn])
+            mn => draw_wd(t, ommd.models[mn])
             for mn in keys(ommd.models)
         ),
-        md.t_next,
+        ommd.t_next,
     )
 end
 
-function draw_wd(t, ommd::ModelDescription, msd::ModelStateDescription)
+function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
-        discrete_random_variables = map(drvf -> drvf(t), ommd.discrete_random_variables),
+        discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wd(t, ommd_submodel, msd_submodel)
@@ -362,13 +406,14 @@ function log_continuous_stuff!(t, mh, msd::ModelStateDescription, ro::RatesOutpu
     end
 end
 
-function log_discrete_stuff!(t, mh::Nothing, md::ModelDescription)
+function log_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
-function log_discrete_stuff!(t, mh::Nothing, uo::UpdatesOutput)
+
+function log_discrete_stuff!(t, mh::Nothing, md::UpdatesOutput)
 end
 
 # This one is only called during initialization.
-function log_discrete_stuff!(t, mh, md::ModelDescription)
+function log_discrete_stuff!(t, mh, md::TypedModelDescription)
     for fn in keys(md.discrete_states)
         push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
     end
@@ -556,6 +601,65 @@ end
 # simulate #
 ############
 
+function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
+
+    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    branching_seed = BranchingSeed(seed, "/")
+
+    # Now that the time histories are started, we have no further use of the
+    # VariableDescriptions. Strip those out for the "original minimal model description".
+    # We'll always keep this original description around for its random-variable functions.
+    #
+    # This is what creates the TypedModelDescription for us.
+    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+
+    # We can now fill in the draws to have a "model state description".
+    msd = draw_wd(t_start, ommd)
+
+    return model(msd)
+
+end
+
+function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
+
+    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    branching_seed = BranchingSeed(seed, "/")
+
+    # Run the initialization to get the description of the models given the prototype.
+    model_description = init_fcn(t_start, model_prototype, branching_seed)
+
+    # Now that the time histories are started, we have no further use of the
+    # VariableDescriptions. Strip those out for the "original minimal model description".
+    # We'll always keep this original description around for its random-variable functions.
+    #
+    # This is what creates the TypedModelDescription for us.
+    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+
+    # We can now fill in the draws to have a "model state description".
+    msd = draw_wd(t_start, ommd)
+
+    return (; model_description, ommd, msd)
+
+end
+
+export initialize
+
+"TODO"
+function initialize(model_prototype; kwargs...)
+    return model(_initialize(model_prototype; kwargs...).msd)
+end
+
+"TODO"
+function initialize(
+    model_description::ModelDescription;
+    seed::BranchingSeed = BranchingSeed(0, "/"),
+    t_start = 0//1,
+)
+    ommd = strip_fluff_from_model_description(model_description, seed)
+    msd = draw_wd(t_start, ommd)
+    return model(msd)
+end
+
 """
 TODO
 """
@@ -571,22 +675,14 @@ function simulate(
 )
     t = [rationalize(el) for el in t]
     t_start = first(t)
-    t_end   = last(t)
+    t_end = last(t)
 
-    # Run the initialization to get the description of the models given the prototype.
-    rng = Xoshiro(seed)
-    model_description = init_fcn(t_start, model_prototype, rng)
+    # Pull out the full model description from the initialization function, as well as the
+    # typed model description, and finally the model state description.
+    model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
 
     # Use those descriptions to build up the time histories.
     log, mh = create_log(options.log, model_description, options.time_dimension)
-
-    # Now that the time histories are started, we have no further use of the
-    # VariableDescriptions. Strip those out for the "original minimal model description".
-    # We'll always keep this original description around for its random-variable functions.
-    ommd = strip_fluff_from_model_description(model_description)
-
-    # We can now fill in the draws to have a "model state description".
-    msd = draw_wd(t_start, ommd, ommd)
 
     # Log the initial stuff.
     log_discrete_stuff!(t_start, mh, ommd)

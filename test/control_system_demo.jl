@@ -1,6 +1,7 @@
 using Random: Xoshiro, randn, rand
 import Dimensions
-using SystemsOfSystems: ModelDescription, VariableDescription, is_regular_step_triggering, RatesOutput, UpdatesOutput
+using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
+    is_regular_step_triggering, branch
 
 #########
 # Plant #
@@ -25,7 +26,7 @@ end
 
 # This turns the specs into a description of the model. (It doesn't need the time or random-
 # number generator inputs.)
-function init(t, specs::PlantSpecs, rng)
+function init(t, specs::PlantSpecs, seed)
     return ModelDescription(;
         type = Plant, # This is what tells it to build a Plant with this stuff.
         constants = (; # Constants we'll need while running
@@ -110,7 +111,8 @@ Dimensions.dimstyle(::Type{SensorMeasurement}) = Dimensions.StructDimensionStyle
 end
 
 # Describe all of the variables in the plant model, with their initial conditions.
-function init(t, specs::SensorSpecs, rng)
+function init(t, specs::SensorSpecs, seed)
+    rng = Xoshiro(seed)
     return ModelDescription(;
         type = Sensor,
         constants = (;
@@ -127,14 +129,14 @@ function init(t, specs::SensorSpecs, rng)
         ),
         discrete_random_variables = (;
             noise = VariableDescription(
-                (t) -> specs.sigma_noise * randn(rng); # This builds a closure around whatever it needs.
+                (rng, t) -> specs.sigma_noise * randn(rng); # This builds a closure around whatever it needs.
                 title = "Measurement White Noise",
                 dimensions = ["noise" => "m",],
             ),
         ),
         discrete_states = (;
             measurement = VariableDescription(
-                SensorMeasurement(0., 0.); # TODO: Make this missing?
+                SensorMeasurement(0., 0.);
                 title = "Sensor Measurement",
                 dimensions = ["time" => "s", "position" => "m",],
             )
@@ -182,7 +184,7 @@ end
     constant_position::Float64
 end
 
-function init(t, specs::ConstantTargetSpecs, rng)
+function init(t, specs::ConstantTargetSpecs, seed)
     return ModelDescription(;
         type = ConstantTarget,
         constants = (;
@@ -237,7 +239,7 @@ end
     command::Float64
 end
 
-function init(t, specs::PDControllerSpecs, rng)
+function init(t, specs::PDControllerSpecs, seed)
     return ModelDescription(;
         type = PDController,
         constants =  (;
@@ -317,7 +319,7 @@ end
     response::Float64
 end
 
-function init(t, specs::ActuatorSpecs, rng)
+function init(t, specs::ActuatorSpecs, seed)
     return ModelDescription(;
         type = Actuator,
         constants = (;
@@ -391,36 +393,24 @@ end
     controller::PDController
 end
 
-# This function creates a new random number generator based on a "salt" (some random draw)
-# and a string. This is a useful modeling paradigm allowing a parent model to make new
-# RNGs for its sub-models. If they share a randomly-generated "salt" but have unique names,
-# then the result is that (1) changing the top level seed will change all draws everywhere,
-# but (2) changes to any one model don't affect any other models' RNG streams. You don't
-# have to do this, but it's an excellent pattern for modeling random variables inside of
-# systems of systems. See how we use it, below.
-child_rng(salt, name) = Xoshiro(salt + hash(name))
-
 # The ClosedLoopSystem model's initialization just initializes all of the sub-models and
 # gives each one a unique random number generator. It also describes one top-level output
 # signal we want.
-function init(t, specs::ClosedLoopSystemSpecs, rng)
-
-    # Make a random draw we'll share in generating the sub-model RNGs.
-    salt = rand(rng, Int64)
+function init(t, specs::ClosedLoopSystemSpecs, seed)
 
     # Initialize each submodel, as well as this model's own outputs.
     return ModelDescription(;
         type = ClosedLoopSystem,
         models = (;
-            plant = init(t, specs.plant, child_rng(salt, "plant")),
-            sensor = init(t, specs.sensor, child_rng(salt, "sensor")),
-            target = init(t, specs.target, child_rng(salt, "target")),
-            controller = init(t, specs.controller, child_rng(salt, "controller")),
-            actuator = init(t, specs.actuator, child_rng(salt, "actuator")),
+            plant = init(t, specs.plant, branch(seed, "plant")),
+            sensor = init(t, specs.sensor, branch(seed, "sensor")),
+            target = init(t, specs.target, branch(seed, "target")),
+            controller = init(t, specs.controller, branch(seed, "controller")),
+            actuator = init(t, specs.actuator, branch(seed, "actuator")),
         ),
         discrete_outputs = (;
-            control_error = VariableDescription{Union{Missing, Float64}}(
-                0.; # TODO: Make this missing?
+            control_error = VariableDescription{Float64}(
+                missing;
                 title = "Control Error (Target - True Position)",
                 dimensions = ["error" => "m",],
             ),
@@ -549,13 +539,24 @@ end
 
     Logs.close_log(history.log)
 
-    # Also, test for type stability. First, get the pieces we'll need.
-    md = init(0//1, system_specs, Xoshiro(1))
-    ommd = SystemsOfSystems.strip_fluff_from_model_description(md)
-    msd = SystemsOfSystems.draw_wd(0//1, ommd, ommd)
+    # Also, test for type stability. First, get the pieces we'll need from an internal
+    # function.
+    (; msd, ) = SystemsOfSystems._initialize(system_specs; init_fcn = init)
 
     # See that we can convert the model description to a model with a known type.
     @inferred SystemsOfSystems.model(msd)
+
+    # Let's also try out `initialize`, since this might be a handy function for users to
+    # debug their stuff.
+    system = SystemsOfSystems.initialize(system_specs; init_fcn = init)
+    @test system isa ClosedLoopSystem
+
+    # Let's also test that we can initialize from a ModelDescription, like a user might need
+    # to do during initialization.
+    seed = SystemsOfSystems.BranchingSeed(0, "/")
+    model_description = init(0//1, system_specs, seed)
+    system = SystemsOfSystems.initialize(model_description; seed)
+    @test system isa ClosedLoopSystem
 
     # Our rates function should be type stable.
     @inferred rates(t, system)
