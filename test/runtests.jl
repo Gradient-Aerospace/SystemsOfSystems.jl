@@ -154,7 +154,15 @@ end
                 force = 0.,
             ),
             discrete_outputs = (;
-                control_error = 0.,
+                # This tests the "missing" is an acceptable initial value (and not logged).
+                # We must include a full VariableDescription here so that we can give it a
+                # type up front (the type parameter), since that obvioulsy can't be inferred
+                # from the value (missing) itself.
+                control_error = VariableDescription{Float64}(
+                    missing;
+                    title = "Control Error",
+                    dimensions = ["error" => "m",],
+                ),
             ),
             t_next = 0.05,
         ),
@@ -191,11 +199,12 @@ end
     # It started in the right place.
     @test history["/"]["position"].data[1] == 1.
 
-    # THe control system more or less worked.
+    # The control system more or less worked.
     @test abs(history["/"]["position"].data[end]) < 0.1
 
     # We got the expected number of discrete steps.
     @test length(history["/"]["force"].data) == t_end / dt + 1
-    @test length(history["/"]["control_error"].data) == t_end / dt + 1
+    @test length(history["/"]["control_error"].data) == t_end / dt # Ignores missing 1st el.
+    @test eltype(history["/"]["control_error"].data) == Float64
 
 end
