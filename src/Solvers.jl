@@ -140,6 +140,7 @@ create_solver(options::RungeKutta4Options, msd::ModelStateDescription) = RungeKu
 
 get_initial_time_step(solver::RungeKutta4) = solver.options.dt
 
+# TODO: It seems like there's a lot about `solve` that could be abstracted and simplified.
 function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
 
     # Make the draws for the continuous-time function.

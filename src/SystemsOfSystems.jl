@@ -20,9 +20,36 @@ using .TimeSeriesStuff
 # User Function Outputs #
 #########################
 
-# TODO: A potential name here is InitOutput for consistency.
 """
-TODO
+This is the output expected from the `init_fcn` provided to `simulate`. It describes the
+elements of the model, including:
+
+* `type::Type`: The type that should be used when constructing the model (or Nothing to use
+  a named tuple. The type should accept keyword arguments for the variables, below.
+* `constants`: A named tuple of each constant the model should hold
+* `continuous_states`: A named tuple of each of the continuous states in the model
+* `discrete_states`: A named tuple of each of the discrete states in the model
+* `continuous_outputs`: A named tuple of each of the continuous outputs in the model
+* `discrete_outputs`: A named tuple of each of the continuous outputs in the model
+* `continuous_random_variables`: A named tuple of each of the continuous random variables in
+   the model, where the elements are functions mapping `(rng, t_last, t_next)` to a value.
+* `discrete_random_variables`: A named tuple of each of the discrete random variables in the
+  model, where the elements are functions mapping `(rng, t)` to a value.
+* `models`: A named tuple containing the ModelDescription of each submodel.
+* `t_next`: The next sim time at which the model requests that the integrator stop. The
+  integrator will step no latter than this time, but may step earlier.
+* `rng`: The random number generator to use for the random variable functions.
+
+For the constants, states, and outputs, the value corresponding with each field can either
+be a raw value (e.g., 6.) or a `VariableDescription`, such as:
+
+```
+VariableDescription(
+    6;
+    title = "Object Mass",
+    dimensions = ["m" => "kg",],
+)
+```
 """
 struct ModelDescription
     type
@@ -59,7 +86,8 @@ ModelDescription(;
 )
 
 """
-TODO
+This is the same as ModelDescription, except that any VariableDescription stuff has been
+pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 """
 @kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
     type::Type{T} # This could actually be any function that takes kwargs.
@@ -76,13 +104,20 @@ TODO
 end
 
 """
-TODO
+Describes a model's continuous-time derivatives and outputs.
+
+* `rates`: A named tuple corresponding with the continuous variables, where each field
+  contains the rate of change of that continuous variable.
+* `outputs`: A named tuple of continuous-time outputs (must match the original
+  `ModelDescription`).
+* `models`: A named tuple contains the `RatesOutput` for each submodel.
+* `stop`: Set to true to request that the simulation stop after this sample completes.
 """
 struct RatesOutput{RT, OT, MT}
     rates::RT
-    outputs::OT # Should this be continuous_outputs?
+    outputs::OT
     models::MT
-    stop::Bool # Or stop reason. TODO: I don't love the allocations here. The rest of this can be a bits type.
+    stop::Bool # This could be AbstractStopReason, but that makes this type allocate, which is annoying, so for now, we leave this as bool.
 end
 RatesOutput(;
     rates = (;),
@@ -92,11 +127,19 @@ RatesOutput(;
 ) = RatesOutput(rates, outputs, models, stop)
 
 """
-TODO
+Describes a model's discrete-time updates and outputs.
+
+* `updates`: A named tuple corresponding with the discrete variables, where each field
+  contains the update of that variable.
+* `outputs`: A named tuple of discrete-time outputs (must match the original
+  `ModelDescription`).
+* `models`: A named tuple contains the `UpdatesOutput` for each submodel.
+* `t_next`: The next time at which this model is requesting a stop.
+* `stop`: Set to true to request that the simulation stop after this sample completes.
 """
 struct UpdatesOutput{UT, OT, MT}
     updates::UT
-    outputs::OT # Should this be discrete_outputs?
+    outputs::OT
     models::MT
     t_next::Rational{Int64}
     stop::Bool
@@ -110,7 +153,27 @@ UpdatesOutput(;
 ) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
 
 """
-TODO
+These can be used to decorate the variables in a `ModelDescription`. The decorations become
+part of the `TimeSeries` for that variable. Example:
+
+```
+VariableDescription(
+    SA[1., 2., 3];
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+)
+```
+
+A `missing` value is allowed, but in that case, the type must be provided explicitly so that
+the `TimeSeries` knows what kind of types to expect. Example:
+
+```
+VariableDescription{SVector{3, Float64}}(
+    missing;
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+)
+```
 """
 struct VariableDescription{T}
     value::Union{Missing, T}
@@ -123,7 +186,45 @@ struct VariableDescription{T}
 end
 
 """
-TODO
+This type is useful for making a tree of random number generators that trace back to a
+single random number generator. Here's an example of creating a `BranchingSeed` and creating
+a random number generator from it:
+
+```
+seed = BranchingSeed(0, "")
+rng = Xoshiro(seed)
+```
+
+Here is an example of a function that takes in a seed and creates multiple RNGs from it:
+
+```
+function foo(seed)
+
+    # Create a top-level branching seed.
+    branching_seed = BranchingSeed(seed, "")
+
+    # Model Process A.
+    branching_seed_a = branch(branching_seed, "a")
+    rng_a = Xoshiro(branching_seed_a)
+    x = randn(rng_a, 100)
+
+    # Model Process B.
+    branching_seed_b = branch(branching_seed, "b")
+    rng_b = Xoshiro(branching_seed_b)
+    y = randn(rng_b, 200)
+
+    ...
+
+end
+```
+
+In this example, the draws from `rng_a` and `rng_b` are independent of each other, but they
+both still change when the top-level seed changes. This allows a user to model separate
+random processes, where changing how many random draws are used as part of "process a"
+doesn't change the draws of "process b". It's a very useful pattern for making models with
+submodels; each submodel can `branch` from its parent's seed according to that model's name.
+Then, even if models are swapped for different models, the remaining models will still
+generate the same random draws over time.
 """
 struct BranchingSeed
     salt::Int64
@@ -131,13 +232,15 @@ struct BranchingSeed
 end
 
 """
-TODO
+    branch(seed::BranchingSeed, name::String)
+
+Creates a new `BranchingSeed` from the given `seed` by appending the given `name`.
 """
 function branch(seed::BranchingSeed, name::String)
     return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
 end
 
-"Creates a Xoshiro with the seed and name from the given BranchingSeed."
+"Creates a Xoshiro RNG from the given BranchingSeed."
 Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
 
 strip_fluff_from_variable(var) = var
@@ -171,7 +274,16 @@ end
 # We don't use these internally; they're helpful modeling tools for users.
 
 """
-TODO
+    is_regular_step_triggering(t, step, offset = 0//1)
+
+Returns true if `t == n * step + offset`, where `n` is an integer. This is useful for
+modelling regularly sampled systems (systems with a constant sample rate).
+
+```
+is_regular_step_triggering(10.1, 0.05) # true
+is_regular_step_triggering(10.1, 0.20) # false
+is_regular_step_triggering(10.1, 0.20, 0.1) # true
+```
 """
 function is_regular_step_triggering(t, step, offset = 0//1)
     return mod(rationalize(t + offset), rationalize(step)) == 0//1
@@ -183,10 +295,6 @@ end
 
 # This is our internal representation of the stuff necessary to construct the model form.
 
-# TODO: Does it ever make sense to construct this without all of these arguments? (Possibly
-# not continuous_random_variables.)
-#
-# TODO: Should all of these named tuples have parameters for types?
 @kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
     constants::CT
     continuous_states::XCT
@@ -287,14 +395,19 @@ using .Solvers
 include("Monitors.jl")
 
 """
-TODO
+A set of options for the `simulate` function, with keyword arguments for:
+
+* `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
+* `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
+* `monitors`: A vector of monitors (e.g., `[ProgressBarOptions(),]`)
+* `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
 """
 @kwdef struct SimOptions
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
     monitors::Vector{Monitors.AbstractMonitorOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
-    # catch_error::Bool = true
+    # catch_errors::Bool = true
 end
 
 ##############
@@ -302,7 +415,20 @@ end
 ##############
 
 """
-TODO
+A type to store the results from simulation, including fields for:
+
+* `model`: The final model constructed in the sim
+* `log`: The log containing the time series for each variable of each model
+* `step`: The reason the sim stopped
+
+This type acts like a log itself, so for instance these do the same thing:
+
+```
+history["/models/plant"]["position"]
+history.log["/models/plant"]["position"]
+```
+
+The `keys`, `values`, and `pairs` functions also pass through to the underlying log.
 """
 struct SimHistory
     model::ModelDescription
@@ -331,24 +457,6 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # is. The history has fields for a reason. The log is the only thing that needs to be
 # closed, and it's reasonable to ask for that directly.
 # Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
-
-######################
-# Internal Utilities #
-######################
-
-# function recursively_reduce(op, desc, value) # desc is anything with .models.
-#     for m in desc.models # Run on submodels first.
-#         value = recursively_reduce(op, m, value)
-#     end
-#     return op(desc, value) # Now do this model.
-# end
-
-# function recursive_map(f, desc)
-#     return (;
-#         f(desc)...,
-#         models = map(m -> recursive_map(f, m), desc.models),
-#     )
-# end
 
 ############
 # The Loop #
@@ -608,7 +716,7 @@ end
 function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
 
     # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
-    branching_seed = BranchingSeed(seed, "/")
+    branching_seed = BranchingSeed(seed, "")
 
     # Now that the time histories are started, we have no further use of the
     # VariableDescriptions. Strip those out for the "original minimal model description".
@@ -627,7 +735,7 @@ end
 function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 
     # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
-    branching_seed = BranchingSeed(seed, "/")
+    branching_seed = BranchingSeed(seed, "")
 
     # Run the initialization to get the description of the models given the prototype.
     model_description = init_fcn(t_start, model_prototype, branching_seed)
@@ -642,19 +750,34 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
     # We can now fill in the draws to have a "model state description".
     msd = draw_wd(t_start, ommd)
 
+    # From the model state description, we can build the model itself (the single structure
+    # that has fields for all of the variables that were described in the original model
+    # description).
+
     return (; model_description, ommd, msd)
 
 end
 
-"TODO"
+"""
+    initialize(user_data; init_fcn, seed = BranchingSeed(0, ""), t_start = 0)
+
+This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
+optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
+it.
+"""
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
 end
 
-"TODO"
+"""
+    initialize(model_description; seed = BranchingSeed(0, ""), t_start = 0)
+
+This is useful for debugging model initialization. Given a `ModelDescription` (such as would
+be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
+"""
 function initialize(
     model_description::ModelDescription;
-    seed::BranchingSeed = BranchingSeed(0, "/"),
+    seed::BranchingSeed = BranchingSeed(0, ""),
     t_start = 0//1,
 )
     ommd = strip_fluff_from_model_description(model_description, seed)
@@ -663,7 +786,23 @@ function initialize(
 end
 
 """
-TODO
+    simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+
+Runs a simulation, returning the time history, end time, and final model.
+
+* `user_data`: Can be anything used by the `init_fcn`
+* `t`: A collection of monotonic times; the sim will step to exactly each given time, plus
+  as many other steps are required by the solver and models. At the very least, this must
+  contain a start time and end time.
+* `init_fcn`: Will be called with `(t_start, user_data, seed)`, where `t_start` is the first
+  element of the above `t` input. This must return a `ModelDescription`.
+* `rates_fcn`: Will be called with `(t, model)` and is expected to return a `RatesOutput`.
+* `updates_fcn`: Will be called with `(t, model)` and is expected to return an
+  `UpdatesOutput`.
+* `close_fcn`: Will be called when simulation completes (even if an error is caught) with
+  `(t, model)`. No return value is expected.
+* `seed`: A top-level seed (Int) to control all random number generation in the sim.
+* `options`: See `SimOptions`.
 """
 function simulate(
     model_prototype;
@@ -675,6 +814,8 @@ function simulate(
     seed = 0,
     options::SimOptions = SimOptions(),
 )
+    # This might be a tuple with (t_start, t_end), but it can also be any collection of
+    # monotonic times.
     t = [rationalize(el) for el in t]
     t_start = first(t)
     t_end = last(t)
@@ -683,15 +824,11 @@ function simulate(
     # typed model description, and finally the model state description.
     model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
 
-    # Use those descriptions to build up the time histories.
+    # Use those descriptions to start the time histories.
     log, mh = create_log(options.log, model_description, options.time_dimension)
 
     # Log the initial stuff.
     log_discrete_stuff!(t_start, mh, ommd)
-
-    # From the model state description, we can build the model itself (the single structure
-    # that has fields for all of the variables that were described in the original model
-    # description).
 
     # Create the solver.
     solver = create_solver(options.solver, msd)
