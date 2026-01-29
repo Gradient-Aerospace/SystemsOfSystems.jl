@@ -1,8 +1,14 @@
 module SystemsOfSystems
 
-export simulate, SimOptions, Solvers, Monitors, Logs
-export ModelDescription, VariableDescription, is_regular_step_triggering
-export RatesOutput, UpdatesOutput
+# Running simulations
+export initialize, simulate, SimOptions, Solvers, Monitors, Logs
+
+# Modeling
+export ModelDescription, VariableDescription, RatesOutput, UpdatesOutput
+export is_regular_step_triggering
+
+# Utilities
+export BranchingSeed, branch
 
 using Random: Xoshiro, AbstractRNG
 import Random
@@ -123,7 +129,6 @@ struct BranchingSeed
     salt::Int64
     breadcrumbs::String
 end
-export BranchingSeed
 
 """
 TODO
@@ -131,7 +136,6 @@ TODO
 function branch(seed::BranchingSeed, name::String)
     return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
 end
-export branch
 
 "Creates a Xoshiro with the seed and name from the given BranchingSeed."
 Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
@@ -641,8 +645,6 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
     return (; model_description, ommd, msd)
 
 end
-
-export initialize
 
 "TODO"
 function initialize(model_prototype; kwargs...)
