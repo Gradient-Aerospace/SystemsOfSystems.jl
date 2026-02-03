@@ -40,8 +40,13 @@ end
 function Base.show(io::IO, ::MIME"text/plain", ts::TimeSeries)
     println(io, "$(length(ts.time))-element TimeSeries of $(eltype(ts.data)) elements")
     println(io, "  title: $(ts.title)")
-    println(io, "  time: $(eltype(ts.time))[$(first(ts.time)), ... $(last(ts.time))]")
-    println(io, "  data: $(eltype(ts.data))[$(first(ts.data)), ... $(last(ts.data))]")
+    if !isempty(length(ts.time))
+        println(io, "  time: $(eltype(ts.time))[$(first(ts.time)), ... $(last(ts.time))]")
+        println(io, "  data: $(eltype(ts.data))[$(first(ts.data)), ... $(last(ts.data))]")
+    else
+        println(io, "  time: $(eltype(ts.time))[]")
+        println(io, "  data: $(eltype(ts.data))[]")
+    end
     println(io, "  time_dimension: \"$(ts.time_dimension.label)\" => \"$(ts.time_dimension.units)\"")
     if isempty(ts.dimensions)
         println(io, "  dimensions: (none)")

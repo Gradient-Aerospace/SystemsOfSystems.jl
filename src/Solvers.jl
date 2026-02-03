@@ -38,7 +38,7 @@ SystemsOfSystems.describe(stop::SolverFailedToConverge) = "The solver failed to 
 # These propagate for a single derivative.
 
 function propagate_variable(x::T, dt, x_dot::T) where {T}
-    return (x .+ dt .* x_dot)::T # Just to be clear, this shouldn't change the type.
+    return (x + dt * x_dot)::T # Just to be clear, this shouldn't change the type.
 end
 
 function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
@@ -81,13 +81,18 @@ end
 # These propagate for a set of derivatives.
 
 function propagate_variable(x::T, gains, x_dot::NTuple{N, T}) where {T, N}
-    return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
+    # return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
+    return (x + sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
 end
 
 function propagate_set(x::T1, gains, x_dot::Tuple) where {T1}
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
-            propagate_variable(x[f], gains, getfield.(x_dot, f))
+            if hasfield(typeof(first(x_dot)), f) # TODO: Check this for efficiency.
+                propagate_variable(x[f], gains, getfield.(x_dot, f))
+            else
+                x[f] # Allow fields to not be updated (empty rates output).
+            end
         end
     )
 end
