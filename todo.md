@@ -22,6 +22,8 @@
 - [x] Test systems of systems.
 - [x] Test the close function.
 - [x] Test "missing" outputs.
+- [x] Figure out how to log the RNG state in a way we could load later.
+- [ ] Add logging of the RNG state.
 - [ ] Test random variables.
 - [ ] Test all the types we intend to support.
 - [ ] Test plots.
@@ -29,7 +31,6 @@
 - [ ] Test for type stability.
 - [ ] Test documentation with jldoctest.
 - [ ] Test non-zero start times.
-- [ ] Figure out how to log the RNG state in a way we could load later.
 - [ ] Figure out how to capture console output.
 
 ## Features

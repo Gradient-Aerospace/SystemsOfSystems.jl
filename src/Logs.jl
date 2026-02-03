@@ -197,6 +197,8 @@ end
 
 gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 
+# TODO: Add a Base.show multiline method for a log.
+
 # TODO: Consider making a getindex that breaks apart a single string into model and var.
 # This implies that subtypes of AbstractLog would implement get_model_history instead of
 # get_index. An alternative is to implement `get_dict` and let AbstractLog take care of all
