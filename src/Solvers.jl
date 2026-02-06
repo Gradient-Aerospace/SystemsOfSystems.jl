@@ -44,7 +44,11 @@ end
 function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
-            propagate_variable(x[f], dt, x_dot[f])
+            if hasfield(typeof(x_dot), f)
+                propagate_variable(x[f], dt, x_dot[f])
+            else
+                x[f]
+            end
         end
     )
 end
