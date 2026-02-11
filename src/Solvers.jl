@@ -170,7 +170,7 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
         msd2  = propagate(msd1, dt/2, k1)
         k2    = rates_fcn(t_last + dt/2, model(msd2))
         msd3  = propagate(msd1, dt/2, k2)
-        k3    = rates_fcn(t_last + dt, model(msd3))
+        k3    = rates_fcn(t_last + dt/2, model(msd3))
         msd4  = propagate(msd1, dt, k3)
         k4    = rates_fcn(t_last + dt, model(msd4))
 
