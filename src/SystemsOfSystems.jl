@@ -286,7 +286,7 @@ is_regular_step_triggering(10.1, 0.20, 0.1) # true
 ```
 """
 function is_regular_step_triggering(t, step, offset = 0//1)
-    return mod(rationalize(t + offset), rationalize(step)) == 0//1
+    return mod(rationalize(t - offset), rationalize(step)) == 0//1
 end
 
 #########################
