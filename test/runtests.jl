@@ -10,6 +10,13 @@ mkpath(joinpath(@__DIR__, out_dir))
 
 include("control_system_demo.jl")
 
+@testset "is_regular_step_triggering" begin
+    @test is_regular_step_triggering(10.1, 0.05) == true
+    @test is_regular_step_triggering(10.1, 0.20) == false
+    @test is_regular_step_triggering(10.1, 0.20, 0.1) == true
+    @test is_regular_step_triggering(10.1, 1., 0.0) == false
+    @test is_regular_step_triggering(10.1, 1., 0.1) == true
+end
 
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
@@ -208,3 +215,5 @@ end
     @test eltype(history["/"]["control_error"].data) == Float64
 
 end
+
+# TODO: Test continuous variables that _don't_ have rates outputs sometimes.
