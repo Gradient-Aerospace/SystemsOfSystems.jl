@@ -152,12 +152,15 @@ get_initial_time_step(solver::RungeKutta4) = solver.options.dt
 # TODO: It seems like there's a lot about `solve` that could be abstracted and simplified.
 function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
 
+    t_last_f = float(t_last)
+    t_next_f = float(t_next)
+
     # Make the draws for the continuous-time function.
-    msd_km1_with_draws = draw_wc(t_last, t_next, ommd, msd_km1)
+    msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
 
     # The first derivative is different because it's an output. The rest are ephemeral.
     msd1 = msd_km1_with_draws
-    k1 = rates_fcn(t_last, model(msd1))
+    k1 = rates_fcn(t_last_f, model(msd1))
 
     # If there's no actual work to do here, skip the calculations.
     if t_last == t_next
@@ -166,13 +169,13 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
 
     else
 
-        dt    = t_next - t_last
+        dt    = t_next_f - t_last_f
         msd2  = propagate(msd1, dt/2, k1)
-        k2    = rates_fcn(t_last + dt/2, model(msd2))
+        k2    = rates_fcn(t_last_f + dt/2, model(msd2))
         msd3  = propagate(msd1, dt/2, k2)
-        k3    = rates_fcn(t_last + dt/2, model(msd3))
+        k3    = rates_fcn(t_last_f + dt/2, model(msd3))
         msd4  = propagate(msd1, dt, k3)
-        k4    = rates_fcn(t_last + dt, model(msd4))
+        k4    = rates_fcn(t_last_f + dt, model(msd4))
 
         # This seems more efficient:
         # propagate(
@@ -191,12 +194,12 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
     end
 
     return SolverOutputs(;
-        t_completed = t_next,
+        t_completed = t_next, # This should already be a rational.
         msd_km1 = msd_km1_with_draws,
         msd_k,
         rates = k1,
         stop = UnknownStopReason(),
-        t_next_suggested = t_next + solver.options.dt,
+        t_next_suggested = t_next + solver.options.dt, # Already rational
     )
 
 end
@@ -263,6 +266,9 @@ end
 
 function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn, t_end)
 
+    t_last_f = float(t_last)
+    t_next_f = float(t_next)
+
     table = (   # Butcher tableau (Dormand-Prince 5(4) by default)
         (1/5, 1/5),                 # c_2, a_2,1
         (3/10, 3/40, 9/40),         # c_3, a_3,1 a_3,2
@@ -290,14 +296,14 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
 
         # println("continuous_step! from $(float(t_last)) to $(float(t_next))")
 
-        dt = t_next - t_last
+        dt = t_next_f - t_last_f
 
         # Make the draws for the continuous-time function.
-        msd_km1_with_draws = draw_wc(t_last, t_next, ommd, msd_km1)
+        msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
 
         # We do the first step whether we're stopping on this sample or not.
         msd1 = msd_km1_with_draws
-        k1 = rates_fcn(t_last, model(msd1))
+        k1 = rates_fcn(t_last_f, model(msd1))
 
         # See if it's time to stop.
         if t_last == t_end
@@ -313,7 +319,7 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
                 ci = table[i][1]
                 as = table[i][2:end]
                 msdi = propagate(msd_km1_with_draws, dt .* as, ks)
-                ki = rates_fcn(t_last + dt * ci, model(msdi))
+                ki = rates_fcn(t_last_f + dt * ci, model(msdi))
                 ks = (ks..., ki) # TODO: This is a particularly silly pattern.
             end
 
@@ -340,7 +346,7 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
 
                 # Accept the update.
                 t_completed = t_next
-                t_next_suggested = t_completed + dt_suggested
+                t_next_suggested = rationalize(t_next_f + dt_suggested)
                 # println("That step worked. t_next_suggested = $(float(t_next_suggested)).")
                 break
 
@@ -348,7 +354,8 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
 
                 # println("Stepping from $(float(t_last)) to $(float(t_next)) produced too much error.")
                 # @show max_normalized_error
-                t_next = t_last + dt_suggested
+                t_next_f = t_last_f + dt_suggested
+                t_next = rationalize(t_next_f)
                 # println("Trying again with t_next = $(float(t_next)).")
                 n_failed_steps += 1
                 if n_failed_steps == n_allowable_failed_steps
@@ -366,12 +373,12 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
     # Reported how much of the intended step we completed, the updated model state
     # description, and the suggested next step's end time.
     return SolverOutputs(;
-        t_completed = rationalize(t_completed),
+        t_completed = t_completed,
         msd_km1 = msd_km1_with_draws,
         msd_k = msd_k,
         rates = k1,
         stop = stop,
-        t_next_suggested = rationalize(t_next_suggested),
+        t_next_suggested = t_next_suggested,
     )
 
 end
