@@ -52,6 +52,9 @@ end
             ),
         ),
         rates_fcn = (t, model) -> begin
+            if !isa(t, Float64)
+                error("The time input to rates should be a Float64.")
+            end
             RatesOutput(
                 rates = (;
                     x = -1/model.time_constant * model.x,
