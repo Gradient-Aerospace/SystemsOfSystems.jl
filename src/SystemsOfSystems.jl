@@ -125,6 +125,7 @@ RatesOutput(;
     models = (;),
     stop = false,
 ) = RatesOutput(rates, outputs, models, stop)
+# TODO: Allow a model to output a time constant or hint at a likely maximum step size.
 
 """
 Describes a model's discrete-time updates and outputs.

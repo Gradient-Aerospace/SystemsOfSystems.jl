@@ -304,6 +304,10 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
         # We do the first step whether we're stopping on this sample or not.
         msd1 = msd_km1_with_draws
         k1 = rates_fcn(t_last_f, model(msd1))
+        # TODO: At this point, we may have a hint for a max step size the models can tolerate.
+        # However, we've already committed to a dt (taken the draws for it), so this might
+        # be helpful if we need a new step, but of course, at that point, the dynamics
+        # themselves will have suggested a new step.
 
         # See if it's time to stop.
         if t_last == t_end
