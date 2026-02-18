@@ -117,7 +117,7 @@ function propagate_to_model!(m, msd, dt, rates_output)
     end
     for f in fieldnames(typeof(msd.models))
         if hasfield(typeof(rates_output.models), f)
-            propagate_to_model!(getfield(m, f), msd.models[f], dt, rates_output.models[f])
+            propagate_to_model!(getproperty(m, f), msd.models[f], dt, rates_output.models[f])
         end
     end
 end
@@ -127,7 +127,7 @@ function copy_continuous_state!(m, msd)
         setfield!(m, f, msd.continuous_states[f])
     end
     for f in fieldnames(typeof(msd.models))
-        copy_continuous_state!(getfield(m, f), msd.models[f])
+        copy_continuous_state!(getproperty(m, f), msd.models[f])
     end
 end
 
@@ -159,7 +159,7 @@ function propagate_models(submodels::NamedTuple, gains::Tuple, rates_outputs::Tu
         NamedTuple{fieldnames(typeof(submodels))}(
             map(fieldnames(typeof(submodels))) do f
                 if hasfield(typeof(ro), f) # If we have derivatives for this state...
-                    getfield(ro, f) # Get it for all of them.
+                    getproperty(ro, f) # Get it for all of them.
                 else
                     RatesOutput()
                 end

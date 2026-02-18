@@ -481,7 +481,7 @@ function draw_wc!(m, t_last, t_next, ommd::TypedModelDescription)
         setfield!(m, f, draw)
     end
     for f in fieldnames(typeof(ommd.models))
-        draw_wc!(getfield(m, f), t_last, t_next, ommd.models[f])
+        draw_wc!(getproperty(m, f), t_last, t_next, ommd.models[f])
     end
 end
 
