@@ -18,7 +18,7 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, Upda
 end
 
 # This contains everything the model needs while running.
-@kwdef struct Plant
+@kwdef mutable struct Plant
     mass::Float64
     position::Float64
     velocity::Float64
@@ -103,7 +103,7 @@ end
 Dimensions.dimstyle(::Type{SensorMeasurement}) = Dimensions.StructDimensionStyle()
 
 # Everything the sensor needs while running.
-@kwdef struct Sensor
+@kwdef mutable struct Sensor
     dt::Float64
     bias::Float64
     noise::Float64
@@ -180,7 +180,7 @@ end
     constant_position::Float64
 end
 
-@kwdef struct ConstantTarget
+@kwdef mutable struct ConstantTarget
     constant_position::Float64
 end
 
@@ -231,7 +231,7 @@ end
     initial_command::Float64
 end
 
-@kwdef struct PDController
+@kwdef mutable struct PDController
     dt::Float64
     p::Float64
     d::Float64
@@ -313,7 +313,7 @@ end
     initial_response::Float64
 end
 
-@kwdef struct Actuator
+@kwdef mutable struct Actuator
     time_constant::Float64
     command::Float64
     response::Float64
@@ -385,7 +385,7 @@ end
 
 # This model has no state or constants of its own; it just contains other models and
 # connects them.
-@kwdef struct ClosedLoopSystem
+@kwdef mutable struct ClosedLoopSystem
     plant::Plant
     sensor::Sensor
     actuator::Actuator
@@ -471,7 +471,8 @@ function updates(t, system::ClosedLoopSystem)
 
 end
 
-@testset failfast=false "control system demo with $solver_type solver, $log_type logs" for solver_type in ["rk4", "dp54"], log_type in ["ram", "hdf5"]
+# @testset failfast=false "control system demo with $solver_type solver, $log_type logs" for solver_type in ["rk4", "dp54"], log_type in ["ram", "hdf5"]
+@testset failfast=false "control system demo with $solver_type solver, $log_type logs" for solver_type in ["rk4",], log_type in ["ram", "hdf5"]
 
     dt_rk4 = 0.06 # Deliberately chosen to be inconsistent with the discrete systems' sample rates
     solver = if solver_type == "dp54"

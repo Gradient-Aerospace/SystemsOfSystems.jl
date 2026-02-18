@@ -295,14 +295,14 @@ end
 
 # This is our internal representation of the stuff necessary to construct the model form.
 
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
-    constants::CT
-    continuous_states::XCT
-    discrete_states::XDT
-    continuous_random_variables::WCT
-    discrete_random_variables::WDT
-    models::MT
-    t_next::Rational{Int64}
+@kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
+    constants::CT # This never gets touched.
+    continuous_states::XCT # This whole tuple will get replaced with updates from the solver.
+    discrete_states::XDT # This whole tuple will get replaced with discrete updates.
+    continuous_random_variables::WCT # This whole tuple will get replaced with drawn values in the solver.
+    discrete_random_variables::WDT # This whole tuple will get replaced with drawn values.
+    models::MT # This never gets touched directly, but the fields in it will be MSDs, and those will be mutated.
+    t_next::Rational{Int64} # This is updated along with discrete updates.
 end
 ModelStateDescription{T}(;
     constants = (;),
@@ -388,6 +388,7 @@ using .Logs
 
 # We define this here so Solvers can import the symbol.
 function draw_wc end
+function draw_wc! end
 
 include("Solvers.jl")
 using .Solvers
@@ -462,15 +463,26 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # The Loop #
 ############
 
-function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
-    return copy_model_state_description_except(msd;
-        continuous_random_variables = map(drvf -> drvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
-            end
-        ),
-    )
+# function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+#     return copy_model_state_description_except(msd;
+#         continuous_random_variables = map(drvf -> drvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables),
+#         models = NamedTuple{keys(msd.models)}(
+#             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+#                 draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+#             end
+#         ),
+#     )
+# end
+
+function draw_wc!(m, t_last, t_next, ommd::TypedModelDescription)
+    # continuous_random_variables = map(crvf -> crvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables)
+    for f in fieldnames(typeof(ommd.continuous_random_variables))
+        draw = ommd.continuous_random_variables[f](ommd.rng, t_last, t_next)
+        setfield!(m, f, draw)
+    end
+    for f in fieldnames(typeof(ommd.models))
+        draw_wc!(getfield(m, f), t_last, t_next, ommd.models[f])
+    end
 end
 
 # We haven't pulled out allocations here since this only happens once, but we could.
@@ -489,15 +501,22 @@ function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
     )
 end
 
-function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
-    return copy_model_state_description_except(msd;
-        discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wd(t, ommd_submodel, msd_submodel)
-            end
-        ),
-    )
+# function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+#     return copy_model_state_description_except(msd;
+#         discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
+#         models = NamedTuple{keys(msd.models)}(
+#             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+#                 draw_wd(t, ommd_submodel, msd_submodel)
+#             end
+#         ),
+#     )
+# end
+
+function draw_wd!(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+    msd.discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables)
+    for (sm_msd, sm_ommd) in zip(msd.models, ommd.models)
+        draw_wd!(t, sm_ommd, sm_msd)
+    end
 end
 
 function log_continuous_stuff!(t, mh::Nothing, msd::ModelStateDescription, ro::RatesOutput)
@@ -563,53 +582,64 @@ function update_discrete_states(discrete_states::T1, updated_discrete_states::T2
     )
 end
 
-# Note: the return type parameter here helps this to not allocate, but it might be overly
-# restrictive. If types can change, should MSD know about that ahead of time?
-#
-# `submodels` is a named tuple of MSDs.
-# `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
-#
-function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
+# # Note: the return type parameter here helps this to not allocate, but it might be overly
+# # restrictive. If types can change, should MSD know about that ahead of time?
+# #
+# # `submodels` is a named tuple of MSDs.
+# # `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
+# #
+# function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
 
-    # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
-    # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
-    # operation). However, in order to make this operation efficient, we'll build a
-    # "complete" set of updates, where every model is listed, and if it wasn't in the
-    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
-    # we'll have a named tuple that matches submodels in fields (including their order),
-    # and we can just map out `update` function to the corresponding submodels and updates.
-    #
-    # This is one of our more tedious concessions to efficiency, but honestly, it's not all
-    # that bad.
-    #
-    complete_submodels_updates = NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if hasfield(T2, f)
-                submodels_updates[f]
-            else
-                UpdatesOutput()
-            end
-        end
-    )
+#     # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
+#     # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
+#     # operation). However, in order to make this operation efficient, we'll build a
+#     # "complete" set of updates, where every model is listed, and if it wasn't in the
+#     # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
+#     # we'll have a named tuple that matches submodels in fields (including their order),
+#     # and we can just map out `update` function to the corresponding submodels and updates.
+#     #
+#     # This is one of our more tedious concessions to efficiency, but honestly, it's not all
+#     # that bad.
+#     #
+#     complete_submodels_updates = NamedTuple{fieldnames(T1)}(
+#         map(fieldnames(T1)) do f
+#             if hasfield(T2, f)
+#                 submodels_updates[f]
+#             else
+#                 UpdatesOutput()
+#             end
+#         end
+#     )
 
-    # Now this map doesn't allocate at all:
-    return map(update, submodels, complete_submodels_updates)
+#     # Now this map doesn't allocate at all:
+#     return map(update, submodels, complete_submodels_updates)
 
-end
+# end
 
 # If there's no t_next, keep the last one.
 function update_model_t_next(last_t_next, updated_t_next)
     iszero(updated_t_next) ? last_t_next : updated_t_next # TODO: How do we want to indicate that there is no new t_next?
 end
 
-function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
-    return copy_model_state_description_except(
-        msd;
-        # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
-        models = update_submodels(msd.models, updates_output.models),
-        t_next = update_model_t_next(msd.t_next, updates_output.t_next),
-    )
+# function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
+#     return copy_model_state_description_except(
+#         msd;
+#         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
+#         discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
+#         models = update_submodels(msd.models, updates_output.models),
+#         t_next = update_model_t_next(msd.t_next, updates_output.t_next),
+#     )
+# end
+
+function update!(msd::ModelStateDescription, updates_output::UpdatesOutput)
+    msd.discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates)
+    msd.t_next = update_model_t_next(msd.t_next, updates_output.t_next)
+    for f in fieldnames(typeof(msd.models))
+        if hasfield(typeof(updates_output.models), f)
+            update!(msd.models[f], updates_output.models[f])
+        end
+    end
+    # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
 end
 
 function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
@@ -658,6 +688,9 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     t_next_suggested = solver_outputs.t_next_suggested
 
     # Log the beginning of that sample now that we have its draws and derivatives.
+    # TODO: We could log the continuous-time states for k1-1 before solving, then log the
+    # rates outputs afterwards. This would prevent use from needing separate copies of
+    # msd_km1 and msd_k, and it would let us just mutate the single msd.
     log_continuous_stuff!(t_last, mh, solver_outputs.msd_km1, solver_outputs.rates)
 
     # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
@@ -671,11 +704,13 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     end
 
     # Make the discrete draws.
-    msd = draw_wd(t_next, ommd, msd)
+    # msd = draw_wd(t_next, ommd, msd)
+    draw_wd!(t_next, ommd, msd)
 
     # Perform the discrete update from t_next^- to t_next^+.
     updates = updates_fcn(t_next, model(msd))
-    msd = update(msd, updates)
+    # msd = update(msd, updates)
+    update!(msd, updates)
 
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
