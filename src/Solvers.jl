@@ -204,8 +204,8 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, m, msd_km1, rates_fcn,
         k4 = rates_fcn(t_last_f + dt, m)
 
         # Update the model state description with the propagated continuous-time states.
-        # msd_k = deepcopy(msd_km1) # TODO: There's no real reason to do this. We could just commit to updating the single MSD.
-        msd_k = msd_km1 # TODO: This is wrong. It was just a timing test.
+        msd_k = deepcopy(msd_km1) # TODO: There's no real reason to do this. We could just commit to updating the single MSD.
+        # msd_k = msd_km1 # TODO: This is wrong. It was just a timing test.
         propagate_msd!(msd_k, dt/6, k1)
         propagate_msd!(msd_k, dt/3, k2)
         propagate_msd!(msd_k, dt/3, k3)
