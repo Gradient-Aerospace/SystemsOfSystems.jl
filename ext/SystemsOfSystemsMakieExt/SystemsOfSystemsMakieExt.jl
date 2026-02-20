@@ -12,7 +12,7 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
     t = collect(ts.time)
     data = collect(ts.data)
     f = Figure()
-    plot_fcn = ts.discrete ? stairs! : lines!
+    plot_fcn = ts.discrete ? stairs! : lines! # TODO: Stairs aligns very strangely. Fix it.
     for (k, dim) in enumerate(ts.dimensions)
         a = Axis(f[k, 1];
             xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",

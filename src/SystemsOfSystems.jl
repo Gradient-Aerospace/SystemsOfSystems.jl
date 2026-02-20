@@ -113,18 +113,12 @@ Describes a model's continuous-time derivatives and outputs.
 * `models`: A named tuple contains the `RatesOutput` for each submodel.
 * `stop`: Set to true to request that the simulation stop after this sample completes.
 """
-struct RatesOutput{RT, OT, MT}
-    rates::RT
-    outputs::OT
-    models::MT
-    stop::Bool # This could be AbstractStopReason, but that makes this type allocate, which is annoying, so for now, we leave this as bool.
+@kwdef struct RatesOutput{RT, OT, MT}
+    rates::RT = (;)
+    outputs::OT = (;)
+    models::MT = (;)
+    stop::Bool = false # This could be AbstractStopReason, but that makes this type allocate, which is annoying, so for now, we leave this as bool.
 end
-RatesOutput(;
-    rates = (;),
-    outputs = (;),
-    models = (;),
-    stop = false,
-) = RatesOutput(rates, outputs, models, stop)
 
 """
 Describes a model's discrete-time updates and outputs.
@@ -295,6 +289,15 @@ end
 
 # This is our internal representation of the stuff necessary to construct the model form.
 
+# TODO: There's a lot this doesn't have to store now. In fact, all it needs is:
+#
+# * continuous_states <- This *does* need to be stored somewhere for integration to work.
+# * discrete_states <- And does it even need this??
+# * models <- This is how we traverse everything, so I guess it needs these.
+# * t_next <- It's helpful to store this too so that models don't have to always output their t_next.
+#
+# This might be better described as "model storage" if we're going forward with this
+# "mutable" idea.
 @kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
     constants::CT # This never gets touched.
     continuous_states::XCT # This whole tuple will get replaced with updates from the solver.
@@ -474,15 +477,33 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 #     )
 # end
 
-function draw_wc!(m, t_last, t_next, ommd::TypedModelDescription)
-    # continuous_random_variables = map(crvf -> crvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables)
-    for f in fieldnames(typeof(ommd.continuous_random_variables))
-        draw = ommd.continuous_random_variables[f](ommd.rng, t_last, t_next)
+function draw_for_model!(m, wc, rng, t_last, t_next)
+    foreach(fieldnames(typeof(wc))) do f
+        draw = wc[f](rng, t_last, t_next)
         setfield!(m, f, draw)
     end
-    for f in fieldnames(typeof(ommd.models))
-        draw_wc!(getproperty(m, f), t_last, t_next, ommd.models[f])
+end
+
+function draw_wc_for_submodels!(m, t_last, t_next, models_ommd)
+    foreach(fieldnames(typeof(models_ommd))) do f
+    # for f in fieldnames(typeof(models_ommd))
+        draw_wc!(getproperty(m, f), t_last, t_next, models_ommd[f])
     end
+end
+
+function draw_wc!(m, t_last, t_next, ommd::TypedModelDescription)
+    # continuous_random_variables = map(crvf -> crvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables)
+    # for f in fieldnames(typeof(ommd.continuous_random_variables))
+    # foreach(fieldnames(typeof(ommd.continuous_random_variables))) do f
+    #     draw = ommd.continuous_random_variables[f](ommd.rng, t_last, t_next)
+    #     setfield!(m, f, draw)
+    # end
+    draw_for_model!(m, ommd.continuous_random_variables, ommd.rng, t_last, t_next)
+    # for f in fieldnames(typeof(ommd.models))
+    # foreach(fieldnames(typeof(ommd.models))) do f
+    #     draw_wc!(getproperty(m, f), t_last, t_next, ommd.models[f])
+    # end
+    draw_wc_for_submodels!(m, t_last, t_next, ommd.models)
 end
 
 # We haven't pulled out allocations here since this only happens once, but we could.
@@ -512,16 +533,35 @@ end
 #     )
 # end
 
-function draw_wd!(t, ommd::TypedModelDescription, msd::ModelStateDescription)
-    msd.discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables)
-    for (sm_msd, sm_ommd) in zip(msd.models, ommd.models)
-        draw_wd!(t, sm_ommd, sm_msd)
+function copy_wd_to_model!(m, wd)
+    foreach(fieldnames(typeof(wd))) do f
+        setfield!(m, f, wd[f])
     end
+end
+
+function draw_wd_for_models!(m, models_ommd, models_msd, t)
+    foreach(fieldnames(typeof(models_msd))) do f
+        draw_wd!(getproperty(m, f), t, models_ommd[f], models_msd[f])
+    end
+end
+
+function draw_wd!(m, t, ommd::TypedModelDescription, msd::ModelStateDescription)
+    msd.discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables)
+    copy_wd_to_model!(m, msd.discrete_random_variables)
+    # for (f, v) in pairs(msd.discrete_random_variables)
+    #     setfield!(m, f, v)
+    # end
+    # for f in fieldnames(typeof(msd.models))
+    # foreach(fieldnames(typeof(msd.models))) do f
+    #     draw_wd!(getproperty(m, f), t, ommd.models[f], msd.models[f])
+    # end
+    draw_wd_for_models!(m, ommd.models, msd.models, t)
 end
 
 function log_continuous_stuff!(t, mh::Nothing, msd::ModelStateDescription, ro::RatesOutput)
 end
 
+# TODO: This could definitely be made faster.
 function log_continuous_stuff!(t, mh, msd::ModelStateDescription, ro::RatesOutput)
     for fn in keys(msd.continuous_states)
         push!(mh.continuous_states[fn], float(t), msd.continuous_states[fn])
@@ -631,14 +671,34 @@ end
 #     )
 # end
 
-function update!(msd::ModelStateDescription, updates_output::UpdatesOutput)
-    msd.discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates)
-    msd.t_next = update_model_t_next(msd.t_next, updates_output.t_next)
-    for f in fieldnames(typeof(msd.models))
-        if hasfield(typeof(updates_output.models), f)
-            update!(msd.models[f], updates_output.models[f])
-        end
+function copy_discrete_states_to_model!(m, xd)
+    foreach(fieldnames(typeof(xd))) do f
+        setfield!(m, f, xd[f])
     end
+end
+
+function update_models!(m, models_msd, models_updates_output)
+    foreach(fieldnames(typeof(models_updates_output))) do f
+        # if hasfield(models_updates_output, f)
+        update!(getproperty(m, f), models_msd[f], models_updates_output[f])
+        # end
+    end
+end
+
+function update!(m, msd::ModelStateDescription, updates_output::UpdatesOutput)
+    # TODO: What's the point of even storing the discrete states in the MSD at this point?
+    msd.discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates)
+    copy_discrete_states_to_model!(m, msd.discrete_states)
+    # for (f, v) in pairs(msd.discrete_states)
+    #     setfield!(m, f, v)
+    # end
+    msd.t_next = update_model_t_next(msd.t_next, updates_output.t_next)
+    update_models!(m, msd.models, updates_output.models)
+    # for f in fieldnames(typeof(msd.models))
+    #     if hasfield(typeof(updates_output.models), f)
+    #         update!(getproperty(m, f), msd.models[f], updates_output.models[f])
+    #     end
+    # end
     # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
 end
 
@@ -654,7 +714,7 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     )
 end
 
-function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitors, t_end, t_next_suggested)
+function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, m, msd, solver, monitors, t_end, t_next_suggested)
 
     # Figure out how big this step can be.
 
@@ -681,7 +741,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
     # Step the continuous system. Note that this might not step all the way to the preferred
     # t_next.
-    solver_outputs   = solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
+    solver_outputs   = solve(ommd, solver, t_last, t_next, m, msd, rates_fcn, t_end)
     t_next           = solver_outputs.t_completed
     msd              = solver_outputs.msd_k
     stop             = solver_outputs.stop
@@ -705,12 +765,12 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
     # Make the discrete draws.
     # msd = draw_wd(t_next, ommd, msd)
-    draw_wd!(t_next, ommd, msd)
+    draw_wd!(m, t_next, ommd, msd)
 
     # Perform the discrete update from t_next^- to t_next^+.
-    updates = updates_fcn(t_next, model(msd))
+    updates = updates_fcn(t_next, m)
     # msd = update(msd, updates)
-    update!(msd, updates)
+    update!(m, msd, updates)
 
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
@@ -724,7 +784,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
 end
 
-function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+function loop!(mh, t, ommd, rates_fcn, updates_fcn, m, msd, solver, monitors)
     t_completed = first(t)
     t_end = last(t)
     t_next_suggested = get_initial_time_step(solver)
@@ -732,7 +792,7 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
     try
         while isa(stop, UnknownStopReason)
             t_completed, msd, stop, t_next_suggested = step!(
-                mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
+                mh, t, ommd, rates_fcn, updates_fcn, t_completed, m, msd,
                 solver, monitors, t_end, t_next_suggested,
             )
         end
@@ -872,10 +932,11 @@ function simulate(
     monitors = map(mo -> Monitors.create_monitor(mo, t_start, t_end), options.monitors)
 
     # Begin the loop.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+    m = model(msd)
+    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, m, msd, solver, monitors)
 
     # Close out the models.
-    close_fcn(t_end, model(msd))
+    close_fcn(t_end, m)
 
     # Wrap up all of the history into a single object.
     history = SimHistory(model_description, log, stop)
@@ -885,7 +946,7 @@ function simulate(
         Monitors.close_monitor!(m, t_end)
     end
 
-    return (history, t_end, model(msd))
+    return (history, t_end, m)
 
 end
 
