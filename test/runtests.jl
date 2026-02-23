@@ -18,6 +18,54 @@ include("control_system_demo.jl")
     @test is_regular_step_triggering(10.1, 1., 0.1) == true
 end
 
+@testset "TimeSeries indexing" begin
+    ts = SystemsOfSystems.TimeSeries(
+        title = "Rotor Speed",
+        time = collect(0.0:0.1:2.0),
+        data = collect(100.0:120.0),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega",
+        discrete = false,
+    )
+
+    @test ts[1] == ts.data[1]
+
+    ts_first_10 = ts[1:10]
+    @test ts_first_10 isa SystemsOfSystems.TimeSeries
+    @test ts_first_10.time == ts.time[1:10]
+    @test ts_first_10.data == ts.data[1:10]
+    @test ts_first_10.title == ts.title
+    @test ts_first_10.time_dimension == ts.time_dimension
+    @test ts_first_10.dimensions == ts.dimensions
+    @test ts_first_10.path == ts.path
+    @test ts_first_10.discrete == ts.discrete
+
+    ts_all = ts[:]
+    @test ts_all isa SystemsOfSystems.TimeSeries
+    @test ts_all.time == ts.time
+    @test ts_all.data == ts.data
+
+    @test ts(0.0) == 100.0
+    @test ts(0.35) ≈ 103.5
+    @test ts(2.0) == 120.0
+
+    ts_discrete = SystemsOfSystems.TimeSeries(
+        title = "Commanded Speed",
+        time = copy(ts.time),
+        data = copy(ts.data),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega_cmd",
+        discrete = true,
+    )
+    @test ts_discrete(0.35) == 103.0
+    @test ts_discrete(0.4) == 104.0
+
+    @test_throws ErrorException ts(-0.01)
+    @test_throws ErrorException ts(2.01)
+end
+
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 
