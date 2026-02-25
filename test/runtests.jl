@@ -29,7 +29,10 @@ end
         discrete = false,
     )
 
-    @test ts[1] == ts.data[1]
+    ts_first = ts[1]
+    @test ts_first isa SystemsOfSystems.TimeSeries
+    @test ts_first.time == ts.time[1:1]
+    @test ts_first.data == ts.data[1:1]
 
     ts_first_10 = ts[1:10]
     @test ts_first_10 isa SystemsOfSystems.TimeSeries
@@ -50,6 +53,12 @@ end
     @test ts(0.35) ≈ 103.5
     @test ts(2.0) == 120.0
 
+    ts_resampled = ts(0.0:0.05:0.2)
+    @test ts_resampled isa SystemsOfSystems.TimeSeries
+    @test ts_resampled.time == 0.0:0.05:0.2
+    @test ts_resampled.data ≈ [100.0, 100.5, 101.0, 101.5, 102.0]
+    @test ts_resampled.discrete == false
+
     ts_discrete = SystemsOfSystems.TimeSeries(
         title = "Commanded Speed",
         time = copy(ts.time),
@@ -61,6 +70,12 @@ end
     )
     @test ts_discrete(0.35) == 103.0
     @test ts_discrete(0.4) == 104.0
+
+    ts_discrete_resampled = ts_discrete(0.0:0.05:0.2)
+    @test ts_discrete_resampled isa SystemsOfSystems.TimeSeries
+    @test ts_discrete_resampled.time == 0.0:0.05:0.2
+    @test ts_discrete_resampled.data == [100.0, 100.0, 101.0, 101.0, 102.0]
+    @test ts_discrete_resampled.discrete == true
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
@@ -123,15 +138,43 @@ end
 
     # We can only test logs when we have logs.
     if log_type == "ram" || log_type == "hdf5"
-        @test history["/"]["x"].data[1] == 1.
-        @test history["/"]["x"].data[end] == model.x
+        x_ts = history["/"]["x"]
+        x_first = x_ts[1]
+        @test x_first isa SystemsOfSystems.TimeSeries
+        @test collect(x_first.time) == [x_ts.time[1]]
+        @test collect(x_first.data) == [1.]
+        @test x_ts.data[end] == model.x
+
+        # New accessors should work for both in-memory and HDF5-backed vectors.
+        idxs = 1:min(3, length(x_ts.time))
+        x_slice = x_ts[idxs]
+        @test x_slice isa SystemsOfSystems.TimeSeries
+        @test collect(x_slice.time) == [x_ts.time[k] for k in idxs]
+        @test collect(x_slice.data) == [x_ts.data[k] for k in idxs]
+
+        # Exact-time access returns the exact stored sample.
+        @test x_ts(x_ts.time[1]) == x_ts.data[1]
+
+        # Between-sample access is linear interpolation for continuous series.
+        if length(x_ts.time) >= 2 && x_ts.time[1] != x_ts.time[2]
+            t1, t2 = x_ts.time[1], x_ts.time[2]
+            x1, x2 = x_ts.data[1], x_ts.data[2]
+            t_mid = (t1 + t2) / 2
+            expected = x1 + (t_mid - t1) / (t2 - t1) * (x2 - x1)
+            @test x_ts(t_mid) ≈ expected
+        end
+
         if solver_type == "rk4"
-            @test history["/"]["x"].time == collect(0. : dt_rk4 : t_end)
+            @test x_ts.time == collect(0. : dt_rk4 : t_end)
         end
     end
 
     # Check that we can load an HDF5 log and get the same stuff.
     if log_type == "hdf5"
+        x_ts = history["/"]["x"]
+        @test x_ts.time isa HDF5Vectors.AbstractHDF5Vector
+        @test x_ts.data isa HDF5Vectors.AbstractHDF5Vector
+
         hdf5_log, = Logs.load_hdf5_log("$out_dir/logs.h5")
         @test collect(history["/"]["x"].time) == collect(hdf5_log["/"]["x"].time)
         @test collect(history["/"]["x"].data) == collect(hdf5_log["/"]["x"].data)
@@ -180,6 +223,11 @@ end
     @test history["/"]["x"].data[1] == 1.
     @test history["/"]["x"].data[end] == model.x
     @test is_closed[1] == true
+
+    x_ts = history["/"]["x"]
+    @test x_ts(x_ts.time[1]) == x_ts.data[1]
+    t_mid = (x_ts.time[2] + x_ts.time[3]) / 2
+    @test x_ts(t_mid) == x_ts.data[2]
 
     # Test our weird stepping strategy.
     history["/"]["x"].time == vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
