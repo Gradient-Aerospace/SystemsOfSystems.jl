@@ -73,6 +73,22 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T,
     )
 end
 
+function record_constant(constant_group, v::VariableDescription{T}, breadcrumbs, name) where {T}
+    constant_group["title"] = v.title
+    type = figure_out_el_type(T)
+    vec = create_hdf5_vector(constant_group, "value", type; chunk_length = 1)
+    push!(vec, v.value)
+    constant_group["labels"] = String[d.label for d in v.dimensions]
+    constant_group["units"] = String[d.label for d in v.dimensions]
+end
+function record_constant(constant_group, v, breadcrumbs, name)
+    constant_group["title"] = join("/" * el for el in breadcrumbs) * "/$name"
+    vec = create_hdf5_vector(constant_group, "value", typeof(v); chunk_length = 1)
+    push!(vec, v)
+    constant_group["labels"] = String[]
+    constant_group["units"] = String[]
+end
+
 function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescription)
     group_path = join("/models/" * el for el in breadcrumbs)
     if !isempty(group_path)
@@ -83,18 +99,11 @@ function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescriptio
     constants_group = HDF5.create_group(group, "constants")
     for (k, v) in pairs(md.constants)
         constant_group = HDF5.create_group(constants_group, string(k))
-        if v isa VariableDescription
-            constant_group["title"] = v.title
-            vec = create_hdf5_vector(constant_group, "value", typeof(v.value); chunk_length = 1)
-            push!(vec, v.value)
-            constant_group["labels"] = String[d.label for d in v.dimensions]
-            constant_group["units"] = String[d.label for d in v.dimensions]
-        else
-            constant_group["title"] = join(["/" * el for el in breadcrumbs], string(k))
-            vec = create_hdf5_vector(constant_group, "value", typeof(v); chunk_length = 1)
-            push!(vec, v)
-            constant_group["labels"] = String[]
-            constant_group["units"] = String[]
+        try
+            record_constant(constant_group, v, breadcrumbs, k)
+        catch err
+            p = join("/" * el for el in breadcrumbs) * "/$k"
+            @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
         end
     end
     group["type"] = string(md.type)
