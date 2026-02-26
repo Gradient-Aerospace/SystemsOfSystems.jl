@@ -5,7 +5,7 @@ module Solvers
 
 export create_solver, get_initial_time_step, solve
 
-using ..SystemsOfSystems: ModelStateDescription, RatesOutput, AbstractStopReason, UnknownStopReason, model, draw_wc, copy_model_state_description_except
+using ..SystemsOfSystems: ModelStateDescription, RatesOutput, AbstractStopReason, UnknownStopReason, model, draw_wc, draw_wc!, copy_model_state_description_except
 import SystemsOfSystems
 
 ##################
@@ -53,33 +53,58 @@ function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
     )
 end
 
-function propagate_models(submodels::NamedTuple, dt, rates_output::NamedTuple)
-
-    # A user's RatesOutput's model entry could contain the models in any order. Here, we
-    # build a named tuple that matches the order of the original set of submodels. Plus, if
-    # an entry is missing, we fill it in with a blank RatesOutput(). This lets us simply
-    # `map` below.
-    complete_rates_output = NamedTuple{fieldnames(typeof(submodels))}(
-        map(fieldnames(typeof(submodels))) do f
-            if hasfield(typeof(rates_output), f)
-                rates_output[f]
-            else
-                RatesOutput()
-            end
-        end
-    )
-
-    # Now this is a simple map and doesn't allocate.
-    return map((sm, ro) -> propagate(sm, dt, ro), submodels, complete_rates_output)
-
+function propagate_submodels!(submodels::NamedTuple, dt, rates_output::NamedTuple)
+    foreach(fieldnames(typeof(rates_output))) do f
+        propagate_msd!(submodels[f], dt, rates_output[f])
+    end
+    return nothing
 end
 
-function propagate(msd::ModelStateDescription, dt, rates_output::RatesOutput)
-    return copy_model_state_description_except(
-        msd;
-        continuous_states = propagate_set(msd.continuous_states, dt, rates_output.rates),
-        models = propagate_models(msd.models, dt, rates_output.models),
-    )
+function propagate_msd!(msd::ModelStateDescription, dt, rates_output::RatesOutput)
+    msd.continuous_states = propagate_set(msd.continuous_states, dt, rates_output.rates)
+    propagate_submodels!(msd.models, dt, rates_output.models)
+    return nothing
+end
+
+function copy_xc_to_model!(m, xc)
+    foreach(fieldnames(typeof(xc))) do f
+    # for f in fieldnames(typeof(xc))
+        setfield!(m, f, xc[f])
+    end
+    return nothing
+end
+
+function propagate_to_submodels!(m, models_msd, models_rates_output, dt)
+    foreach(fieldnames(typeof(models_rates_output))) do f
+        propagate_to_model!(getproperty(m, f), models_msd[f], dt, models_rates_output[f])
+    end
+end
+
+function propagate_to_model!(m, msd, dt, rates_output)
+    xc = propagate_set(msd.continuous_states, dt, rates_output.rates)
+    copy_xc_to_model!(m, xc)
+    # for f in fieldnames(typeof(msd.models))
+    #     if hasfield(typeof(rates_output.models), f)
+    #         propagate_to_model!(getproperty(m, f), msd.models[f], dt, rates_output.models[f])
+    #     end
+    # end
+    propagate_to_submodels!(m, msd.models, rates_output.models, dt)
+    return nothing
+end
+
+function copy_continuous_state_for_submodels!(m, models_msd)
+    foreach(fieldnames(typeof(models_msd))) do f
+        copy_continuous_state!(getproperty(m, f), models_msd[f])
+    end
+end
+
+function copy_continuous_state!(m, msd)
+    copy_xc_to_model!(m, msd.continuous_states)
+    # for f in fieldnames(typeof(msd.models))
+    #     copy_continuous_state!(getproperty(m, f), msd.models[f])
+    # end
+    copy_continuous_state_for_submodels!(m, msd.models)
+    return nothing
 end
 
 # These propagate for a set of derivatives.
@@ -110,7 +135,7 @@ function propagate_models(submodels::NamedTuple, gains::Tuple, rates_outputs::Tu
         NamedTuple{fieldnames(typeof(submodels))}(
             map(fieldnames(typeof(submodels))) do f
                 if hasfield(typeof(ro), f) # If we have derivatives for this state...
-                    getfield(ro, f) # Get it for all of them.
+                    getproperty(ro, f) # Get it for all of them.
                 else
                     RatesOutput()
                 end
@@ -150,52 +175,50 @@ create_solver(options::RungeKutta4Options, msd::ModelStateDescription) = RungeKu
 get_initial_time_step(solver::RungeKutta4) = solver.options.dt
 
 # TODO: It seems like there's a lot about `solve` that could be abstracted and simplified.
-function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
+function solve(ommd, solver::RungeKutta4, t_last, t_next, m, msd_km1, rates_fcn, t_end)
 
     t_last_f = float(t_last)
     t_next_f = float(t_next)
 
-    # Make the draws for the continuous-time function.
-    msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
+    # Make the continuous-time draws, storing the results directly in the model form.
+    draw_wc!(m, t_last_f, t_next_f, ommd)
 
     # The first derivative is different because it's an output. The rest are ephemeral.
-    msd1 = msd_km1_with_draws
-    k1 = rates_fcn(t_last_f, model(msd1))
+    k1 = rates_fcn(t_last_f, m)
 
     # If there's no actual work to do here, skip the calculations.
     if t_last == t_next
 
-        msd_k = msd_km1_with_draws
+        msd_k = msd_km1 # TODO: Do I need a deepcopy here?
 
     else
 
-        dt    = t_next_f - t_last_f
-        msd2  = propagate(msd1, dt/2, k1)
-        k2    = rates_fcn(t_last_f + dt/2, model(msd2))
-        msd3  = propagate(msd1, dt/2, k2)
-        k3    = rates_fcn(t_last_f + dt/2, model(msd3))
-        msd4  = propagate(msd1, dt, k3)
-        k4    = rates_fcn(t_last_f + dt, model(msd4))
+        # Propagate from the continuous-time state in msd_km1 using the k1 rate, storing the
+        # results directly in the model.
+        dt = t_next_f - t_last_f
+        propagate_to_model!(m, msd_km1, dt/2, k1) # Propagates directly into the model
+        k2 = rates_fcn(t_last_f + dt/2, m)
+        propagate_to_model!(m, msd_km1, dt/2, k2)
+        k3 = rates_fcn(t_last_f + dt/2, m)
+        propagate_to_model!(m, msd_km1, dt, k3)
+        k4 = rates_fcn(t_last_f + dt, m)
 
-        # This seems more efficient:
-        # propagate(
-        #     msd_km1_with_draws,
-        #     (dt/6, dt/3, dt/3, dt/6),
-        #     (k1, k2, k3, k4),
-        # )
+        # Update the model state description with the propagated continuous-time states.
+        msd_k = deepcopy(msd_km1) # TODO: There's no real reason to do this. We could just commit to updating the single MSD.
+        # msd_k = msd_km1 # TODO: This is wrong. It was just a timing test.
+        propagate_msd!(msd_k, dt/6, k1)
+        propagate_msd!(msd_k, dt/3, k2)
+        propagate_msd!(msd_k, dt/3, k3)
+        propagate_msd!(msd_k, dt/6, k4)
 
-        # But this doesn't allocate and is actually slightly faster.
-        msd_k = msd_km1_with_draws
-        msd_k = propagate(msd_k, dt/6, k1)
-        msd_k = propagate(msd_k, dt/3, k2)
-        msd_k = propagate(msd_k, dt/3, k3)
-        msd_k = propagate(msd_k, dt/6, k4)
+        # Now copy that to the model itself.
+        copy_continuous_state!(m, msd_k)
 
     end
 
     return SolverOutputs(;
         t_completed = t_next, # This should already be a rational.
-        msd_km1 = msd_km1_with_draws,
+        msd_km1 = msd_km1,
         msd_k,
         rates = k1,
         stop = UnknownStopReason(),

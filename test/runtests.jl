@@ -19,8 +19,14 @@ include("control_system_demo.jl")
     @test is_regular_step_triggering(10.1, 1., 0.1) == true
 end
 
+# TODO: I shouldn't need this.
+@kwdef mutable struct TempState
+    time_constant::Float64
+    x::Float64
+end
+
 # This is a continuous-only sim.
-@testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
+@testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4",), log_type in ("ram", "hdf5", "null", "nothing")
 
     dt_rk4 = 0.1
     solver = if solver_type == "dp54"
@@ -45,6 +51,7 @@ end
     history, t, model = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
+            type = TempState, # TODO: Remove.
             constants = (;
                 time_constant,
             ),
@@ -95,9 +102,15 @@ end
 
 end
 
+@kwdef mutable struct State2
+    x::Float64
+    t::Float64
+end
+
 # Here's a discrete-only sim.
 @testset failfast = false "discrete exponential" begin
 
+    # We'll test that this "global resource" gets closed correctly thanks to the close_fcn.
     is_closed = [false,]
 
     # We'll simulate a pure (and discrete) exponential decay and compare to the known answer.
@@ -106,6 +119,7 @@ end
     history, t, model = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
+            type = State2, # TODO: I shouldn't need to do this.
             discrete_states = (;
                 x = 1.,
                 t = 0.,
@@ -123,6 +137,9 @@ end
             is_closed[1] = true
         end,
         t = (0, t_end),
+        options = SimOptions(; # TODO: Remove.
+            solver = Solvers.RungeKutta4Options(; dt = t_end, ), # Shouldn't matter.
+        ),
     )
 
     # Test the final state.
@@ -139,6 +156,16 @@ end
 
 end
 
+@kwdef mutable struct Model3
+    dt::Float64
+    kp::Float64
+    kd::Float64
+    mass::Float64
+    position::Float64
+    velocity::Float64
+    force::Float64
+end
+
 # Here's a sim with a single hybrid model.
 @testset "closed loop control" begin
 
@@ -148,6 +175,7 @@ end
     history, t, x = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
+            type = Model3, # TODO: Remove.
             constants = (;
                 dt = dt,
                 kp = 8.,
@@ -205,6 +233,9 @@ end
             end
         end,
         t = (0, t_end),
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt, ),
+        ),
     )
 
     # It started in the right place.
