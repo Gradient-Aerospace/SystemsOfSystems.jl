@@ -277,16 +277,18 @@ end
     is_regular_step_triggering(t, step, offset = 0//1)
 
 Returns true if `t == n * step + offset`, where `n` is an integer. This is useful for
-modelling regularly sampled systems (systems with a constant sample rate).
+modeling regularly sampled systems (systems with a constant sample rate). If step == 0, that
+means "always triggering".
 
 ```
 is_regular_step_triggering(10.1, 0.05) # true
 is_regular_step_triggering(10.1, 0.20) # false
+is_regular_step_triggering(10.1, 0.0) # true
 is_regular_step_triggering(10.1, 0.20, 0.1) # true
 ```
 """
 function is_regular_step_triggering(t, step, offset = 0//1)
-    return mod(rationalize(t - offset), rationalize(step)) == 0//1
+    return iszero(step) || (mod(rationalize(t - offset), rationalize(step)) == 0//1)
 end
 
 #########################
