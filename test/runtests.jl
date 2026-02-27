@@ -29,10 +29,7 @@ end
         discrete = false,
     )
 
-    ts_first = ts[1]
-    @test ts_first isa SystemsOfSystems.TimeSeries
-    @test ts_first.time == ts.time[1:1]
-    @test ts_first.data == ts.data[1:1]
+    @test ts[1] == (ts.time[1] => ts.data[1])
 
     ts_first_10 = ts[1:10]
     @test ts_first_10 isa SystemsOfSystems.TimeSeries
@@ -55,7 +52,7 @@ end
 
     ts_resampled = ts(0.0:0.05:0.2)
     @test ts_resampled isa SystemsOfSystems.TimeSeries
-    @test ts_resampled.time == 0.0:0.05:0.2
+    @test ts_resampled.time == collect(0.0:0.05:0.2)
     @test ts_resampled.data ≈ [100.0, 100.5, 101.0, 101.5, 102.0]
     @test ts_resampled.discrete == false
 
@@ -73,7 +70,7 @@ end
 
     ts_discrete_resampled = ts_discrete(0.0:0.05:0.2)
     @test ts_discrete_resampled isa SystemsOfSystems.TimeSeries
-    @test ts_discrete_resampled.time == 0.0:0.05:0.2
+    @test ts_discrete_resampled.time == collect(0.0:0.05:0.2)
     @test ts_discrete_resampled.data == [100.0, 100.0, 101.0, 101.0, 102.0]
     @test ts_discrete_resampled.discrete == true
 
@@ -140,9 +137,7 @@ end
     if log_type == "ram" || log_type == "hdf5"
         x_ts = history["/"]["x"]
         x_first = x_ts[1]
-        @test x_first isa SystemsOfSystems.TimeSeries
-        @test collect(x_first.time) == [x_ts.time[1]]
-        @test collect(x_first.data) == [1.]
+        @test x_first == (x_ts.time[1] => 1.)
         @test x_ts.data[end] == model.x
 
         # New accessors should work for both in-memory and HDF5-backed vectors.
