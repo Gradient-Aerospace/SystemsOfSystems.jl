@@ -353,7 +353,7 @@ end
     # This should generate a sinusoid. The max step will limit the step size here, but we'll
     # request even shorter time steps for the first several steps.
     max_dt = 1//2
-    t_specified = [0., 0.1, 0.2, 0.3, 30.]
+    t_specified = [0.01, 0.1, 0.2, 0.3, 30.] # Includes a non-zero start
     history, t, x = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(

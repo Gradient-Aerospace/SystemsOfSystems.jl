@@ -699,7 +699,7 @@ end
 function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = get_initial_time_step(solver)
+    t_next_suggested = t_completed + get_initial_time_step(solver)
     stop = UnknownStopReason()
     try
         while isa(stop, UnknownStopReason)
