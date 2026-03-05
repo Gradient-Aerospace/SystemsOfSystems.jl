@@ -632,11 +632,16 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
     # Assume the next stop is the next time a user asked for a stop (which might be the end
     # time).
-    k_next_requested_stop = findfirst(>(t_last), t)
-    t_next_from_user = if !isnothing(k_next_requested_stop)
-        t[k_next_requested_stop]
+    k_last_requested_stop = searchsortedlast(t, t_last) # Returns that last index of t that is <= t_last
+    if k_last_requested_stop < firstindex(t)
+        t_next_from_user = first(t) # This shouldn't really be possible at this point.
     else
-        last(t)
+        k_next_requested_stop = k_last_requested_stop + 1
+        if k_next_requested_stop > lastindex(t)
+            t_next_from_user = last(t)
+        else
+            t_next_from_user = t[k_next_requested_stop]
+        end
     end
 
     # Ask all of the models what time they want to stop next, and take the soonest.
@@ -647,7 +652,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
 
     # Perform the continuous-time update from t_last to t_next.
-    # println("Stepping from $t_last to $t_next.")
+    # println("Stepping from $(float(t_last)) to $(float(t_next)).")
 
     # Potentially, we should draw_wc and keep the end step time no matter what.
 
