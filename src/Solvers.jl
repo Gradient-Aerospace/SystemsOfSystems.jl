@@ -286,7 +286,7 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
     msd_k = msd_km1
     k1 = nothing
     t_completed = t_last
-    t_next_suggested = t_next + solver.options.max_dt # Start optimistically.
+    t_next_suggested = t_next + solver.options.max_dt
 
     # Make sure we don't take too many steps.
     n_allowable_failed_steps = 20
@@ -345,10 +345,12 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
             if max_normalized_error < 1.
 
                 # If the suggested step size is less than the maximum, use it. Otherwise,
-                # stick with the maximum (which is what t_next_suggested is already set to).
+                # stick with the maximum.
                 t_completed = t_next
                 if dt_suggested < solver.options.max_dt
                     t_next_suggested = rationalize(t_next_f + dt_suggested)
+                else
+                    t_next_suggested = t_next + solver.options.max_dt
                 end
                 # println("That step worked. t_next_suggested = $(float(t_next_suggested)).")
                 break
