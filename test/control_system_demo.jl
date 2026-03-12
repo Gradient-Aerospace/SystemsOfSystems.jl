@@ -1,4 +1,5 @@
 using Random: Xoshiro, randn, rand
+using HDF5: h5open, Group
 import Dimensions
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
     is_regular_step_triggering, branch, TimeSeries
@@ -471,6 +472,19 @@ function updates(t, system::ClosedLoopSystem)
 
 end
 
+# These help us compare two HDF5 files, one created by HDF5Log and one created from
+# save_log_to_hdf5.
+function compare_hdf5_group(g1::Group, g2)
+    @assert g2 isa Group "g1 was an Group but g2 wasn't. It was a $(typeof(g2))"
+    @test keys(g1) == keys(g2)
+    for k in keys(g1)
+        compare_hdf5_group(g1[k], g2[k])
+    end
+end
+function compare_hdf5_group(g1, g2)
+    @test read(g1) == read(g2)
+end
+
 @testset failfast=false "control system demo with $solver_type solver, $log_type logs" for solver_type in ["rk4", "dp54"], log_type in ["ram", "hdf5"]
 
     dt_rk4 = 0.06 # Deliberately chosen to be inconsistent with the discrete systems' sample rates
@@ -539,8 +553,9 @@ end
 
     Logs.close_log(history.log)
 
-    # Test that we can save a normal log to HDF5.
     if log_type == "ram"
+
+        # Test that we can save a normal log to HDF5.
         Logs.save_log_to_hdf5("out/control_demo_saved_log.h5", history.log)
         loaded_log, = Logs.load_hdf5_log("out/control_demo_saved_log.h5")
         for model_path in keys(history.log)
@@ -569,6 +584,17 @@ end
             end
         end
         Logs.close_log(loaded_log)
+
+    elseif log_type == "hdf5"
+
+        # Since we do the BasicLog before the HDF5Log, we can load the HDF5 log we
+        # saved and compare it to the result of HDF5Log.
+        f1 = h5open("out/control_demo_logs.h5")
+        f2 = h5open("out/control_demo_saved_log.h5")
+        compare_hdf5_group(f1, f2)
+        close(f1)
+        close(f2)
+
     end
 
     # Also, test for type stability. First, get the pieces we'll need from an internal
