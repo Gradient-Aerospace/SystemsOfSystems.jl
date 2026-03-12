@@ -315,8 +315,15 @@ export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5
 """
     HDF5LogOptions(; filename)
 
-Options for the HDF5Log type, which creates logs to an HDF5 file rather than keeping logs in
-RAM.
+The HDF5Log acts like a BasicLog (stores all the same continuous and discrete states and
+outputs, as well as constants and metadata), but the underlying storage is an HDF5 file.
+This prevents the need for logs to be stored on disk -- critical for very long simulations.
+Note, however, that this is much slower than BasicLog.
+
+This structure contains the options for the HDF5Log, consisting only of a filename.
+
+If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
+use `save_to_hdf5_log` when the simulation is over.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
