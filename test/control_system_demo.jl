@@ -1,7 +1,7 @@
 using Random: Xoshiro, randn, rand
 import Dimensions
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, branch
+    is_regular_step_triggering, branch, TimeSeries
 
 #########
 # Plant #
@@ -483,7 +483,7 @@ end
     log = if log_type == "ram"
         Logs.BasicLogOptions()
     elseif log_type == "hdf5"
-        Logs.HDF5LogOptions("$out_dir/logs.h5")
+        Logs.HDF5LogOptions("$out_dir/control_demo_logs.h5")
     elseif log_type == "null"
         Logs.NullLogOptions()
     elseif log_type == "none"
@@ -538,6 +538,38 @@ end
     @test history["/sensor"]["measurement"].data[end].t == t
 
     Logs.close_log(history.log)
+
+    # Test that we can save a normal log to HDF5.
+    if log_type == "ram"
+        Logs.save_log_to_hdf5("out/control_demo_saved_log.h5", history.log)
+        loaded_log, = Logs.load_hdf5_log("out/control_demo_saved_log.h5")
+        for model_path in keys(history.log)
+            mh = history.log[model_path]
+            mh2 = loaded_log[model_path]
+            for var_name in keys(mh)
+                var = mh[var_name]
+                # @test haskey(mh2, var_name)
+                var2 = mh2[var_name]
+                if var isa TimeSeries
+                    @test var2 isa TimeSeries
+                    @test var.time == collect(var2.time)
+                    @test var.data == collect(var2.data)
+                    @test var.title == var2.title
+                    @test var.dimensions == collect(var2.dimensions)
+                elseif var isa VariableDescription # constants
+                    @test var.value == var2 # These are undecorated. TODO: Revisit.
+                elseif var isa Logs.ModelHistory
+                    @test var2 isa Logs.ModelHistory
+                    @test keys(var) == keys(var2)
+                    # We test all of the keys of the log, so we don't need to do anything
+                    # recursive here.
+                else
+                    @assert false "The type of the $var_name key for the $model_path entry of the log was a type we haven't accounted for."
+                end
+            end
+        end
+        Logs.close_log(loaded_log)
+    end
 
     # Also, test for type stability. First, get the pieces we'll need from an internal
     # function.

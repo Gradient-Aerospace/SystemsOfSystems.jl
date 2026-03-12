@@ -4,12 +4,12 @@ module SystemsOfSystemsHDF5Ext
 
 using OrderedCollections: OrderedDict
 import HDF5
-using HDF5Vectors: create_hdf5_vector, load_hdf5_vector
+using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
 using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog, HDF5LogOptions, create_time_series_for_model!
 
-import SystemsOfSystems.Logs: create_log, create_time_series_for_var, record_model_description, close_log, load_hdf5_log
+import SystemsOfSystems.Logs: create_log, create_time_series_for_var, record_model_description, close_log, load_hdf5_log, save_log_to_hdf5
 
 """
 TODO
@@ -109,7 +109,7 @@ function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescriptio
             HDF5.delete_group(constant_group)
         end
     end
-    group["type"] = string(md.type)
+    group["type"] = string(md.type) # TODO: This is recorded, but we can't create this field when saving to HDF5, and we never use it.
     names_group_path = group_path * "/names"
     names_group = HDF5.create_group(log.fid, names_group_path)
     names_group["constants"] = saved_constants
@@ -221,6 +221,60 @@ function load_hdf5_log(filename::AbstractString)
     mh = load_hdf5_model!(mhd, fid["/"], breadcrumbs)
     log = HDF5Log(fid, mhd)
     return (log, mh)
+end
+
+function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries{T}) where {T}
+    group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
+    group = HDF5.create_group(fid, group_path)
+    group["title"] = ts.title
+    group["time_label"] = ts.time_dimension.label
+    group["time_units"] = ts.time_dimension.units
+    group["labels"] = [dim.label for dim in ts.dimensions]
+    group["units"] = [dim.units for dim in ts.dimensions]
+    copy_to_hdf5_vector(group, "time", ts.time)
+    copy_to_hdf5_vector(group, "data", ts.data)
+    return nothing
+end
+
+function save_mh_to_hdf5(fid, mh, breadcrumbs)
+    # fid["type"] = string(typeof(mh.type)) # TODO: We don't have the type information in the model history.
+    this_path = join("/models/" * el for el in breadcrumbs)
+    constants_path = this_path * "/constants/"
+    constants_group = HDF5.create_group(fid, constants_path)
+    saved_constants = String[]
+    for (name, constant) in pairs(mh.constants)
+        constant_group = HDF5.create_group(constants_group, string(name))
+        try
+            record_constant(constant_group, constant, breadcrumbs, string(name))
+            push!(saved_constants, string(name))
+        catch
+            p = join("/" * el for el in breadcrumbs) * "/$name"
+            @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
+            HDF5.delete_group(constant_group)
+        end
+    end
+    fid["$this_path/names/constants"] = saved_constants
+    for f in (:continuous_states, :discrete_states, :continuous_outputs, :discrete_outputs)
+        fid["$this_path/names/$f"] = String[string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))]
+        for (name, ts) in pairs(getproperty(mh, f))
+            save_ts_to_hdf5(fid, breadcrumbs, string(name), ts)
+        end
+    end
+    for (name, smh) in pairs(mh.models)
+        save_mh_to_hdf5(fid, smh, vcat(breadcrumbs, string(name)))
+    end
+end
+
+"""
+Saves any other type of log in the same format used by HDF5Log so that it can be loaded as
+an HDF5Log or loaded outside of Julia.
+"""
+function save_log_to_hdf5(filename::AbstractString, log::AbstractLog)
+    HDF5.h5open(filename, "w") do fid
+        breadcrumbs = String[]
+        save_mh_to_hdf5(fid, log["/"], breadcrumbs)
+    end
+    return nothing
 end
 
 end

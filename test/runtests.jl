@@ -91,7 +91,7 @@ end
     log = if log_type == "ram"
         Logs.BasicLogOptions()
     elseif log_type == "hdf5"
-        Logs.HDF5LogOptions("$out_dir/logs.h5")
+        Logs.HDF5LogOptions("$out_dir/exponential_logs.h5")
     elseif log_type == "null"
         Logs.NullLogOptions()
     elseif log_type == "none"
@@ -169,8 +169,7 @@ end
         x_ts = history["/"]["x"]
         @test x_ts.time isa HDF5Vectors.AbstractHDF5Vector
         @test x_ts.data isa HDF5Vectors.AbstractHDF5Vector
-
-        hdf5_log, = Logs.load_hdf5_log("$out_dir/logs.h5")
+        hdf5_log, = Logs.load_hdf5_log("$out_dir/exponential_logs.h5")
         @test collect(history["/"]["x"].time) == collect(hdf5_log["/"]["x"].time)
         @test collect(history["/"]["x"].data) == collect(hdf5_log["/"]["x"].data)
         Logs.close_log(hdf5_log)
