@@ -550,7 +550,7 @@ end
                 var = mh[var_name]
                 # @test haskey(mh2, var_name)
                 var2 = mh2[var_name]
-                if var isa TimeSeries
+                if var isa TimeSeries # states and outputs
                     @test var2 isa TimeSeries
                     @test var.time == collect(var2.time)
                     @test var.data == collect(var2.data)
@@ -558,7 +558,7 @@ end
                     @test var.dimensions == collect(var2.dimensions)
                 elseif var isa VariableDescription # constants
                     @test var.value == var2 # These are undecorated. TODO: Revisit.
-                elseif var isa Logs.ModelHistory
+                elseif var isa Logs.ModelHistory # submodels
                     @test var2 isa Logs.ModelHistory
                     @test keys(var) == keys(var2)
                     # We test all of the keys of the log, so we don't need to do anything

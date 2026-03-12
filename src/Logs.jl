@@ -16,7 +16,7 @@ and outputs, as well as constants, the "path" to this model, and the model histo
 sub-models.
 """
 @kwdef struct ModelHistory
-    # TODO: Add the type here?
+    type::Type
     path::String
     constants::NamedTuple
     continuous_states::NamedTuple # where all the elements are TimeSeries
@@ -85,6 +85,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", mh::ModelHistory)
     println(io, "ModelHistory for $(mh.path) with the following contents:")
+    println(io, "  type: ", mh.type)
     show_container_keys(io, "constants", mh.constants)
     show_container_keys(io, "continuous_states", mh.continuous_states)
     show_container_keys(io, "discrete_states", mh.discrete_states)
@@ -116,10 +117,6 @@ function gather_all_time_series(mh::ModelHistory)
     gather_all_time_series!(tss, mh, "")
     return tss
 end
-
-# function show_all(io::IO, mh::ModelHistory, slug = "/"; indent = 2)
-#     println("  "^indent * slug)
-# end
 
 ###############
 # AbstractLog #
@@ -164,6 +161,7 @@ function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelD
 
     # Create the time histories.
     mh = ModelHistory(;
+        type = md.type,
         path = slug,
         constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
         continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),

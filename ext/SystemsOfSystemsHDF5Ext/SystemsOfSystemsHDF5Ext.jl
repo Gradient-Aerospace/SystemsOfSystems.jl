@@ -200,25 +200,26 @@ function load_hdf5_model!(mhd, group, breadcrumbs)
     continuous_output_names = read(group["names/continuous_outputs"])
     discrete_output_names = read(group["names/discrete_outputs"])
 
-    mh = ModelHistory(
-        slug,
-        NamedTuple(
+    mh = ModelHistory(;
+        type = Missing, # The type is missing because we can't load it from an HDF5 file.
+        path = slug,
+        constants = NamedTuple(
             Symbol(k) => load_hdf5_constant(group["constants"][k])
             for k in constant_names
         ),
-        NamedTuple(
+        continuous_states = NamedTuple(
             Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = false)
             for k in continuous_state_names
         ),
-        NamedTuple(
+        discrete_states = NamedTuple(
             Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = true)
             for k in discrete_state_names
         ),
-        NamedTuple(
+        continuous_outputs = NamedTuple(
             Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = false)
             for k in continuous_output_names
         ),
-        NamedTuple(
+        discrete_outputs = NamedTuple(
             Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = true)
             for k in discrete_output_names
         ),
@@ -247,7 +248,7 @@ function load_hdf5_log(filename::AbstractString)
     return (log, mh)
 end
 
-function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries{T}; kwargs...) where {T}
+function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries; kwargs...)
 
     # Set up the group and add the metadata.
     group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
@@ -265,7 +266,7 @@ function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries{T}; kwargs..
     # If we're logging an array and it's dimensions are always exactly the same, we can
     # provide those to copy_to_hdf5_vector, which can store this much more efficiently.
     dims = nothing
-    if T <: Array && !isempty(ts.data)
+    if eltype(ts.data) <: Array && !isempty(ts.data)
         first_dims = size(first(ts.data))
         if all(size(el) == first_dims for el in collect(ts.data))
             dims = first_dims
@@ -279,8 +280,12 @@ end
 
 function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
 
-    # fid["type"] = string(typeof(mh.type)) # TODO: We don't have the type information in the model history.
+    # Set up the path to here, like /models/subsystem1/models/subsubsystem2.
     this_path = join("/models/" * el for el in breadcrumbs)
+
+    # Record the type just for users to look at. We don't load this string as if it were a
+    # type or use it in any way.
+    fid["$this_path/type"] = string(mh.type)
 
     # Save the constants. This may fail since the user may have all kinds of constants that
     # we don't know how to log, so make sure we record only the successful ones.
@@ -300,9 +305,12 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
     end
     fid["$this_path/names/constants"] = saved_constants
 
-    # Now save all states and outputs.
+    # Now save all states and outputs. We don't use a try-catch here. We need to be able to
+    # save everything, or it's a good idea to throw an error.
     for f in (:continuous_states, :discrete_states, :continuous_outputs, :discrete_outputs)
-        fid["$this_path/names/$f"] = String[string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))]
+        fid["$this_path/names/$f"] = String[
+            string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))
+        ]
         for (name, ts) in pairs(getproperty(mh, f))
             save_ts_to_hdf5(fid, breadcrumbs, string(name), ts; kwargs...)
         end
