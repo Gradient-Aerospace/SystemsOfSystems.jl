@@ -11,9 +11,12 @@ using OrderedCollections: OrderedDict
 ################
 
 """
-TODO
+This stores the time history of a single model, including its discrete and continuous states
+and outputs, as well as constants, the "path" to this model, and the model histories for its
+sub-models.
 """
 @kwdef struct ModelHistory
+    type::Type
     path::String
     constants::NamedTuple
     continuous_states::NamedTuple # where all the elements are TimeSeries
@@ -54,7 +57,7 @@ function Base.getindex(mh::ModelHistory, key::String)
 end
 function Base.getindex(mh::ModelHistory, key::Symbol)
     if haskey(mh.constants, key)
-        return mh.constants[key] # Could be any time.
+        return mh.constants[key] # Could be any type.
     elseif haskey(mh.continuous_states, key)
         return mh.continuous_states[key] # TimeSeries
     elseif haskey(mh.discrete_states, key)
@@ -82,6 +85,7 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", mh::ModelHistory)
     println(io, "ModelHistory for $(mh.path) with the following contents:")
+    println(io, "  type: ", mh.type)
     show_container_keys(io, "constants", mh.constants)
     show_container_keys(io, "continuous_states", mh.continuous_states)
     show_container_keys(io, "discrete_states", mh.discrete_states)
@@ -113,10 +117,6 @@ function gather_all_time_series(mh::ModelHistory)
     gather_all_time_series!(tss, mh, "")
     return tss
 end
-
-# function show_all(io::IO, mh::ModelHistory, slug = "/"; indent = 2)
-#     println("  "^indent * slug)
-# end
 
 ###############
 # AbstractLog #
@@ -161,8 +161,9 @@ function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelD
 
     # Create the time histories.
     mh = ModelHistory(;
+        type = md.type,
         path = slug,
-        constants = md.constants,
+        constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
         continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),
         # TODO: Record derivatives too.
         discrete_states = create_time_series_for_set(log, breadcrumbs, md.discrete_states, time_dimension; discrete = true),
@@ -307,20 +308,41 @@ end
 # HDF5Log #
 ###########
 
-export HDF5LogOptions, load_hdf5_log
+export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5
 
 """
-TODO
+    HDF5LogOptions(; filename)
+
+The HDF5Log acts like a BasicLog (stores all the same continuous and discrete states and
+outputs, as well as constants and metadata), but the underlying storage is an HDF5 file.
+This prevents the need for logs to be stored on disk -- critical for very long simulations.
+Note, however, that this is much slower than BasicLog.
+
+This structure contains the options for the HDF5Log, consisting only of a filename.
+
+If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
+use `save_to_hdf5_log` when the simulation is over.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
 end
 
 """
-TODO
+    load_hdf5_log(filename)
+
+Loads a log from an HDF5 file.
 """
 function load_hdf5_log(filename)
     error("Please import the HDF5 package to use HDF5 log functionality like `load_hdf5_log`.")
+end
+
+"""
+    save_log_to_hdf5(filename, log)
+
+Saves a log to an HDF5 file in the same format used by the HDF5Log.
+"""
+function save_log_to_hdf5(filename, log)
+    error("Please import the HDF5 package to use HDF5 log functionality like `save_log_to_hdf5`.")
 end
 
 end
