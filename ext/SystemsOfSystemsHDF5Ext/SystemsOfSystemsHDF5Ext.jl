@@ -4,10 +4,10 @@ module SystemsOfSystemsHDF5Ext
 
 using OrderedCollections: OrderedDict
 import HDF5
-using HDF5Vectors: create_hdf5_vector, load_hdf5_vector
+using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, trim_hdf5_vector!
 
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
-using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog, HDF5LogOptions, create_time_series_for_model!
+using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog, HDF5LogOptions, create_time_series_for_model!, gather_all_time_series
 
 import SystemsOfSystems.Logs: create_log, create_time_series_for_var, record_model_description, close_log, load_hdf5_log
 
@@ -133,6 +133,10 @@ end
 
 function close_log(log::HDF5Log)
     if !isnothing(log.fid) && isopen(log.fid)
+        for ts in values(gather_all_time_series(log))
+            trim_hdf5_vector!(ts.time)
+            trim_hdf5_vector!(ts.data)
+        end
         close(log.fid)
         log.fid = nothing # TODO: What's the point of this?
     end
