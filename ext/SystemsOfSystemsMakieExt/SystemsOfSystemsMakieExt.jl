@@ -13,7 +13,7 @@ Plots all of the dimensions of a single `TimeSeries`, returning the Makie.Figure
 function SystemsOfSystems.plot_ts(ts::TimeSeries)
 
     # If there are no plot groups, then there's nothing to plot.
-    if isempty(groups)
+    if isempty(ts.groups)
         return nothing
     end
 
@@ -63,7 +63,7 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
 
         # Get the axis started. If it's on top, add a title for the whole figure.
         a = Axis(f[axis_num, 1];
-            title = k == 1 ? ts.title : "",
+            title = axis_num == 1 ? ts.title : "",
             xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
             ylabel,
         )

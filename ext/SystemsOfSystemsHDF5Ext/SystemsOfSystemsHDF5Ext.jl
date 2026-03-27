@@ -56,7 +56,7 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::Va
         var.dimensions,
         path = slug,
         discrete,
-        # TODO: Add groups.
+        var.groups,
     )
 end
 function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T, time_dimension; discrete) where {T}
