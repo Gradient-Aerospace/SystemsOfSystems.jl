@@ -78,6 +78,9 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
             plot_fcn(a, t, [getdim(el, k) for el in data]; label)
         end
 
+        # Add a legend.
+        Legend(f[axis_num, 2], a)
+
     end
 
     return f
