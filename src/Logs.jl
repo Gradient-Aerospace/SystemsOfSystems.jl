@@ -1,5 +1,6 @@
 """
-TODO
+This module contains the different log types: `BasicLog` (the default), `NullLog` (doesn't
+log), and `HDF5Log` (import HDF5 for this one to work).
 """
 module Logs
 
@@ -125,17 +126,18 @@ end
 export AbstractLogOptions, AbstractLog, create_log, close_log, gather_all_time_series
 
 """
-TODO
+A set of options for setting up the log of the appropriate type.
 """
 abstract type AbstractLogOptions end
 
 """
-TODO
+All AbstractLog types are expected to obey this interface to work with simulations in
+SystemsOfSystems.
 
 Functions:
-* create_log
-* close_log
-* getindex, setindex!, keys, pairs
+* `create_log`
+* `close_log`
+* `getindex`, `setindex!`, `keys`, `values`, `pairs`
 """
 abstract type AbstractLog end
 
@@ -183,14 +185,20 @@ function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelD
 end
 
 """
-TODO
+    create_log(options::AbstractLogOptions, model_description, time_dimension)
+
+Creates a log type and model history for the given `model_description` and `time_dimension`.
+Returns the log and model history as a tuple.
 """
 function create_log(options::AbstractLogOptions, model_description, time_dimension)
     error("No `create_log` implementation exists for $(typeof(options)).")
 end
 
 """
-TODO
+    close_log(::AbstractLog)
+
+If there are any resources open for the given log, this closes them (which may make some
+logs non-operational).
 """
 function close_log(::AbstractLog)
     return nothing
@@ -198,23 +206,13 @@ end
 
 gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 
-# TODO: Add a Base.show multiline method for a log.
-
-# TODO: Consider making a getindex that breaks apart a single string into model and var.
-# This implies that subtypes of AbstractLog would implement get_model_history instead of
-# get_index. An alternative is to implement `get_dict` and let AbstractLog take care of all
-# of the dict-like interface.
-# function Base.getindex(log::AbstractLog, k)
-#     if contains(k, ':')
-#         parts = split(k, ':')
-#         @assert length(parts) == 2 "Expected key like /model/path:var_name but got \"$k\"."
-#         slug = parts[1]
-#         var_name = parts[2]
-#         return get_model_history(log, slug)[var_name]
-#     else
-#         return get_model_history(log, k)
-#     end
-# end
+function Base.show(io::IO, mime::MIME"text/plain", log::AbstractLog)
+    println(io, "Model Histories:")
+    slugs = sort(collect(keys(log)))
+    for slug in slugs
+        println(io, "  " * slug)
+    end
+end
 
 ############
 # BasicLog #
@@ -223,7 +221,7 @@ gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 export BasicLogOptions
 
 """
-TODO
+There are no options for a `BasicLog`, so this is an empty structure.
 """
 struct BasicLogOptions <: AbstractLogOptions end
 
@@ -244,24 +242,24 @@ Base.values(log::BasicLog) = values(log.model_history_dict)
 Base.pairs(log::BasicLog) = pairs(log.model_history_dict)
 
 function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::VariableDescription{T}, time_dimension; discrete = true) where {T}
-    return TimeSeries(
+    return TimeSeries(;
         var.title,
-        Float64[],
-        T[],
+        time = Float64[],
+        data = T[],
         time_dimension,
         var.dimensions,
-        join("/" * el for el in breadcrumbs),
+        path = join("/" * el for el in breadcrumbs),
         discrete,
+        # TODO: Add groups
     )
 end
 function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::T, time_dimension; discrete = true) where {T}
-    return TimeSeries(
-        join("/" * el for el in breadcrumbs), # Let the slug be the title.
-        Float64[],
-        T[],
+    return TimeSeries(;
+        title = join("/" * el for el in breadcrumbs), # Let the slug be the title.
+        time = Float64[],
+        data = T[],
         time_dimension,
-        Dimension[], # TODO: Attempt to automatically list dimensions?
-        join("/" * el for el in breadcrumbs),
+        path = join("/" * el for el in breadcrumbs),
         discrete,
     )
 end
@@ -280,7 +278,7 @@ end
 export NullLogOptions
 
 """
-TODO
+There are no options for a `NullLog`, so this is an empty structure.
 """
 struct NullLogOptions <: AbstractLogOptions end
 

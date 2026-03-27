@@ -1,27 +1,87 @@
 module SystemsOfSystemsMakieExt
 
-using Makie: Figure, Axis, lines!, stairs!, Legend
+using Makie: Figure, Axis, lines!, scatter!, Legend
 using Dimensions: getdim
 using SystemsOfSystems: TimeSeries
 import SystemsOfSystems
 
 """
-TODO
+    plot_ts(ts::TimeSeries)
+
+Plots all of the dimensions of a single `TimeSeries`, returning the Makie.Figure.
 """
 function SystemsOfSystems.plot_ts(ts::TimeSeries)
+
+    # If there are no plot groups, then there's nothing to plot.
+    if isempty(groups)
+        return nothing
+    end
+
+    # Pull the set of dimensions. This is the only way we can build a figure. If those
+    # aren't provided for some reason, bail out.
+    dim_labels = [dim.label for dim in ts.dimensions]
+    if isempty(dim_labels)
+        return nothing
+    end
+
+    # Pull the data. We "collect" in case the data isn't in RAM (e.g., and HDF5Vector).
     t = collect(ts.time)
     data = collect(ts.data)
+
     f = Figure()
-    plot_fcn = ts.discrete ? stairs! : lines!
-    for (k, dim) in enumerate(ts.dimensions)
-        a = Axis(f[k, 1];
-            xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
-            title = k == 1 ? ts.title : "",
-            ylabel = "$(dim.label) ($(dim.units))",
+    plot_fcn = ts.discrete ? scatter! : lines!
+
+    # For each axis...
+    for (axis_num, (group_label, group_dimension_labels)) in enumerate(ts.groups)
+
+        # This should not be possible because the TimeSeries itself checks for this, but we
+        # may as well check.
+        @assert !isempty(group_dimension_labels) "No dimension group should be empty."
+
+        # Get the dimension numbers from the dimension labels.
+        dim_nums = map(group_dimension_labels) do label
+            for k in eachindex(dim_labels)
+                if dim_labels[k] == label
+                    return k
+                end
+            end
+            @error "Could not find dimension $label. Valid labels: $dim_labels"
+        end
+
+        # We'll want to know if units are consistent to determine if they should be part of
+        # the y label or part of the legend.
+        first_units = ts.dimensions[dim_nums[1]].units
+        units_are_consistent = all(
+            ts.dimensions[k].units == first_units
+            for k in dim_nums
         )
-        plot_fcn(a, t, [getdim(el, k) for el in data]; label = dim.label)
+        ylabel = if units_are_consistent
+            "$group_label ($first_units)"
+        else
+            group_label
+        end
+
+        # Get the axis started. If it's on top, add a title for the whole figure.
+        a = Axis(f[axis_num, 1];
+            title = k == 1 ? ts.title : "",
+            xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
+            ylabel,
+        )
+
+        # Plot each dimension called out in that group.
+        for k in dim_nums
+            label = if units_are_consistent
+                ts.dimensions[k].label # Units are on the ylabel.
+            else
+                ts.dimensions[k].label * "(" * ts.dimensions[k].units * ")"
+            end
+            plot_fcn(a, t, [getdim(el, k) for el in data]; label)
+        end
+
     end
+
     return f
+
 end
 
 """
@@ -81,7 +141,7 @@ function SystemsOfSystems.plot_ts(tss::Vector{<:TimeSeries})
     for ts in tss
         t = collect(ts.time)
         data = collect(ts.data)
-        plot_fcn = ts.discrete ? stairs! : lines!
+        plot_fcn = ts.discrete ? scatter! : lines!
         for (k, dim) in enumerate(ts.dimensions)
             a = Axis(f[count + k, 1];
                 xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
