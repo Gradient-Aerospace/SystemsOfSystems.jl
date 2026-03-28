@@ -1,5 +1,6 @@
 """
-TODO
+This module holds things related to TimeSeries. We can't call it TimeSeries because that's
+the name of a type it exports.
 """
 module TimeSeriesStuff
 
@@ -20,7 +21,37 @@ Dimension(; label = "", units = "") = Dimension(label, units)
 Base.convert(::Type{Dimension}, pair::Pair) = Dimension(pair.first, pair.second)
 
 """
-TODO
+    TimeSeries
+
+This type stores a series of points over time.
+
+Fields:
+
+* `title`: What this time series represents, used as a title in plots
+* `time`: An array of times for each element of data stored
+* `data`: The array of data, with the same length as `time`
+* `time_dimension`: A `Dimension` for time, used as the x-axis label in plots
+* `dimensions`: A vector of `Dimension`, one for each dimension of the `data`
+* `path`: The model path leading up to this time series (e.g., "/aircraft/imu")
+* `discrete`: True if this time series is discrete and false if continuous
+* `groups`: Controls how dimensions are grouped into axes in plots (see below)
+
+The dimension groups should be structured like so:
+
+```
+TimeSeries(;
+    ...
+    dimensions = ["X Pos." => "m", "Y Pos." => "m", "X Vel." => "m/s", "Y Vel." => "m/s"]
+    groups = [
+        "My Axis 1 Label" => ["X Pos.", "Y Pos."],
+        "My Axis 2 Label" => ["X Vel.", "Y Vel."],
+    ]
+)
+```
+
+That is, `groups` is a Vector of Pairs, where each Pair is the name of an axis and an array
+of dimension labels that map to that axis. When plotted with `plot_ts`, this example will
+result in a figure with two axes, each of which as two lines.
 """
 struct TimeSeries{TVT, DVT}
     title::String
@@ -32,7 +63,6 @@ struct TimeSeries{TVT, DVT}
     discrete::Bool
     groups::Vector{Pair{String, Vector{String}}}
 end
-# TODO: Test that the dimensions in the group are all available as part of the data.
 
 # When the user provides no dimensions, we'll rely on the Dimensions interface to provide
 # them. We'll label each with the dimension number, and the units will be empty.
