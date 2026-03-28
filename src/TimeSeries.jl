@@ -58,8 +58,8 @@ struct TimeSeries{TVT, DVT}
     time::TVT
     data::DVT
     time_dimension::Dimension
-    dimensions::Vector{Dimension} # TODO: Consider "data_dimensions" for consistency.
-    path::String # TODO: Consider "ID" instead of path. How is this even used?
+    dimensions::Vector{Dimension}
+    path::String # TODO: Consider "ID" instead of path.
     discrete::Bool
     groups::Vector{Pair{String, Vector{String}}}
 end
@@ -159,7 +159,7 @@ function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
         dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
-        groups = [], # TODO: What to do about groups?
+        ts.groups,
     )
 end
 
@@ -231,12 +231,18 @@ function (ts::TimeSeries)(times::AbstractVector)
         dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
-        groups = [], # TODO: What to do about groups?
+        ts.groups,
     )
 end
 
-# TODO: Should this be push!(ts, (t, x)) to follow the push!(coll, el) pattern?
-function Base.push!(ts::TimeSeries, t, x::Missing)
+# These are for push!(ts, (t, x)).
+function Base.push!(ts::TimeSeries, p::Pair)
+    push!(ts, p.first, p.second)
+end
+
+# These are for push!(ts, t, x).
+function Base.push!(::TimeSeries, t, ::Missing)
+    # Ignore missing data.
 end
 function Base.push!(ts::TimeSeries, t, x)
     push!(ts.time, t)
