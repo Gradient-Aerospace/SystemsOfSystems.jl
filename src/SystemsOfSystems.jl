@@ -232,11 +232,11 @@ struct BranchingSeed
 end
 
 """
-    branch(seed::BranchingSeed, name::String)
+    branch(seed::BranchingSeed, name::AbstractString)
 
 Creates a new `BranchingSeed` from the given `seed` by appending the given `name`.
 """
-function branch(seed::BranchingSeed, name::String)
+function branch(seed::BranchingSeed, name::AbstractString)
     return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
 end
 

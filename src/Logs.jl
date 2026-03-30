@@ -52,7 +52,7 @@ function Base.pairs(mh::ModelHistory)
     return zip(keys(mh), values(mh))
 end
 
-function Base.getindex(mh::ModelHistory, key::String)
+function Base.getindex(mh::ModelHistory, key::AbstractString)
     return getindex(mh, Symbol(key))
 end
 function Base.getindex(mh::ModelHistory, key::Symbol)
