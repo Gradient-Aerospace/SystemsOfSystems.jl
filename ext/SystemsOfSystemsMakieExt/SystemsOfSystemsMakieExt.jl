@@ -1,16 +1,22 @@
 module SystemsOfSystemsMakieExt
 
-using Makie: Figure, Axis, lines!, scatter!, Legend
+using Makie: Figure, Axis, lines!, scatter!, Legend, Cycled, linkxaxes!
 using Dimensions: getdim
 using SystemsOfSystems: TimeSeries
 import SystemsOfSystems
 
-"""
-    plot_ts(ts::TimeSeries)
+# This might be used by an empty slot in the "matrix" plot_ts implementation.
+function SystemsOfSystems.plot_ts!(f, ts::Nothing)
+    return Axis[]
+end
 
-Plots all of the dimensions of a single `TimeSeries`, returning the Makie.Figure.
 """
-function SystemsOfSystems.plot_ts(ts::TimeSeries)
+    plot_ts!(f, ts::TimeSeries)
+
+Adds a TimeSeries to a given figure (or any "block" within a figure), `f`. All new axes
+are returned.
+"""
+function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
 
     # If there are no plot groups, then there's nothing to plot.
     if isempty(ts.groups)
@@ -28,10 +34,10 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
     t = collect(ts.time)
     data = collect(ts.data)
 
-    f = Figure()
     plot_fcn = ts.discrete ? scatter! : lines!
 
     # For each axis...
+    axes = Axis[]
     for (axis_num, (group_label, group_dimension_labels)) in enumerate(ts.groups)
 
         # This should not be possible because the TimeSeries itself checks for this, but we
@@ -67,6 +73,7 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
             xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
             ylabel,
         )
+        push!(axes, a)
 
         # Plot each dimension called out in that group.
         for k in dim_nums
@@ -83,17 +90,25 @@ function SystemsOfSystems.plot_ts(ts::TimeSeries)
 
     end
 
-    return f
+    return axes
 
 end
 
 """
-TODO
+    plot_ts!(f, tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false)
 
-This combines multiple time series in a single plot. The input is a vector of
-string-time-series pairs, where the string becomes the legend label for the plot.
+This combines multiple time series in a single plot in the given figure (or any "block"),
+`f`. The `tss` input is a vector of string-time-series pairs, where the string becomes the
+legend label for the plot. This ignores plot groups; every dimension gets its own axis.
+
+By default, this checks to make sure the units are consistent and errors if they are not.
+Set `skip_units_check = true` to skip the check.
+
+All new axes are returned.
+
+See `plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}})` for more.
 """
-function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false)
+function SystemsOfSystems.plot_ts!(f, tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false)
 
     ts1 = first(tss)[2]
 
@@ -109,52 +124,148 @@ function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; ski
     end
 
     # Make the axes using the first time series.
-    f = Figure()
-    a = [
+    axes = [
         Axis(f[k, 1];
             xlabel = "$(ts1.time_dimension.label) ($(ts1.time_dimension.units))",
-            title = k == 1 ? ts1.title : nothing,
+            title = k == 1 ? ts1.title : "",
             ylabel = "$(dim.label) ($(dim.units))",
         )
         for (k, dim) in enumerate(ts1.dimensions)
     ]
 
     # Now add the lines, with labels showing the thing they came from.
-    for (label, ts) in tss
+    for (ts_num, (label, ts)) in enumerate(tss)
         t = collect(ts.time)
         data = collect(ts.data)
+        plot_fcn = ts.discrete ? scatter! : lines!
         for k in eachindex(ts.dimensions)
-            lines!(a[k], t, [getdim(el, k) for el in data]; label)
+            plot_fcn(axes[k], t, [getdim(el, k) for el in data]; label, color = Cycled(ts_num))
         end
     end
 
     # Add a legend to each axis.
     for k in eachindex(ts1.dimensions)
-        Legend(f[k, 2], a[k])
+        Legend(f[k, 2], axes[k])
     end
 
-    return f
+    return axes
 
 end
 
-# Plot all of the dimensions of all of the time series stacked vertically.
-function SystemsOfSystems.plot_ts(tss::Vector{<:TimeSeries})
-    f = Figure()
-    count = 0
-    for ts in tss
-        t = collect(ts.time)
-        data = collect(ts.data)
-        plot_fcn = ts.discrete ? scatter! : lines!
-        for (k, dim) in enumerate(ts.dimensions)
-            a = Axis(f[count + k, 1];
-                xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
-                title = k == 1 ? ts.title : "",
-                ylabel = "$(dim.label) ($(dim.units))",
-            )
-            plot_fcn(a, t, [getdim(el, k) for el in data]; label = dim.label)
-        end
-        count += length(ts.dimensions)
+"""
+    plot_ts(ts::TimeSeries)
+
+Plots all of the dimensions of a single `TimeSeries`, returning the Makie.Figure. Any
+`figure_kwargs` will be passed to the Makie.Figure. If there is no content, `nothing` is
+returned.
+"""
+function SystemsOfSystems.plot_ts(ts::TimeSeries; figure_kwargs = (;))
+    f = Figure(; figure_kwargs...)
+    axes = SystemsOfSystems.plot_ts!(f, ts)
+    if isempty(axes)
+        return nothing
     end
+    linkxaxes!(axes)
+    return f
+end
+
+"""
+    plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false)
+
+This combines multiple time series in a single plot. The input is a vector of
+string-time-series pairs, where the string becomes the legend label for the plot. This
+ignores plot groups; every dimension gets its own axis.
+
+By default, this checks to make sure the units are consistent and errors if they are not.
+Set `skip_units_check = true` to skip the check.
+
+If there is no content, `nothing` is returned.
+
+Example:
+
+```
+plot_ts(
+    [
+        "truth" => truth_ts,
+        "measured" => measured_ts,
+    ]
+)
+```
+"""
+function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false, figure_kwargs = (;))
+    f = Figure(; figure_kwargs...)
+    axes = plot_ts!(f, tss; skip_units_check)
+    if isempty(axes)
+        return nothing
+    end
+    linkxaxes!(axes)
+    return f
+end
+
+"""
+    plot_ts(tss::Vector, figure_kwargs = (;))
+
+This combines multiple time series in a single plot, stacked vertically. Any
+`figure_kwargs` will be passed to the Makie.Figure. If there is no content, `nothing` is
+returned.
+
+Example:
+
+```
+plot_ts(truth_ts, measured_ts])
+```
+"""
+function SystemsOfSystems.plot_ts(tss::Vector, figure_kwargs = (;))
+    f = Figure(; figure_kwargs...)
+    all_axes = Axis[]
+    for (k, ts) in enumerate(tss)
+        these_axes = SystemsOfSystems.plot_ts!(f[k, 1], ts)
+        for axis in these_axes
+            push!(all_axes, axis)
+        end
+    end
+    if isempty(all_axes)
+        return nothing
+    end
+    linkxaxes!(all_axes)
+    return f
+end
+
+"""
+    plot_ts(tss::Matrix, figure_kwargs = (;))
+
+This combines multiple time series in a single plot, arranged in a matrix. Any
+`figure_kwargs` will be passed to the Makie.Figure. If there is no content, `nothing` is
+returned.
+
+Example:
+
+```
+plot_ts(
+    [
+        ts1  ts2;
+        ts3  ts4;
+    ]
+)
+```
+"""
+function SystemsOfSystems.plot_ts(tss::Matrix; figure_kwargs = (;))
+    f = Figure(; figure_kwargs...)
+    (nr, nc) = size(tss)
+    all_axes = Axis[]
+    for r in 1:nr
+        for c in 1:nc
+            ts = tss[r, c]
+            these_axes = SystemsOfSystems.plot_ts!(f[r, c], ts)
+            for axis in these_axes
+                push!(all_axes, axis)
+            end
+        end
+    end
+    if isempty(all_axes)
+        return nothing
+    end
+    linkxaxes!(all_axes)
     return f
 end
 

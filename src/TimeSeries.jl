@@ -4,7 +4,7 @@ the name of a type it exports.
 """
 module TimeSeriesStuff
 
-export Dimension, TimeSeries, plot_ts
+export Dimension, TimeSeries, plot_ts, plot_ts!
 
 using Dimensions: numdims_for_type
 
@@ -282,8 +282,11 @@ function Base.show(io::IO, ::MIME"text/plain", ts::TimeSeries)
 end
 
 # SystemsOfSystemsMakieExt picks this up:
-function plot_ts(ts)
+function plot_ts(ts; kwargs...)
     error("There is no implementation of plot_ts. Import GLMakie (or any Makie package) to use plot_ts.")
+end
+function plot_ts!(f, ts; kwargs...)
+    error("There is no implementation of plot_ts!. Import GLMakie (or any Makie package) to use plot_ts.")
 end
 
 end
