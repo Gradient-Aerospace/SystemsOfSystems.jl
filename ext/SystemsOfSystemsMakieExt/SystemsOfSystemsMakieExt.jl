@@ -217,7 +217,7 @@ returned.
 Example:
 
 ```
-plot_ts(truth_ts, measured_ts])
+plot_ts([truth_ts, measured_ts])
 ```
 """
 function SystemsOfSystems.plot_ts(tss::Vector, figure_kwargs = (;))

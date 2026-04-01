@@ -184,7 +184,7 @@ struct VariableDescription{T}
     value::Union{Missing, T}
     title::String
     dimensions::Vector{Dimension}
-    groups::Any # Empty groups won't be automatically plotted
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
     # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
 end
 VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
