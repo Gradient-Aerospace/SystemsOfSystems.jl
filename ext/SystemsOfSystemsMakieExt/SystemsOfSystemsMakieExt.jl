@@ -63,7 +63,11 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
             for k in dim_nums
         )
         ylabel = if units_are_consistent
-            "$group_label ($first_units)"
+            if !isempty(first_units)
+                "$group_label ($first_units)"
+            else
+                group_label
+            end
         else
             group_label
         end
