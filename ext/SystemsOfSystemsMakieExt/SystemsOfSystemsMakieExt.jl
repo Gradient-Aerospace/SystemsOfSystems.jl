@@ -18,16 +18,18 @@ are returned.
 """
 function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
 
+    axes = Axis[]
+
     # If there are no plot groups, then there's nothing to plot.
     if isempty(ts.groups)
-        return nothing
+        return axes
     end
 
     # Pull the set of dimensions. This is the only way we can build a figure. If those
     # aren't provided for some reason, bail out.
     dim_labels = [dim.label for dim in ts.dimensions]
     if isempty(dim_labels)
-        return nothing
+        return axes
     end
 
     # Pull the data. We "collect" in case the data isn't in RAM (e.g., and HDF5Vector).
@@ -37,7 +39,6 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
     plot_fcn = ts.discrete ? scatter! : lines!
 
     # For each axis...
-    axes = Axis[]
     for (axis_num, (group_label, group_dimension_labels)) in enumerate(ts.groups)
 
         # This should not be possible because the TimeSeries itself checks for this, but we
@@ -51,7 +52,7 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
                     return k
                 end
             end
-            @error "Could not find dimension $label. Valid labels: $dim_labels"
+            error("Could not find dimension $label. Valid labels: $dim_labels")
         end
 
         # We'll want to know if units are consistent to determine if they should be part of

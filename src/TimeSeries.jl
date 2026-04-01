@@ -111,7 +111,7 @@ function TimeSeries(;
     labels = [dim.label for dim in dimensions]
     for label in labels
         if count(==(label), labels) > 1
-            @error "Dimension labels must be unique, but the $label label was used multiple times in the $title time series (path = $path)."
+            error("Dimension labels must be unique, but the $label label was used multiple times in the $title time series (path = $path).")
         end
     end
 
@@ -124,7 +124,7 @@ function TimeSeries(;
         # Make sure all of the dimensions in the dimension groups reference valid labels.
         for dim_label in group_dimension_labels
             if count(==(dim_label), labels) != 1
-                @error "The $group_label dimension group of the $title time series (path = $path) referenced a dimension labeled $dim_label, but there is no dimension with that label. Valid labels: $labels."
+                error("The $group_label dimension group of the $title time series (path = $path) referenced a dimension labeled $dim_label, but there is no dimension with that label. Valid labels: $labels.")
             end
         end
 
