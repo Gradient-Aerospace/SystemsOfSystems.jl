@@ -175,7 +175,10 @@ VariableDescription{SVector{3, Float64}}(
 )
 ```
 
-TODO: Add documentation of groups.
+A variable's dimensions can also be grouped together. This only affects plots. Grouped
+dimensions will be plotted in a singnle axis, rather than each dimension getting its own
+axis. This can help make plots more compact, and it can be clearer to have multiple lines
+sharing a single axis in some cases. By default, each dimension will get its own group.
 """
 struct VariableDescription{T}
     value::Union{Missing, T}

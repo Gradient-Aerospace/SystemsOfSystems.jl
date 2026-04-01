@@ -28,7 +28,6 @@ end
         dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
         path = "/rotor/omega",
         discrete = false,
-        groups = [], # TODO: Fill this in.
     )
 
     @test ts[1] == (ts.time[1] => ts.data[1])
@@ -66,7 +65,7 @@ end
         dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
         path = "/rotor/omega_cmd",
         discrete = true,
-        groups = [], # TODO: Fill this in.
+        groups = ts.groups,
     )
     @test ts_discrete(0.35) == 103.0
     @test ts_discrete(0.4) == 104.0
