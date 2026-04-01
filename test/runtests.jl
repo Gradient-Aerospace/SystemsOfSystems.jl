@@ -19,7 +19,8 @@ include("control_system_demo.jl")
 end
 
 @testset "TimeSeries indexing" begin
-    ts = SystemsOfSystems.TimeSeries(
+
+    ts = SystemsOfSystems.TimeSeries(;
         title = "Rotor Speed",
         time = collect(0.0:0.1:2.0),
         data = collect(100.0:120.0),
@@ -56,7 +57,7 @@ end
     @test ts_resampled.data ≈ [100.0, 100.5, 101.0, 101.5, 102.0]
     @test ts_resampled.discrete == false
 
-    ts_discrete = SystemsOfSystems.TimeSeries(
+    ts_discrete = SystemsOfSystems.TimeSeries(;
         title = "Commanded Speed",
         time = copy(ts.time),
         data = copy(ts.data),
@@ -64,6 +65,7 @@ end
         dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
         path = "/rotor/omega_cmd",
         discrete = true,
+        groups = ts.groups,
     )
     @test ts_discrete(0.35) == 103.0
     @test ts_discrete(0.4) == 104.0
@@ -76,6 +78,7 @@ end
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
+
 end
 
 # This is a continuous-only sim.

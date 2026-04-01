@@ -174,15 +174,22 @@ VariableDescription{SVector{3, Float64}}(
     dimensions = ["x" => "m", "y" => "m", "z" => "m"],
 )
 ```
+
+A variable's dimensions can also be grouped together. This only affects plots. Grouped
+dimensions will be plotted in a singnle axis, rather than each dimension getting its own
+axis. This can help make plots more compact, and it can be clearer to have multiple lines
+sharing a single axis in some cases. By default, each dimension will get its own group.
 """
 struct VariableDescription{T}
     value::Union{Missing, T}
     title::String
     dimensions::Vector{Dimension}
-    # record::Bool # To let users decide on a per-model basis if they want this model to log anything at all. Or, let this be a set of symbols to record.
-    VariableDescription(value, title, dimensions) = new{typeof(value)}(value, title, dimensions)
-    VariableDescription(value; title, dimensions) = new{typeof(value)}(value, title, Dimension[dimensions...])
-    VariableDescription{T}(value; title, dimensions) where {T} = new{T}(value, title, Dimension[dimensions...])
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+    # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
+end
+VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
+function VariableDescription{T}(value; title, dimensions, groups = missing) where {T}
+    return VariableDescription{T}(value, title, Dimension[dimensions...], groups)
 end
 
 """

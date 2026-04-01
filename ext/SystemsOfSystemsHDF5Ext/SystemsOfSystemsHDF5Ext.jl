@@ -48,14 +48,15 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::Va
     group["time_units"] = time_dimension.units
     group["labels"] = [dim.label for dim in var.dimensions]
     group["units"] = [dim.units for dim in var.dimensions]
-    return TimeSeries(
+    return TimeSeries(;
         var.title,
-        create_hdf5_vector(group, "time", Float64),
-        create_hdf5_vector(group, "data", el_type),
+        time = create_hdf5_vector(group, "time", Float64),
+        data = create_hdf5_vector(group, "data", el_type),
         time_dimension,
         var.dimensions,
-        slug,
+        path = slug,
         discrete,
+        var.groups,
     )
 end
 function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T, time_dimension; discrete) where {T}
@@ -69,13 +70,12 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T,
     group["time_units"] = time_dimension.units
     group["labels"] = String[]
     group["units"] = String[]
-    return TimeSeries(
-        slug,
-        create_hdf5_vector(group, "time", Float64),
-        create_hdf5_vector(group, "data", el_type),
+    return TimeSeries(;
+        title = slug,
+        time = create_hdf5_vector(group, "time", Float64),
+        data = create_hdf5_vector(group, "data", el_type),
         time_dimension,
-        Dimension[], # TODO: Attempt to automatically list dimensions so they're not empty?
-        slug,
+        path = slug,
         discrete,
     )
 end
@@ -162,14 +162,15 @@ end
 
 function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    ts = TimeSeries(
-        read(group["title"]),
-        load_hdf5_vector(group["time"]),
-        load_hdf5_vector(group["data"]),
-        Dimension(read(group["time_label"]), read(group["time_units"])),
-        [Dimension(l, u) for (l, u) in zip(read(group["labels"]), read(group["units"]))],
-        slug,
+    ts = TimeSeries(;
+        title = read(group["title"]),
+        time = load_hdf5_vector(group["time"]),
+        data = load_hdf5_vector(group["data"]),
+        time_dimension = Dimension(read(group["time_label"]), read(group["time_units"])),
+        dimensions = [Dimension(l, u) for (l, u) in zip(read(group["labels"]), read(group["units"]))],
+        path = slug,
         discrete,
+        # TODO: It would be nice if we saved the groups so that we could load them here.
     )
     return ts
 end

@@ -1,12 +1,17 @@
 """
-TODO
+This module holds things related to TimeSeries. We can't call it TimeSeries because that's
+the name of a type it exports.
 """
 module TimeSeriesStuff
 
-export Dimension, TimeSeries, plot_ts
+export Dimension, TimeSeries, plot_ts, plot_ts!
+
+using Dimensions: numdims_for_type
 
 """
-TODO
+    Dimension(; label = "", units = "")
+
+Used to label a dimension of a time series.
 """
 struct Dimension
     label::String
@@ -16,16 +21,119 @@ Dimension(; label = "", units = "") = Dimension(label, units)
 Base.convert(::Type{Dimension}, pair::Pair) = Dimension(pair.first, pair.second)
 
 """
-TODO
+    TimeSeries
+
+This type stores a series of points over time.
+
+Fields:
+
+* `title`: What this time series represents, used as a title in plots
+* `time`: An array of times for each element of data stored
+* `data`: The array of data, with the same length as `time`
+* `time_dimension`: A `Dimension` for time, used as the x-axis label in plots
+* `dimensions`: A vector of `Dimension`, one for each dimension of the `data`
+* `path`: The model path leading up to this time series (e.g., "/aircraft/imu")
+* `discrete`: True if this time series is discrete and false if continuous
+* `groups`: Controls how dimensions are grouped into axes in plots (see below)
+
+The dimension groups should be structured like so:
+
+```
+TimeSeries(;
+    ...
+    dimensions = ["X Pos." => "m", "Y Pos." => "m", "X Vel." => "m/s", "Y Vel." => "m/s"]
+    groups = [
+        "My Axis 1 Label" => ["X Pos.", "Y Pos."],
+        "My Axis 2 Label" => ["X Vel.", "Y Vel."],
+    ]
+)
+```
+
+That is, `groups` is a Vector of Pairs, where each Pair is the name of an axis and an array
+of dimension labels that map to that axis. When plotted with `plot_ts`, this example will
+result in a figure with two axes, each of which as two lines.
 """
-@kwdef struct TimeSeries{TVT, DVT}
+struct TimeSeries{TVT, DVT}
     title::String
     time::TVT
     data::DVT
     time_dimension::Dimension
-    dimensions::Vector{Dimension} # TODO: Consider "data_dimensions" for consistency.
-    path::String # TODO: Consider "ID" instead of path. How is this even used?
-    discrete::Bool = false
+    dimensions::Vector{Dimension}
+    path::String # TODO: Consider "ID" instead of path.
+    discrete::Bool
+    groups::Vector{Pair{String, Vector{String}}}
+end
+
+# When the user provides no dimensions, we'll rely on the Dimensions interface to provide
+# them. We'll label each with the dimension number, and the units will be empty.
+function make_default_dimensions(el_type)
+    return Dimension[
+        Dimension(string(k), "")
+        for k in 1:numdims_for_type(el_type)
+    ]
+end
+
+# When the groups aren't specified, assume we'll want one axis per dimension. We'll label
+# each dimension simply with its dimension number, and the units will be empty.
+function make_default_groups(dimensions)
+    return [
+        dim.label => [dim.label,]
+        for dim in(dimensions)
+    ]
+end
+
+function TimeSeries(;
+    title::AbstractString,
+    time,
+    data,
+    time_dimension,
+    dimensions = missing,
+    path::String,
+    discrete::Bool = false,
+    groups = missing,
+)
+
+    if !isa(time_dimension, Dimension)
+        time_dimension = convert(Dimension, time_dimension)
+    end
+
+    if ismissing(dimensions)
+        dimensions = make_default_dimensions(eltype(data))
+    else
+        dimensions = Dimension[dimensions...,]
+    end
+
+    if ismissing(groups)
+        groups = make_default_groups(dimensions)
+    end
+
+    # Make sure all dimension labels are unique.
+    labels = [dim.label for dim in dimensions]
+    for label in labels
+        if count(==(label), labels) > 1
+            error("Dimension labels must be unique, but the $label label was used multiple times in the $title time series (path = $path).")
+        end
+    end
+
+    # Make sure the groups are valid.
+    for (group_label, group_dimension_labels) in groups
+
+        # Make sure there are no degenerate groups.
+        @assert !isempty(group_dimension_labels) "A dimension group was empty for the $title time series (path = $path), but this is not allowed."
+
+        # Make sure all of the dimensions in the dimension groups reference valid labels.
+        for dim_label in group_dimension_labels
+            if count(==(dim_label), labels) != 1
+                error("The $group_label dimension group of the $title time series (path = $path) referenced a dimension labeled $dim_label, but there is no dimension with that label. Valid labels: $labels.")
+            end
+        end
+
+    end
+
+    return TimeSeries{typeof(time), typeof(data)}(
+        title, time, data, time_dimension, dimensions, path, discrete, groups,
+    )
+
 end
 
 """
@@ -43,14 +151,15 @@ end
 Return a sliced `TimeSeries` that preserves metadata.
 """
 function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
-    return TimeSeries(
+    return TimeSeries(;
         ts.title,
-        ts.time[i],
-        ts.data[i],
+        time = ts.time[i],
+        data = ts.data[i],
         ts.time_dimension,
-        copy(ts.dimensions),
+        dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
+        ts.groups,
     )
 end
 
@@ -114,19 +223,26 @@ Each output sample is generated by calling `ts(t)` for the corresponding time.
 """
 function (ts::TimeSeries)(times::AbstractVector)
     collected_times = collect(times)
-    return TimeSeries(
+    return TimeSeries(;
         ts.title,
-        collected_times,
-        [ts(t) for t in collected_times],
+        time = collected_times,
+        data = [ts(t) for t in collected_times],
         ts.time_dimension,
-        copy(ts.dimensions),
+        dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
+        ts.groups,
     )
 end
 
-# TODO: Should this be push!(ts, (t, x)) to follow the push!(coll, el) pattern?
-function Base.push!(ts::TimeSeries, t, x::Missing)
+# These are for push!(ts, (t, x)).
+function Base.push!(ts::TimeSeries, p::Pair)
+    push!(ts, p.first, p.second)
+end
+
+# These are for push!(ts, t, x).
+function Base.push!(::TimeSeries, t, ::Missing)
+    # Ignore missing data.
 end
 function Base.push!(ts::TimeSeries, t, x)
     push!(ts.time, t)
@@ -154,11 +270,23 @@ function Base.show(io::IO, ::MIME"text/plain", ts::TimeSeries)
         end
     end
     println(io, "  path: $(ts.path)")
+    println(io, "  discrete: $(ts.discrete)")
+    if isempty(ts.groups)
+        println(io, "  groups: (none)")
+    else
+        println(io, "  groups:")
+        for (group_label, group_dim_labels) in ts.groups
+            println(io, "    $group_label: $group_dim_labels")
+        end
+    end
 end
 
 # SystemsOfSystemsMakieExt picks this up:
-function plot_ts(ts)
+function plot_ts(ts; kwargs...)
     error("There is no implementation of plot_ts. Import GLMakie (or any Makie package) to use plot_ts.")
+end
+function plot_ts!(f, ts; kwargs...)
+    error("There is no implementation of plot_ts!. Import GLMakie (or any Makie package) to use plot_ts.")
 end
 
 end
