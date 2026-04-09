@@ -220,7 +220,7 @@ Example:
 plot_ts([truth_ts, measured_ts])
 ```
 """
-function SystemsOfSystems.plot_ts(tss::Vector, figure_kwargs = (;))
+function SystemsOfSystems.plot_ts(tss::Vector; figure_kwargs = (;))
     f = Figure(; figure_kwargs...)
     all_axes = Axis[]
     for (k, ts) in enumerate(tss)
