@@ -7,7 +7,9 @@ using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
 using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog, HDF5LogOptions, create_time_series_for_model!
 
-import SystemsOfSystems.Logs: create_log, create_time_series_for_var, record_model_description, close_log, load_hdf5_log, save_log_to_hdf5
+import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
+    record_model_description, close_log,
+    load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
     HDF5Log(; fid, model_history_dict)
@@ -18,7 +20,7 @@ prevents the need for logs to be stored on disk -- critical for very long simula
 however, that this is much slower than BasicLog.
 
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
-use `save_to_hdf5_log` when the simulation is over.
+use `save_log_to_hdf5` when the simulation is over.
 
 See [`HDF5LogOptions`](@ref) for more.
 """
@@ -249,11 +251,10 @@ function load_hdf5_log(filename::AbstractString)
     return (log, mh)
 end
 
-function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries; kwargs...)
+function save_time_series_to_hdf5(fid, path, ts::TimeSeries; kwargs...)
 
     # Set up the group and add the metadata.
-    group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
-    group = HDF5.create_group(fid, group_path)
+    group = HDF5.create_group(fid, path)
     group["title"] = ts.title
     group["time_label"] = ts.time_dimension.label
     group["time_units"] = ts.time_dimension.units
@@ -264,7 +265,7 @@ function save_ts_to_hdf5(fid, breadcrumbs, var_name, ts::TimeSeries; kwargs...)
     # how these are created by HDF5Log.
     copy_to_hdf5_vector(group, "time", ts.time; kwargs...)
 
-    # If we're logging an array and it's dimensions are always exactly the same, we can
+    # If we're logging an array and its dimensions are always exactly the same, we can
     # provide those to copy_to_hdf5_vector, which can store this much more efficiently.
     dims = nothing
     if eltype(ts.data) <: Array && !isempty(ts.data)
@@ -313,7 +314,8 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
             string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))
         ]
         for (name, ts) in pairs(getproperty(mh, f))
-            save_ts_to_hdf5(fid, breadcrumbs, string(name), ts; kwargs...)
+            group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/$name"
+            save_time_series_to_hdf5(fid, group_path, ts; kwargs...)
         end
     end
 
