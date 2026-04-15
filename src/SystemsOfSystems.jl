@@ -101,6 +101,8 @@ pulled out and all types are fixed as type parameters. This is what's used by th
     models::MT
     t_next::Rational{Int64}
     rng::Xoshiro
+    has_continuous_random_subtree::Bool
+    has_discrete_random_subtree::Bool
 end
 
 """
@@ -254,6 +256,12 @@ strip_fluff_from_variable(var) = var
 strip_fluff_from_variable(var::VariableDescription) = var.value
 
 function strip_fluff_from_model_description(desc::ModelDescription, seed::BranchingSeed)
+    models = NamedTuple(
+        field => strip_fluff_from_model_description(
+            desc.models[field], branch(seed, string(field)),
+        )
+        for field in fieldnames(typeof(desc.models))
+    )
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -263,14 +271,15 @@ function strip_fluff_from_model_description(desc::ModelDescription, seed::Branch
         discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
         continuous_random_variables = map(strip_fluff_from_variable, desc.continuous_random_variables),
         discrete_random_variables = map(strip_fluff_from_variable, desc.discrete_random_variables),
-        models = NamedTuple(
-            field => strip_fluff_from_model_description(
-                desc.models[field], branch(seed, string(field)),
-            )
-            for field in fieldnames(typeof(desc.models))
-        ),
+        models,
         t_next = desc.t_next,
         rng = isnothing(desc.rng) ? Xoshiro(seed) : desc.rng,
+        has_continuous_random_subtree = !isempty(desc.continuous_random_variables) || any(values(models)) do submodel
+            submodel.has_continuous_random_subtree
+        end,
+        has_discrete_random_subtree = !isempty(desc.discrete_random_variables) || any(values(models)) do submodel
+            submodel.has_discrete_random_subtree
+        end,
     )
 end
 
@@ -472,6 +481,7 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 ############
 
 function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+    ommd.has_continuous_random_subtree || return msd
     return copy_model_state_description_except(msd;
         continuous_random_variables = map(drvf -> drvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables),
         models = NamedTuple{keys(msd.models)}(
@@ -499,6 +509,7 @@ function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
 end
 
 function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+    ommd.has_discrete_random_subtree || return msd
     return copy_model_state_description_except(msd;
         discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple{keys(msd.models)}(
@@ -572,6 +583,11 @@ function update_discrete_states(discrete_states::T1, updated_discrete_states::T2
     )
 end
 
+is_empty_updates_output(updates_output::UpdatesOutput) =
+    isempty(fieldnames(typeof(updates_output.updates))) &&
+    isempty(fieldnames(typeof(updates_output.models))) &&
+    iszero(updates_output.t_next)
+
 # Note: the return type parameter here helps this to not allocate, but it might be overly
 # restrictive. If types can change, should MSD know about that ahead of time?
 #
@@ -579,18 +595,6 @@ end
 # `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
 #
 function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
-
-    # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
-    # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
-    # operation). However, in order to make this operation efficient, we'll build a
-    # "complete" set of updates, where every model is listed, and if it wasn't in the
-    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
-    # we'll have a named tuple that matches submodels in fields (including their order),
-    # and we can just map out `update` function to the corresponding submodels and updates.
-    #
-    # This is one of our more tedious concessions to efficiency, but honestly, it's not all
-    # that bad.
-    #
     complete_submodels_updates = NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
             if hasfield(T2, f)
@@ -600,10 +604,7 @@ function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T
             end
         end
     )
-
-    # Now this map doesn't allocate at all:
     return map(update, submodels, complete_submodels_updates)
-
 end
 
 # If there's no t_next, keep the last one.
@@ -612,6 +613,7 @@ function update_model_t_next(last_t_next, updated_t_next)
 end
 
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
+    is_empty_updates_output(updates_output) && return msd
     return copy_model_state_description_except(
         msd;
         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
@@ -655,8 +657,14 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
 
     # Get the soonest from what the user asked for, what the integrator suggested, and what
-    # the models requested.
-    t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
+    # the models requested. For fixed-step RK4 with logging/monitors disabled, let the solver
+    # consume its own substeps internally so this outer loop advances only at real event
+    # boundaries.
+    t_next = if mh === nothing && isempty(monitors) && Solvers.handles_internal_substepping(solver)
+        min(t_next_from_user, t_next_from_models)
+    else
+        min(t_next_from_user, t_next_suggested, t_next_from_models)
+    end
 
     # Perform the continuous-time update from t_last to t_next.
     # println("Stepping from $(float(t_last)) to $(float(t_next)).")
@@ -684,15 +692,20 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
         return (t_last, msd, stop, t_next_suggested)
     end
 
+    run_discrete_update = (t_next == t_next_from_user) || (t_next == t_next_from_models)
+
+    if run_discrete_update
+
     # Make the discrete draws.
-    msd = draw_wd(t_next, ommd, msd)
+        msd = draw_wd(t_next, ommd, msd)
 
     # Perform the discrete update from t_next^- to t_next^+.
-    updates = updates_fcn(t_next, model(msd))
-    msd = update(msd, updates)
+        updates = updates_fcn(t_next, model(msd))
+        msd = update(msd, updates)
 
     # Log the updated values.
-    log_discrete_stuff!(t_next, mh, updates)
+        log_discrete_stuff!(t_next, mh, updates)
+    end
 
     # Update the monitors.
     for m in monitors
