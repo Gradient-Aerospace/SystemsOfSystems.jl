@@ -36,7 +36,19 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
     t = collect(ts.time)
     data = collect(ts.data)
 
+    # Discrete time series get scatter plots so that we can see each individual data point
+    # at the appropriate time. (stairs! would work too.)
     plot_fcn = ts.discrete ? scatter! : lines!
+
+    # Combine the path and the title (if the path isn't empty). If the whole result is
+    # empty, that's fine; GLMakie will just ignore it.
+    title = if isempty(ts.path)
+        ts.title
+    elseif isempty(ts.title)
+        ts.path
+    else
+        ts.path * '\n' * ts.title
+    end
 
     # For each axis...
     for (axis_num, (group_label, group_dimension_labels)) in enumerate(ts.groups)
@@ -74,7 +86,7 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
 
         # Get the axis started. If it's on top, add a title for the whole figure.
         a = Axis(f[axis_num, 1];
-            title = axis_num == 1 ? ts.title : "",
+            title = axis_num == 1 ? title : "",
             xlabel = "$(ts.time_dimension.label) ($(ts.time_dimension.units))",
             ylabel,
         )
@@ -199,7 +211,7 @@ plot_ts(
 """
 function SystemsOfSystems.plot_ts(tss::Vector{<:Pair{String, <:TimeSeries}}; skip_units_check = false, figure_kwargs = (;))
     f = Figure(; figure_kwargs...)
-    axes = plot_ts!(f, tss; skip_units_check)
+    axes = SystemsOfSystems.plot_ts!(f, tss; skip_units_check)
     if isempty(axes)
         return nothing
     end
@@ -220,7 +232,7 @@ Example:
 plot_ts([truth_ts, measured_ts])
 ```
 """
-function SystemsOfSystems.plot_ts(tss::Vector, figure_kwargs = (;))
+function SystemsOfSystems.plot_ts(tss::Vector; figure_kwargs = (;))
     f = Figure(; figure_kwargs...)
     all_axes = Axis[]
     for (k, ts) in enumerate(tss)

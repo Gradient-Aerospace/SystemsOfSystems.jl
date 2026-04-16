@@ -306,7 +306,7 @@ end
 # HDF5Log #
 ###########
 
-export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5
+export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
     HDF5LogOptions(; filename)
@@ -319,7 +319,7 @@ Note, however, that this is much slower than BasicLog.
 This structure contains the options for the HDF5Log, consisting only of a filename.
 
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
-use `save_to_hdf5_log` when the simulation is over.
+use `save_log_to_hdf5` when the simulation is over.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
@@ -341,6 +341,10 @@ Saves a log to an HDF5 file in the same format used by the HDF5Log.
 """
 function save_log_to_hdf5(filename, log)
     error("Please import the HDF5 package to use HDF5 log functionality like `save_log_to_hdf5`.")
+end
+
+function save_time_series_to_hdf5(args...; kwargs...)
+    error("Please import the HDF5 package to use HDF5 log functionality like `save_time_series_to_hdf5`.")
 end
 
 end

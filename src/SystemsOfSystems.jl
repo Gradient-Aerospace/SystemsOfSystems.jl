@@ -384,7 +384,7 @@ end
 
 describe(stop::AbstractStopReason) = string(typeof(stop))
 describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
-describe(stop::ReachedEndTime) = "The sim reached the specified end time $(float(stop.t_end))."
+describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
 describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
 describe(stop::EncounteredError) = "The sim experienced an error."
 
