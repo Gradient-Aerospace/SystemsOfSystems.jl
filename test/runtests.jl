@@ -14,13 +14,25 @@ struct OffsetLinearInterpolation
     offset::Float64
 end
 
-function (interpolator::OffsetLinearInterpolation)(ts, k_hi::Int, t)
+function (interpolator::OffsetLinearInterpolation)(ts, t)
+    k_hi = searchsortedfirst(ts.time, t)
+    if k_hi == 1
+        return interpolator.offset + ts.data[1]
+    end
     t_lo = ts.time[k_hi - 1]
     t_hi = ts.time[k_hi]
     y_lo = ts.data[k_hi - 1]
     y_hi = ts.data[k_hi]
     fraction_from_last_to_next = (t - t_lo) / (t_hi - t_lo)
     return interpolator.offset + y_lo + fraction_from_last_to_next * (y_hi - y_lo)
+end
+
+struct ConstantInterpolation
+    value::Float64
+end
+
+function (interpolator::ConstantInterpolation)(ts, t)
+    return interpolator.value
 end
 
 @testset "is_regular_step_triggering" begin
@@ -133,14 +145,28 @@ end
     )
     @test ts_custom.interpolator === offset_interpolator
     @test ts_custom(0.35) ≈ 113.5
-    @test ts_custom(0.3) == 103.0
+    @test ts_custom(0.0) == 110.0
+    @test ts_custom(0.3) == 113.0
 
     ts_custom_slice = ts_custom[1:5]
     @test ts_custom_slice.interpolator === offset_interpolator
 
     ts_custom_resampled = ts_custom(0.0:0.05:0.1)
-    @test ts_custom_resampled.data ≈ [100.0, 110.5, 101.0]
+    @test ts_custom_resampled.data ≈ [110.0, 110.5, 111.0]
     @test ts_custom_resampled.interpolator === offset_interpolator
+
+    constant_interpolator = ConstantInterpolation(42.0)
+    ts_constant = SystemsOfSystems.TimeSeries(;
+        title = "Constant Rotor Speed",
+        time = copy(ts.time),
+        data = copy(ts.data),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega_constant",
+        interpolator = constant_interpolator,
+    )
+    @test ts_constant(-100.0) == 42.0
+    @test ts_constant(100.0) == 42.0
 
     show_text = sprint(show, MIME"text/plain"(), ts)
     @test occursin("interpolator:", show_text)

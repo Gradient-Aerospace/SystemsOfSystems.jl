@@ -26,21 +26,20 @@ Base.convert(::Type{Dimension}, pair::Pair) = Dimension(pair.first, pair.second)
     AbstractTimeSeriesInterpolator
 
 Built-in interpolators subtype this abstract type, but `TimeSeries` only requires the
-`interpolator` field to be callable as `interpolator(ts, k_hi, t)`.
+`interpolator` field to be callable as `interpolator(ts, t)`.
 
-That call is made only for times strictly between stored samples. `k_hi` is the index of
-the first stored time after `t`, so `k_hi - 1` is the last stored time before `t`. Passing
-the full `TimeSeries` and the bracket indices keeps the interface open for future
-interpolators that carry derivative tables, dense-output coefficients, or other per-sample
-state.
+That call is made for every requested time, including exact sample times and endpoints.
+Passing the full `TimeSeries` and the requested time keeps the interface open for future
+interpolators that carry derivative tables, dense-output coefficients, extrapolation
+rules, or other per-sample state.
 """
 abstract type AbstractTimeSeriesInterpolator end
 
 """
     SampleAndHold()
 
-Return the last stored sample before the requested time. This is the default interpolator
-for discrete `TimeSeries` values.
+Return the sample at an exact sample time, or the last stored sample before the requested
+time. This is the default interpolator for discrete `TimeSeries` values.
 """
 struct SampleAndHold <: AbstractTimeSeriesInterpolator end
 
@@ -82,7 +81,7 @@ Fields:
 * `dimensions`: A vector of `Dimension`, one for each dimension of the `data`
 * `path`: The model path leading up to this time series (e.g., "/aircraft/imu")
 * `discrete`: True if this time series is discrete and false if continuous
-* `interpolator`: Callable interpolation policy used for between-sample evaluation
+* `interpolator`: Callable policy used to evaluate the time series at a requested time
 * `groups`: Controls how dimensions are grouped into axes in plots (see below)
 
 The dimension groups should be structured like so:
@@ -222,11 +221,28 @@ function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
     )
 end
 
-# This helper is shared by the interpolation policies that need a normalized position
-# between the bracketing samples. It intentionally checks the bracket even though normal
-# `ts(t)` lookup will only pass a usable pair; direct interpolator calls and future dense
-# output interpolators get a clearer error this way.
+# This helper is shared by interpolation policies that need the usual "first sample at or
+# after t" lookup. Keeping it outside `TimeSeries(t)` means interpolators that do not need
+# this search do not have to pay for it.
+function sample_index_at_or_after(ts::TimeSeries, t)
+    if isempty(ts.time)
+        error("Cannot evaluate an empty TimeSeries.")
+    end
+    t_first = first(ts.time)
+    t_last = last(ts.time)
+    if t < t_first || t > t_last
+        error("Time $t is outside the range [$t_first, $t_last].")
+    end
+    return searchsortedfirst(ts.time, t)
+end
+
+# This helper is shared by interpolation policies that need a normalized position between
+# the bracketing samples. It intentionally checks the bracket so direct interpolator calls
+# and future dense-output interpolators get a clearer error.
 function interpolation_fraction(ts::TimeSeries, k_hi::Int, t)
+    if k_hi == 1
+        error("Cannot interpolate before the first sample at t = $(ts.time[1]).")
+    end
     t_lo = ts.time[k_hi - 1]
     t_hi = ts.time[k_hi]
     if t_hi == t_lo
@@ -235,11 +251,27 @@ function interpolation_fraction(ts::TimeSeries, k_hi::Int, t)
     return (t - t_lo) / (t_hi - t_lo)
 end
 
-function (::SampleAndHold)(ts::TimeSeries, k_hi::Int, t)
+function (::SampleAndHold)(ts::TimeSeries, t)
+    k_hi = sample_index_at_or_after(ts, t)
+    # At exact sample times, report the sample at that time. Between samples, hold the
+    # previous value. Keeping this policy here means custom interpolators get the same
+    # chance to define exact-time behavior for themselves.
+    if t == ts.time[k_hi]
+        return ts.data[k_hi]
+    end
     return ts.data[k_hi - 1]
 end
 
-function (::LinearInterpolation)(ts::TimeSeries, k_hi::Int, t)
+function (::LinearInterpolation)(ts::TimeSeries, t)
+    k_hi = sample_index_at_or_after(ts, t)
+    # The first stored sample has no previous sample to interpolate from. Returning through
+    # the interpolator still keeps the policy in one place.
+    if k_hi == 1
+        return ts.data[1]
+    end
+    if t == ts.time[k_hi]
+        return ts.data[k_hi]
+    end
     y_lo = ts.data[k_hi - 1]
     y_hi = ts.data[k_hi]
     fraction_from_last_to_next = interpolation_fraction(ts, k_hi, t)
@@ -251,39 +283,11 @@ end
 
 Evaluate a `TimeSeries` at time `t`.
 
-Exact-time access always returns the stored sample. Between-sample access delegates to
-`ts.interpolator`, which defaults to sample-and-hold for discrete series and linear
-interpolation for ordinary continuous series.
+In-range access always delegates to `ts.interpolator`, which defaults to sample-and-hold
+for discrete series and linear interpolation for ordinary continuous series.
 """
 function (ts::TimeSeries)(t)
-
-    if isempty(ts.time)
-        error("Cannot evaluate an empty TimeSeries.")
-    end
-    t_first = first(ts.time)
-    t_last = last(ts.time)
-    if t < t_first || t > t_last
-        error("Time $t is outside the range [$t_first, $t_last].")
-    end
-
-    # Find the index of the first sample at or after t.
-    k_hi = searchsortedfirst(ts.time, t)
-
-    # Keep endpoint behavior explicit.
-    if k_hi == 1
-        return ts.data[1]
-    end
-    if k_hi > length(ts.time)
-        return ts.data[end]
-    end
-
-    t_hi = ts.time[k_hi]
-    if t == t_hi
-        return ts.data[k_hi]
-    end
-
-    return ts.interpolator(ts, k_hi, t)
-
+    return ts.interpolator(ts, t)
 end
 
 """
