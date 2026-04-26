@@ -9,6 +9,8 @@ export is_regular_step_triggering
 
 # Utilities
 export BranchingSeed, branch
+export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
+    SampleAndHold, LinearInterpolation
 
 using Random: Xoshiro, AbstractRNG
 import Random

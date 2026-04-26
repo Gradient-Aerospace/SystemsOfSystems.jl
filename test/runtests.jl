@@ -9,6 +9,20 @@ mkpath(joinpath(@__DIR__, out_dir))
 
 include("control_system_demo.jl")
 
+# We implement a custom interpolation type just to test that we can.
+struct OffsetLinearInterpolation
+    offset::Float64
+end
+
+function (interpolator::OffsetLinearInterpolation)(ts, k_hi::Int, t)
+    t_lo = ts.time[k_hi - 1]
+    t_hi = ts.time[k_hi]
+    y_lo = ts.data[k_hi - 1]
+    y_hi = ts.data[k_hi]
+    fraction_from_last_to_next = (t - t_lo) / (t_hi - t_lo)
+    return interpolator.offset + y_lo + fraction_from_last_to_next * (y_hi - y_lo)
+end
+
 @testset "is_regular_step_triggering" begin
     @test is_regular_step_triggering(10.1, 0.05) == true
     @test is_regular_step_triggering(10.1, 0.20) == false
@@ -30,6 +44,7 @@ end
         discrete = false,
     )
 
+    @test ts.interpolator isa SystemsOfSystems.LinearInterpolation
     @test ts[1] == (ts.time[1] => ts.data[1])
 
     ts_first_10 = ts[1:10]
@@ -41,6 +56,7 @@ end
     @test ts_first_10.dimensions == ts.dimensions
     @test ts_first_10.path == ts.path
     @test ts_first_10.discrete == ts.discrete
+    @test ts_first_10.interpolator isa SystemsOfSystems.LinearInterpolation
 
     ts_all = ts[:]
     @test ts_all isa SystemsOfSystems.TimeSeries
@@ -56,6 +72,7 @@ end
     @test ts_resampled.time == collect(0.0:0.05:0.2)
     @test ts_resampled.data ≈ [100.0, 100.5, 101.0, 101.5, 102.0]
     @test ts_resampled.discrete == false
+    @test ts_resampled.interpolator isa SystemsOfSystems.LinearInterpolation
 
     ts_discrete = SystemsOfSystems.TimeSeries(;
         title = "Commanded Speed",
@@ -67,6 +84,7 @@ end
         discrete = true,
         groups = ts.groups,
     )
+    @test ts_discrete.interpolator isa SystemsOfSystems.SampleAndHold
     @test ts_discrete(0.35) == 103.0
     @test ts_discrete(0.4) == 104.0
 
@@ -75,6 +93,57 @@ end
     @test ts_discrete_resampled.time == collect(0.0:0.05:0.2)
     @test ts_discrete_resampled.data == [100.0, 100.0, 101.0, 101.0, 102.0]
     @test ts_discrete_resampled.discrete == true
+    @test ts_discrete_resampled.interpolator isa SystemsOfSystems.SampleAndHold
+
+    ts_hold = SystemsOfSystems.TimeSeries(;
+        title = "Held Rotor Speed",
+        time = copy(ts.time),
+        data = copy(ts.data),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega_held",
+        discrete = false, # Sample-and-hold is the default for discrete, so we're intentionally _not_ allowing it to use the default.
+        interpolator = SystemsOfSystems.SampleAndHold,
+    )
+    @test ts_hold.interpolator isa SystemsOfSystems.SampleAndHold
+    @test ts_hold(0.35) == 103.0 # (as opposed to 103.5 for linear)
+
+    ts_discrete_linear = SystemsOfSystems.TimeSeries(;
+        title = "Linearly Interpolated Commanded Speed",
+        time = copy(ts.time),
+        data = copy(ts.data),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega_cmd_linear",
+        discrete = true, # Again, we're explicitly changing from the default behavior.
+        interpolator = SystemsOfSystems.LinearInterpolation(),
+    )
+    @test ts_discrete_linear.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test ts_discrete_linear(0.35) ≈ 103.5
+
+    offset_interpolator = OffsetLinearInterpolation(10.0)
+    ts_custom = SystemsOfSystems.TimeSeries(;
+        title = "Offset Rotor Speed",
+        time = copy(ts.time),
+        data = copy(ts.data),
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega_offset",
+        interpolator = offset_interpolator,
+    )
+    @test ts_custom.interpolator === offset_interpolator
+    @test ts_custom(0.35) ≈ 113.5
+    @test ts_custom(0.3) == 103.0
+
+    ts_custom_slice = ts_custom[1:5]
+    @test ts_custom_slice.interpolator === offset_interpolator
+
+    ts_custom_resampled = ts_custom(0.0:0.05:0.1)
+    @test ts_custom_resampled.data ≈ [100.0, 110.5, 101.0]
+    @test ts_custom_resampled.interpolator === offset_interpolator
+
+    show_text = sprint(show, MIME"text/plain"(), ts)
+    @test occursin("interpolator:", show_text)
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
@@ -149,6 +218,7 @@ end
         @test x_slice isa SystemsOfSystems.TimeSeries
         @test collect(x_slice.time) == [x_ts.time[k] for k in idxs]
         @test collect(x_slice.data) == [x_ts.data[k] for k in idxs]
+        @test x_slice.interpolator isa SystemsOfSystems.LinearInterpolation
 
         # Exact-time access returns the exact stored sample.
         @test x_ts(x_ts.time[1]) == x_ts.data[1]
