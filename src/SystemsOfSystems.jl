@@ -163,6 +163,7 @@ VariableDescription(
     SA[1., 2., 3];
     title = "Position",
     dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+    interpolator = LinearInterpolation(),
 )
 ```
 
@@ -181,17 +182,24 @@ A variable's dimensions can also be grouped together. This only affects plots. G
 dimensions will be plotted in a singnle axis, rather than each dimension getting its own
 axis. This can help make plots more compact, and it can be clearer to have multiple lines
 sharing a single axis in some cases. By default, each dimension will get its own group.
+
+A variable can also specify the interpolation policy that will be passed through to its
+`TimeSeries`. When omitted, the `TimeSeries` chooses its normal default based on whether
+the signal is continuous or discrete.
 """
 struct VariableDescription{T}
     value::Union{Missing, T}
     title::String
     dimensions::Vector{Dimension}
     groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+    interpolator::Any
     # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
 end
 VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
-function VariableDescription{T}(value; title, dimensions, groups = missing) where {T}
-    return VariableDescription{T}(value, title, Dimension[dimensions...], groups)
+function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
+    return VariableDescription{T}(
+        value, title, Dimension[dimensions...], groups, interpolator,
+    )
 end
 
 """

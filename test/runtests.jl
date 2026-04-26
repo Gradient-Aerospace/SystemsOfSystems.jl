@@ -176,6 +176,51 @@ end
 
 end
 
+@testset "VariableDescription interpolation" begin
+
+    offset_interpolator = OffsetLinearInterpolation(5.0)
+    described_state = SystemsOfSystems.VariableDescription(
+        0.0;
+        title = "Described State",
+        dimensions = [SystemsOfSystems.Dimension("state", ""),],
+        interpolator = offset_interpolator,
+    )
+    default_described_state = SystemsOfSystems.VariableDescription(
+        0.0;
+        title = "Default Described State",
+        dimensions = [SystemsOfSystems.Dimension("state", ""),],
+    )
+
+    @test described_state.interpolator === offset_interpolator
+    @test ismissing(default_described_state.interpolator)
+
+    model_description = SystemsOfSystems.ModelDescription(;
+        continuous_states = (;
+            x = described_state,
+            y = default_described_state,
+        ),
+    )
+
+    basic_log, basic_history = Logs.create_log(
+        Logs.BasicLogOptions(),
+        model_description,
+        SystemsOfSystems.Dimension("time", "s"),
+    )
+    @test basic_history.continuous_states.x.interpolator === offset_interpolator
+    @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    Logs.close_log(basic_log)
+
+    hdf5_log, hdf5_history = Logs.create_log(
+        Logs.HDF5LogOptions("$out_dir/variable_description_interpolator.h5"),
+        model_description,
+        SystemsOfSystems.Dimension("time", "s"),
+    )
+    @test hdf5_history.continuous_states.x.interpolator === offset_interpolator
+    @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    Logs.close_log(hdf5_log)
+
+end
+
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 
