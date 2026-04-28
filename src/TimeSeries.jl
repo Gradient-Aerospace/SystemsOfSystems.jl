@@ -4,7 +4,9 @@ the name of a type it exports.
 """
 module TimeSeriesStuff
 
-export Dimension, TimeSeries, plot_ts, plot_ts!
+export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
+    SampleAndHold, LinearInterpolation,
+    plot_ts, plot_ts!
 
 using Dimensions: numdims_for_type
 
@@ -21,6 +23,51 @@ Dimension(; label = "", units = "") = Dimension(label, units)
 Base.convert(::Type{Dimension}, pair::Pair) = Dimension(pair.first, pair.second)
 
 """
+    AbstractTimeSeriesInterpolator
+
+Built-in interpolators subtype this abstract type, but `TimeSeries` only requires the
+`interpolator` field to be callable as `interpolator(ts, t)`.
+
+That call is made for every requested time, including exact sample times and endpoints.
+Passing the full `TimeSeries` and the requested time keeps the interface open for future
+interpolators that carry derivative tables, dense-output coefficients, extrapolation
+rules, or other per-sample state.
+"""
+abstract type AbstractTimeSeriesInterpolator end
+
+"""
+    SampleAndHold()
+
+Return the sample at an exact sample time, or the last stored sample before the requested
+time. This is the default interpolator for discrete `TimeSeries` values.
+"""
+struct SampleAndHold <: AbstractTimeSeriesInterpolator end
+
+"""
+    LinearInterpolation()
+
+Linearly interpolate between the samples on either side of the requested time. This is the
+default interpolator for continuous `TimeSeries` values.
+"""
+struct LinearInterpolation <: AbstractTimeSeriesInterpolator end
+
+# Users often think in terms of "the LinearInterpolation interpolator", so accepting either
+# `LinearInterpolation` or `LinearInterpolation()` keeps the constructor ergonomic. Custom
+# callable objects with fields should be passed as instances.
+normalize_interpolator(interpolator::Type) = interpolator()
+normalize_interpolator(interpolator) = interpolator
+
+# Keep discrete behavior dominant. If the user wants a discrete series to interpolate
+# differently, they can still pass an explicit interpolator.
+default_interpolator(_el_type, discrete::Bool) = discrete ? SampleAndHold() : LinearInterpolation()
+
+# Mirror the logger's "ignore missing samples" policy for interpolation defaults. If a
+# caller stores `Union{Missing, T}` data but the actual samples are present, choose the
+# interpolator for `T`.
+interpolation_value_type(::Type{Union{Missing, T}}) where {T} = T
+interpolation_value_type(::Type{T}) where {T} = T
+
+"""
     TimeSeries
 
 This type stores a series of points over time.
@@ -34,6 +81,7 @@ Fields:
 * `dimensions`: A vector of `Dimension`, one for each dimension of the `data`
 * `path`: The model path leading up to this time series (e.g., "/aircraft/imu")
 * `discrete`: True if this time series is discrete and false if continuous
+* `interpolator`: Callable policy used to evaluate the time series at a requested time
 * `groups`: Controls how dimensions are grouped into axes in plots (see below)
 
 The dimension groups should be structured like so:
@@ -53,7 +101,7 @@ That is, `groups` is a Vector of Pairs, where each Pair is the name of an axis a
 of dimension labels that map to that axis. When plotted with `plot_ts`, this example will
 result in a figure with two axes, each of which as two lines.
 """
-struct TimeSeries{TVT, DVT}
+struct TimeSeries{TVT, DVT, IT}
     title::String
     time::TVT
     data::DVT
@@ -61,6 +109,7 @@ struct TimeSeries{TVT, DVT}
     dimensions::Vector{Dimension}
     path::String # TODO: Consider "ID" instead of path.
     discrete::Bool
+    interpolator::IT
     groups::Vector{Pair{String, Vector{String}}}
 end
 
@@ -90,6 +139,7 @@ function TimeSeries(;
     dimensions = missing,
     path::String,
     discrete::Bool = false,
+    interpolator = missing,
     groups = missing,
 )
 
@@ -105,6 +155,13 @@ function TimeSeries(;
 
     if ismissing(groups)
         groups = make_default_groups(dimensions)
+    end
+
+    if ismissing(interpolator)
+        el_type = interpolation_value_type(eltype(data))
+        interpolator = default_interpolator(el_type, discrete)
+    else
+        interpolator = normalize_interpolator(interpolator)
     end
 
     # Make sure all dimension labels are unique.
@@ -130,8 +187,8 @@ function TimeSeries(;
 
     end
 
-    return TimeSeries{typeof(time), typeof(data)}(
-        title, time, data, time_dimension, dimensions, path, discrete, groups,
+    return TimeSeries{typeof(time), typeof(data), typeof(interpolator)}(
+        title, time, data, time_dimension, dimensions, path, discrete, interpolator, groups,
     )
 
 end
@@ -159,20 +216,15 @@ function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
         dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
+        ts.interpolator,
         ts.groups,
     )
 end
 
-"""
-    ts(t)
-
-Evaluate a `TimeSeries` at time `t`.
-
-For continuous series (`discrete == false`), this uses linear interpolation.
-For discrete series (`discrete == true`), this uses zero-order hold.
-"""
-function (ts::TimeSeries)(t)
-
+# This helper is shared by interpolation policies that need the usual "first sample at or
+# after t" lookup. Keeping it outside `TimeSeries(t)` means interpolators that do not need
+# this search do not have to pay for it.
+function sample_index_at_or_after(ts::TimeSeries, t)
     if isempty(ts.time)
         error("Cannot evaluate an empty TimeSeries.")
     end
@@ -181,38 +233,61 @@ function (ts::TimeSeries)(t)
     if t < t_first || t > t_last
         error("Time $t is outside the range [$t_first, $t_last].")
     end
+    return searchsortedfirst(ts.time, t)
+end
 
-    # Find the index of the first sample at or after t.
-    k_hi = searchsortedfirst(ts.time, t)
+# This helper is shared by interpolation policies that need a normalized position between
+# the bracketing samples. It intentionally checks the bracket so direct interpolator calls
+# and future dense-output interpolators get a clearer error.
+function interpolation_fraction(ts::TimeSeries, k_hi::Int, t)
+    if k_hi == 1
+        error("Cannot interpolate before the first sample at t = $(ts.time[1]).")
+    end
+    t_lo = ts.time[k_hi - 1]
+    t_hi = ts.time[k_hi]
+    if t_hi == t_lo
+        error("Cannot interpolate when consecutive time points are identical at t = $t_lo.")
+    end
+    return (t - t_lo) / (t_hi - t_lo)
+end
 
-    # Keep endpoint behavior explicit.
+function (::SampleAndHold)(ts::TimeSeries, t)
+    k_hi = sample_index_at_or_after(ts, t)
+    # At exact sample times, report the sample at that time. Between samples, hold the
+    # previous value. Keeping this policy here means custom interpolators get the same
+    # chance to define exact-time behavior for themselves.
+    if t == ts.time[k_hi]
+        return ts.data[k_hi]
+    end
+    return ts.data[k_hi - 1]
+end
+
+function (::LinearInterpolation)(ts::TimeSeries, t)
+    k_hi = sample_index_at_or_after(ts, t)
+    # The first stored sample has no previous sample to interpolate from. Returning through
+    # the interpolator still keeps the policy in one place.
     if k_hi == 1
         return ts.data[1]
     end
-    if k_hi > length(ts.time)
-        return ts.data[end]
-    end
-
-    t_hi = ts.time[k_hi]
-    if t == t_hi
+    if t == ts.time[k_hi]
         return ts.data[k_hi]
-    end
-
-    # Discrete time series are interpreted as zero-order hold.
-    if ts.discrete
-        return ts.data[k_hi - 1]
-    end
-
-    # Continuous time series use linear interpolation.
-    t_lo = ts.time[k_hi - 1]
-    if t_hi == t_lo
-        error("Cannot linearly interpolate when consecutive time points are identical at t = $t_lo.")
     end
     y_lo = ts.data[k_hi - 1]
     y_hi = ts.data[k_hi]
-    α = (t - t_lo) / (t_hi - t_lo)
-    return y_lo + α * (y_hi - y_lo)
+    fraction_from_last_to_next = interpolation_fraction(ts, k_hi, t)
+    return y_lo + fraction_from_last_to_next * (y_hi - y_lo)
+end
 
+"""
+    ts(t)
+
+Evaluate a `TimeSeries` at time `t`.
+
+In-range access always delegates to `ts.interpolator`, which defaults to sample-and-hold
+for discrete series and linear interpolation for ordinary continuous series.
+"""
+function (ts::TimeSeries)(t)
+    return ts.interpolator(ts, t)
 end
 
 """
@@ -231,6 +306,7 @@ function (ts::TimeSeries)(times::AbstractVector)
         dimensions = copy(ts.dimensions),
         ts.path,
         ts.discrete,
+        ts.interpolator,
         ts.groups,
     )
 end
@@ -271,6 +347,7 @@ function Base.show(io::IO, ::MIME"text/plain", ts::TimeSeries)
     end
     println(io, "  path: $(ts.path)")
     println(io, "  discrete: $(ts.discrete)")
+    println(io, "  interpolator: $(typeof(ts.interpolator))")
     if isempty(ts.groups)
         println(io, "  groups: (none)")
     else

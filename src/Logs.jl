@@ -250,6 +250,7 @@ function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::Vari
         var.dimensions,
         path = join("/" * el for el in breadcrumbs),
         discrete,
+        var.interpolator,
         var.groups,
     )
 end
