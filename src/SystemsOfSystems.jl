@@ -541,15 +541,15 @@ function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDes
 end
 
 # We haven't pulled out allocations here since this only happens once, but we could.
-function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
+function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
     return ModelStateDescription{T}(;
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        continuous_random_variables = map(crvf -> crvf(ommd.rng, t, t + 1.), ommd.continuous_random_variables), # TODO: t_next is a dummy. Can we get a reasonable value? Do we need to?
+        continuous_random_variables = map(crvf -> crvf(ommd.rng, float(t), t + 1.), ommd.continuous_random_variables),
         discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple(
-            mn => draw_wd(t, ommd.models[mn])
+            mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
         ),
         ommd.t_next,
@@ -798,7 +798,7 @@ function _initialize(model_description::ModelDescription, seed = 0, t_start = 0/
     ommd = strip_fluff_from_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
-    msd = draw_wd(t_start, ommd)
+    msd = create_model_state(t_start, ommd)
 
     return model(msd)
 
@@ -820,7 +820,7 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
     ommd = strip_fluff_from_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
-    msd = draw_wd(t_start, ommd)
+    msd = create_model_state(t_start, ommd)
 
     # From the model state description, we can build the model itself (the single structure
     # that has fields for all of the variables that were described in the original model
@@ -853,7 +853,7 @@ function initialize(
     t_start = 0//1,
 )
     ommd = strip_fluff_from_model_description(model_description, seed)
-    msd = draw_wd(t_start, ommd)
+    msd = create_model_state(t_start, ommd)
     return model(msd)
 end
 
