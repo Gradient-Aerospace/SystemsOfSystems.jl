@@ -774,8 +774,7 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
             )
         end
     catch err
-        trace = stacktrace(catch_backtrace())
-        showerror(stderr, err, trace)
+        @error "The simulation encounted an error." exception = (err, catch_backtrace())
         stop = EncounteredError(float(t_completed), err, trace)
     end
     return (t_completed, msd, stop)
