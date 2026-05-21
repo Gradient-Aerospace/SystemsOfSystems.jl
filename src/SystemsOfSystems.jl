@@ -263,7 +263,7 @@ Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs)
 strip_fluff_from_variable(var) = var
 strip_fluff_from_variable(var::VariableDescription) = var.value
 
-function strip_fluff_from_model_description(desc::ModelDescription, seed::BranchingSeed)
+function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -274,7 +274,7 @@ function strip_fluff_from_model_description(desc::ModelDescription, seed::Branch
         continuous_random_variables = map(strip_fluff_from_variable, desc.continuous_random_variables),
         discrete_random_variables = map(strip_fluff_from_variable, desc.discrete_random_variables),
         models = NamedTuple(
-            field => strip_fluff_from_model_description(
+            field => create_typed_model_description(
                 desc.models[field], branch(seed, string(field)),
             )
             for field in fieldnames(typeof(desc.models))
@@ -306,6 +306,52 @@ is_regular_step_triggering(10.1, 0.20, 0.1) # true
 """
 function is_regular_step_triggering(t, step, offset = 0//1)
     return iszero(step) || (mod(rationalize(t - offset), rationalize(step)) == 0//1)
+end
+
+"""
+    ContinuousWhiteNoise{T}(; sigma::T)
+
+A type that can be used like a function to draw random numbers for a continuous-time process
+with the given standard deviation, `sigma::T`. This works for any type that defines
+`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+
+An example:
+
+```
+rng = Xoshiro(1)
+process = ContinuousWhiteNoise(SA[1., 2.])
+process(rng, t_last, t_next) # Yields appropriate random draws.
+```
+"""
+@kwdef struct ContinuousWhiteNoise{T}
+    sigma::T
+end
+export ContinuousWhiteNoise
+function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
+    return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
+end
+
+"""
+    DiscreteWhiteNoise{T}(; sigma::T)
+
+A type that can be used like a function to draw random numbers for a discrete-time process
+with the given standard deviation, `sigma::T`. This works for any type that defines
+`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+
+An example:
+
+```
+rng = Xoshiro(1)
+process = DiscreteWhiteNoise(SA[1., 2.])
+process(rng, t) # Yields appropriate random draws.
+```
+"""
+@kwdef struct DiscreteWhiteNoise{T}
+    sigma::T
+end
+export DiscreteWhiteNoise
+function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
+    return nu.sigma .* randn(rng, T)
 end
 
 #########################
@@ -342,6 +388,7 @@ function model(desc::ModelStateDescription{Nothing})
     return (;
         desc.constants...,
         desc.continuous_states...,
+        desc.continuous_random_variables...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
@@ -353,6 +400,7 @@ function model(desc::ModelStateDescription{T}) where {T}
     return T(;
         desc.constants...,
         desc.continuous_states...,
+        desc.continuous_random_variables...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
@@ -493,15 +541,15 @@ function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDes
 end
 
 # We haven't pulled out allocations here since this only happens once, but we could.
-function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
+function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
     return ModelStateDescription{T}(;
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        ommd.continuous_random_variables,
+        continuous_random_variables = map(crvf -> crvf(ommd.rng, float(t), t + 1.), ommd.continuous_random_variables),
         discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple(
-            mn => draw_wd(t, ommd.models[mn])
+            mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
         ),
         ommd.t_next,
@@ -726,9 +774,9 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
             )
         end
     catch err
-        trace = stacktrace(catch_backtrace())
-        showerror(stderr, err, trace)
-        stop = EncounteredError(float(t_completed), err, trace)
+        trace = catch_backtrace()
+        @error "The simulation encounted an error." exception = (err, trace)
+        stop = EncounteredError(float(t_completed), err, stacktrace(trace))
     end
     return (t_completed, msd, stop)
 end
@@ -747,10 +795,10 @@ function _initialize(model_description::ModelDescription, seed = 0, t_start = 0/
     # We'll always keep this original description around for its random-variable functions.
     #
     # This is what creates the TypedModelDescription for us.
-    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+    ommd = create_typed_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
-    msd = draw_wd(t_start, ommd)
+    msd = create_model_state(t_start, ommd)
 
     return model(msd)
 
@@ -769,10 +817,10 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
     # We'll always keep this original description around for its random-variable functions.
     #
     # This is what creates the TypedModelDescription for us.
-    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+    ommd = create_typed_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
-    msd = draw_wd(t_start, ommd)
+    msd = create_model_state(t_start, ommd)
 
     # From the model state description, we can build the model itself (the single structure
     # that has fields for all of the variables that were described in the original model
@@ -804,8 +852,8 @@ function initialize(
     seed::BranchingSeed = BranchingSeed(0, ""),
     t_start = 0//1,
 )
-    ommd = strip_fluff_from_model_description(model_description, seed)
-    msd = draw_wd(t_start, ommd)
+    ommd = create_typed_model_description(model_description, seed)
+    msd = create_model_state(t_start, ommd)
     return model(msd)
 end
 

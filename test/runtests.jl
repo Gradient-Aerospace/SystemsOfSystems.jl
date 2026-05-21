@@ -7,6 +7,8 @@ using SystemsOfSystems: Solvers, Logs, Monitors
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
 
+include("continuous_random_variables.jl")
+
 include("control_system_demo.jl")
 
 # We implement a custom interpolation type just to test that we can.

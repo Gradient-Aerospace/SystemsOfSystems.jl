@@ -156,11 +156,14 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
     t_next_f = float(t_next)
 
     # Make the draws for the continuous-time function.
-    msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
+    if t_last == t_next
+        msd_km1_with_draws = msd_km1 # Just hold the last draws.
+    else
+        msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
+    end
 
     # The first derivative is different because it's an output. The rest are ephemeral.
-    msd1 = msd_km1_with_draws
-    k1 = rates_fcn(t_last_f, model(msd1))
+    k1 = rates_fcn(t_last_f, model(msd_km1_with_draws))
 
     # If there's no actual work to do here, skip the calculations.
     if t_last == t_next
@@ -170,11 +173,11 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
     else
 
         dt    = t_next_f - t_last_f
-        msd2  = propagate(msd1, dt/2, k1)
+        msd2  = propagate(msd_km1_with_draws, dt/2, k1)
         k2    = rates_fcn(t_last_f + dt/2, model(msd2))
-        msd3  = propagate(msd1, dt/2, k2)
+        msd3  = propagate(msd_km1_with_draws, dt/2, k2)
         k3    = rates_fcn(t_last_f + dt/2, model(msd3))
-        msd4  = propagate(msd1, dt, k3)
+        msd4  = propagate(msd_km1_with_draws, dt, k3)
         k4    = rates_fcn(t_last_f + dt, model(msd4))
 
         # This seems more efficient:
@@ -299,7 +302,11 @@ function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn
         dt = t_next_f - t_last_f
 
         # Make the draws for the continuous-time function.
-        msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
+        if t_last == t_next
+            msd_km1_with_draws = msd_km1 # Just hold the last draws.
+        else
+            msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
+        end
 
         # We do the first step whether we're stopping on this sample or not.
         msd1 = msd_km1_with_draws

@@ -2,7 +2,7 @@ using Random: Xoshiro, randn, rand
 using HDF5: h5open, Group
 import Dimensions
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, branch, TimeSeries
+    is_regular_step_triggering, branch, TimeSeries, DiscreteWhiteNoise
 
 #########
 # Plant #
@@ -130,7 +130,7 @@ function init(t, specs::SensorSpecs, seed)
         ),
         discrete_random_variables = (;
             noise = VariableDescription(
-                (rng, t) -> specs.sigma_noise * randn(rng); # This builds a closure around whatever it needs.
+                DiscreteWhiteNoise(specs.sigma_noise);
                 title = "Measurement White Noise",
                 dimensions = ["noise" => "m",],
             ),
