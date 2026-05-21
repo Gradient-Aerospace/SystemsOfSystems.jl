@@ -163,7 +163,7 @@ function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_
     end
 
     # The first derivative is different because it's an output. The rest are ephemeral.
-    k1 = rates_fcn(t_last_f, mosdel(msd_km1_with_draws))
+    k1 = rates_fcn(t_last_f, model(msd_km1_with_draws))
 
     # If there's no actual work to do here, skip the calculations.
     if t_last == t_next
