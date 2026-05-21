@@ -308,6 +308,29 @@ function is_regular_step_triggering(t, step, offset = 0//1)
     return iszero(step) || (mod(rationalize(t - offset), rationalize(step)) == 0//1)
 end
 
+"""
+    ContinuousWhiteNoise{N}(; sigma::SVector{N, Float64})
+
+A type that can be used like a function to draw random numbers for a continuous-time process
+with the given standard deviation, `sigma::T`. This works for any type that defines
+`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+
+An example:
+
+```
+rng = Xoshiro(1)
+process = ContinuousWhiteNoise(SA[1., 2.])
+process(rng, t_last, t_next)
+```
+"""
+@kwdef struct ContinuousWhiteNoise{T}
+    sigma::T
+end
+export ContinuousWhiteNoise
+function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
+    return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
+end
+
 #########################
 # ModelStateDescription #
 #########################
@@ -342,6 +365,7 @@ function model(desc::ModelStateDescription{Nothing})
     return (;
         desc.constants...,
         desc.continuous_states...,
+        desc.continuous_random_variables...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
@@ -353,6 +377,7 @@ function model(desc::ModelStateDescription{T}) where {T}
     return T(;
         desc.constants...,
         desc.continuous_states...,
+        desc.continuous_random_variables...,
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
@@ -498,7 +523,7 @@ function draw_wd(t, ommd::TypedModelDescription{T}) where {T}
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        ommd.continuous_random_variables,
+        continuous_random_variables = map(crvf -> crvf(ommd.rng, t, t + 1.), ommd.continuous_random_variables), # TODO: t_next is a dummy. Can we get a reasonable value? Do we need to?
         discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
         models = NamedTuple(
             mn => draw_wd(t, ommd.models[mn])
