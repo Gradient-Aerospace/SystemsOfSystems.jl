@@ -263,7 +263,7 @@ Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs)
 strip_fluff_from_variable(var) = var
 strip_fluff_from_variable(var::VariableDescription) = var.value
 
-function strip_fluff_from_model_description(desc::ModelDescription, seed::BranchingSeed)
+function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -274,7 +274,7 @@ function strip_fluff_from_model_description(desc::ModelDescription, seed::Branch
         continuous_random_variables = map(strip_fluff_from_variable, desc.continuous_random_variables),
         discrete_random_variables = map(strip_fluff_from_variable, desc.discrete_random_variables),
         models = NamedTuple(
-            field => strip_fluff_from_model_description(
+            field => create_typed_model_description(
                 desc.models[field], branch(seed, string(field)),
             )
             for field in fieldnames(typeof(desc.models))
@@ -795,7 +795,7 @@ function _initialize(model_description::ModelDescription, seed = 0, t_start = 0/
     # We'll always keep this original description around for its random-variable functions.
     #
     # This is what creates the TypedModelDescription for us.
-    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+    ommd = create_typed_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
     msd = create_model_state(t_start, ommd)
@@ -817,7 +817,7 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
     # We'll always keep this original description around for its random-variable functions.
     #
     # This is what creates the TypedModelDescription for us.
-    ommd = strip_fluff_from_model_description(model_description, branching_seed)
+    ommd = create_typed_model_description(model_description, branching_seed)
 
     # We can now fill in the draws to have a "model state description".
     msd = create_model_state(t_start, ommd)
@@ -852,7 +852,7 @@ function initialize(
     seed::BranchingSeed = BranchingSeed(0, ""),
     t_start = 0//1,
 )
-    ommd = strip_fluff_from_model_description(model_description, seed)
+    ommd = create_typed_model_description(model_description, seed)
     msd = create_model_state(t_start, ommd)
     return model(msd)
 end
