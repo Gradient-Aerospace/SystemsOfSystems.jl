@@ -309,7 +309,7 @@ function is_regular_step_triggering(t, step, offset = 0//1)
 end
 
 """
-    ContinuousWhiteNoise{N}(; sigma::SVector{N, Float64})
+    ContinuousWhiteNoise{T}(; sigma::T)
 
 A type that can be used like a function to draw random numbers for a continuous-time process
 with the given standard deviation, `sigma::T`. This works for any type that defines
@@ -320,7 +320,7 @@ An example:
 ```
 rng = Xoshiro(1)
 process = ContinuousWhiteNoise(SA[1., 2.])
-process(rng, t_last, t_next)
+process(rng, t_last, t_next) # Yields appropriate random draws.
 ```
 """
 @kwdef struct ContinuousWhiteNoise{T}
@@ -329,6 +329,29 @@ end
 export ContinuousWhiteNoise
 function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
     return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
+end
+
+"""
+    DiscreteWhiteNoise{T}(; sigma::T)
+
+A type that can be used like a function to draw random numbers for a discrete-time process
+with the given standard deviation, `sigma::T`. This works for any type that defines
+`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+
+An example:
+
+```
+rng = Xoshiro(1)
+process = DiscreteWhiteNoise(SA[1., 2.])
+process(rng, t) # Yields appropriate random draws.
+```
+"""
+@kwdef struct DiscreteWhiteNoise{T}
+    sigma::T
+end
+export DiscreteWhiteNoise
+function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
+    return nu.sigma .* randn(rng, T)
 end
 
 #########################
