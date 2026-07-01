@@ -203,6 +203,8 @@ function VariableDescription{T}(value; title, dimensions, groups = missing, inte
 end
 
 """
+    BranchingSeed
+
 This type is useful for making a tree of random number generators that trace back to a
 single random number generator. Here's an example of creating a `BranchingSeed` and creating
 a random number generator from it:
@@ -257,6 +259,15 @@ function branch(seed::BranchingSeed, name::AbstractString)
     return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
 end
 
+"""
+    seed::BranchingSeed / name::AbstractString
+
+This is syntactic sugar for `branch(seed, name)`.
+"""
+function Base.:/(seed::BranchingSeed, name::AbstractString)
+    return branch(seed, name)
+end
+
 "Creates a Xoshiro RNG from the given BranchingSeed."
 Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
 
@@ -264,6 +275,7 @@ strip_fluff_from_variable(var) = var
 strip_fluff_from_variable(var::VariableDescription) = var.value
 
 function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
+    rng = isnothing(desc.rng) ? Xoshiro(seed) : deepcopy(desc.rng)
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -280,7 +292,7 @@ function create_typed_model_description(desc::ModelDescription, seed::BranchingS
             for field in fieldnames(typeof(desc.models))
         ),
         t_next = desc.t_next,
-        rng = isnothing(desc.rng) ? Xoshiro(seed) : desc.rng,
+        rng,
     )
 end
 

@@ -8,8 +8,6 @@ using ProgressMeter: Progress, update!, finish!
 abstract type AbstractMonitorOptions end
 abstract type AbstractMonitor end
 
-using ..SystemsOfSystems: AbstractStopReason
-
 ###############
 # ProgressBar #
 ###############

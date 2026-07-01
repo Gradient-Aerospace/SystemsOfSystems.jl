@@ -3,6 +3,7 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Solvers, Logs, Monitors
 # using GLMakie # For plots
+using Random: Xoshiro
 
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
@@ -533,6 +534,76 @@ end
     # Make sure the first several steps are precisely what we specified.
     @test t[1:4] == t_specified[1:4]
     @test t[end] == t_specified[end]
+
+end
+
+# Test that random draws taken during `initialize` match the draws from `simulate`. Note
+# that this only works if the models record their RNGs in their ModelDescriptions.
+@testset "initialize" begin
+
+    function this_init_fcn(t, _, seed)
+
+        # Let the submodel initialize with a derived seed.
+        submodel_init = ModelDescription(;
+            continuous_outputs = (;
+                z = 0.,
+            ),
+            discrete_random_variables = (;
+                z_draw = (rng, t) -> randn(rng),
+            ),
+            rng = Xoshiro(seed / "submodel"),
+        )
+
+        # Use that initialization. Does this make it take a draw?
+        submodel = initialize(submodel_init)
+
+        return ModelDescription(;
+            continuous_outputs = (;
+                x = 0., # We'll record the discrete draws as continuous outputs so that we
+                y = 0., # have the values for them on the first sample.
+            ),
+            discrete_states = (;
+                z = submodel.z_draw, # Store the submodel's initial draw so we can test it.
+            ),
+            discrete_random_variables = (;
+                x_draw = (rng, t) -> randn(rng),
+                y_draw = (rng, t) -> rand(rng),
+            ),
+            models = (;
+                submodel = submodel_init,
+            ),
+            rng = Xoshiro(seed),
+        )
+
+    end
+
+    # Use both initialize and simulate to see if the same draws are happening.
+    model = initialize(nothing; init_fcn = this_init_fcn, seed = 5)
+    history, _, _ = simulate(
+        nothing;
+        init_fcn = this_init_fcn,
+        rates_fcn = (t, model) -> RatesOutput(;
+            outputs = (;
+                x = model.x_draw,
+                y = model.y_draw,
+            ),
+            models = (;
+                submodel = RatesOutput(;
+                    outputs = (;
+                        z = model.submodel.z_draw,
+                    ),
+                ),
+            ),
+        ),
+        t = 0 : 1 : 10,
+        seed = 5,
+    )
+
+    # The initialized model should match the first samples in the time histories for the
+    # outputs that record the draws.
+    @test model.x_draw == history["/"]["x"].data[1]
+    @test model.y_draw == history["/"]["y"].data[1]
+    @test model.z == history["/submodel"]["z"].data[1]
 
 end
 
