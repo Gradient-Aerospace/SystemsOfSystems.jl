@@ -3,7 +3,7 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Solvers, Logs, Monitors
 # using GLMakie # For plots
-using Random: Xoshiro
+using Random: Xoshiro, rand, randn
 
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
@@ -537,13 +537,46 @@ end
 
 end
 
+# Test that random variables without explicit `RandomVariableDescription` seeds still get
+# their own default streams based on their field names.
+@testset "default random variable seeds" begin
+
+    seed = BranchingSeed(7, "")
+
+    model_description = ModelDescription(;
+        continuous_random_variables = (;
+            w_draw = (rng, t_last, t_next) -> randn(rng),
+        ),
+        discrete_random_variables = (;
+            x_draw = (rng, t) -> randn(rng),
+            y_draw = (rng, t) -> randn(rng),
+        ),
+    )
+
+    model = initialize(model_description; seed)
+
+    # The default seed for each random variable should be the model's seed branched by that
+    # variable's own field name.
+    @test model.w_draw == randn(Xoshiro(seed / "w_draw"))
+    @test model.x_draw == randn(Xoshiro(seed / "x_draw"))
+    @test model.y_draw == randn(Xoshiro(seed / "y_draw"))
+
+    # Two same-shaped random variables in the same model should not be locked to identical
+    # streams.
+    @test model.x_draw != model.y_draw
+
+end
+
 # Test that random draws taken during `initialize` match the draws from `simulate`. Note
-# that this only works if the models record their RNGs in their ModelDescriptions.
+# that this only works for submodel descriptions when random variables record their own
+# seeds with `RandomVariableDescription`.
 @testset "initialize" begin
 
     function this_init_fcn(t, _, seed)
 
-        # Let the submodel initialize with a derived seed.
+        # Let the submodel initialize with a derived seed, as a parent model normally would.
+        submodel_seed = seed / "submodel"
+
         submodel_init = ModelDescription(;
             continuous_outputs = (;
                 z = 0.,
@@ -551,7 +584,7 @@ end
             discrete_random_variables = (;
                 z_draw = RandomVariableDescription{Float64}(
                     (rng, t) -> randn(rng);
-                    seed = seed / "z_draw",
+                    seed = submodel_seed / "z_draw",
                     title = "",
                     dimensions = ["" => ""],
                 ),

@@ -22,8 +22,8 @@
 - [x] Test systems of systems.
 - [x] Test the close function.
 - [x] Test "missing" outputs.
-- [x] Figure out how to log the RNG state in a way we could load later.
-- [ ] Add logging of the RNG state.
+- [x] Figure out how to log per-random-variable RNG state in a way we could load later.
+- [ ] Add logging of per-random-variable RNG state.
 - [x] Test random variables.
 - [ ] Test all the types we intend to support.
 - [ ] Test plots.

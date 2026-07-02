@@ -2,7 +2,7 @@ using Random: Xoshiro, randn, rand
 using HDF5: h5open, Group
 import Dimensions
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, branch, TimeSeries, DiscreteWhiteNoise
+    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription
 
 #########
 # Plant #
@@ -399,9 +399,8 @@ end
     controller::PDController
 end
 
-# The ClosedLoopSystem model's initialization just initializes all of the sub-models and
-# gives each one a unique random number generator. It also describes one top-level output
-# signal we want.
+# The ClosedLoopSystem model's initialization just initializes all of the sub-models with
+# branched seeds. It also describes one top-level output signal we want.
 function init(t, specs::ClosedLoopSystemSpecs, seed)
 
     # Initialize each submodel, as well as this model's own outputs.
@@ -616,7 +615,7 @@ end
 
     # Let's also test that we can initialize from a ModelDescription, like a user might need
     # to do during initialization.
-    seed = SystemsOfSystems.BranchingSeed(0, "/")
+    seed = SystemsOfSystems.BranchingSeed(0, "")
     model_description = init(0//1, system_specs, seed)
     system = SystemsOfSystems.initialize(model_description; seed)
     @test system isa ClosedLoopSystem
