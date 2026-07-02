@@ -13,7 +13,7 @@ export BranchingSeed, branch
 export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation
 
-using Random: Xoshiro, AbstractRNG
+using Random: Xoshiro
 import Random
 
 include("TimeSeries.jl")
@@ -35,9 +35,11 @@ elements of the model, including:
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
 * `discrete_outputs`: A named tuple of each of the continuous outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
-   the model, where the elements are functions mapping `(rng, t_last, t_next)` to a value.
+   the model. Each element can be a function mapping `(rng, t_last, t_next)` to a value, or
+   a `RandomVariableDescription`.
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
-  model, where the elements are functions mapping `(rng, t)` to a value.
+  model. Each element can be a function mapping `(rng, t)` to a value, or a
+  `RandomVariableDescription`.
 * `models`: A named tuple containing the ModelDescription of each submodel.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
   integrator will step no latter than this time, but may step earlier.
@@ -137,9 +139,9 @@ UpdatesOutput(;
 """
     BranchingSeed
 
-This type is useful for making a tree of random number generators that trace back to a
-single random number generator. Here's an example of creating a `BranchingSeed` and creating
-a random number generator from it:
+This type is useful for making a tree of random seeds that trace back to a single top-level
+seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
+from it:
 
 ```
 seed = BranchingSeed(0, "")
@@ -225,7 +227,7 @@ VariableDescription{SVector{3, Float64}}(
 ```
 
 A variable's dimensions can also be grouped together. This only affects plots. Grouped
-dimensions will be plotted in a singnle axis, rather than each dimension getting its own
+dimensions will be plotted in a single axis, rather than each dimension getting its own
 axis. This can help make plots more compact, and it can be clearer to have multiple lines
 sharing a single axis in some cases. By default, each dimension will get its own group.
 
@@ -251,11 +253,12 @@ end
 """
     RandomVariableDescription{T}
 
-Describes a random variable of type `T`. The `f` field should be a function or
-type satisfying `f(rng, t)::T` for a discrete random variable or `f(rng, t_last, t_next)`
-for a continuous random variable. It also stores a `seed::BranchingSeed` for its own
-random number generator. The remaining fields, `title`, `dimensions`, and `groups` are the
-same as for `VariableDescription`.
+Describes a random variable of type `T`. The `f` field should be a function or type
+satisfying `f(rng, t)::T` for a discrete random variable or `f(rng, t_last, t_next)::T` for
+a continuous random variable. It also stores a `seed::BranchingSeed` for its own random
+number generator, which is useful when a model description needs to reproduce the same draw
+outside of its usual parent model. The remaining fields, `title`, `dimensions`, and
+`groups`, are the same as for `VariableDescription`.
 """
 struct RandomVariableDescription{T}
     f::Any
@@ -278,7 +281,7 @@ end
 """
     RandomVariable{F, T}
 
-Stores a function to take draws from `f::F` using the `rng::Xoshiro` such that `f(t, rng)`
+Stores a function to take draws from `f::F` using the `rng::Xoshiro` such that `f(rng, t)`
 produces a random draw of type `T`, where `t` is time.
 """
 struct RandomVariable{F, T}
@@ -408,6 +411,14 @@ function strip_fluff_from_random_variable(f, seed)
     return RandomVariable{typeof(f), Any}(f, Xoshiro(seed))
 end
 
+function strip_fluff_from_random_variable_set(random_variables, seed)
+    return NamedTuple{fieldnames(typeof(random_variables))}(
+        map(fieldnames(typeof(random_variables))) do fn
+            strip_fluff_from_random_variable(random_variables[fn], seed / string(fn))
+        end
+    )
+end
+
 function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
     return TypedModelDescription(;
         type = desc.type,
@@ -416,12 +427,12 @@ function create_typed_model_description(desc::ModelDescription, seed::BranchingS
         discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
         continuous_outputs = map(strip_fluff_from_variable, desc.continuous_outputs),
         discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
-        continuous_random_variables = map(desc.continuous_random_variables) do rv
-            strip_fluff_from_random_variable(rv, seed)
-        end,
-        discrete_random_variables = map(desc.discrete_random_variables) do rv
-            strip_fluff_from_random_variable(rv, seed)
-        end,
+        continuous_random_variables = strip_fluff_from_random_variable_set(
+            desc.continuous_random_variables, seed,
+        ),
+        discrete_random_variables = strip_fluff_from_random_variable_set(
+            desc.discrete_random_variables, seed,
+        ),
         models = NamedTuple(
             field => create_typed_model_description(
                 desc.models[field], seed / string(field),
@@ -887,7 +898,7 @@ end
 
 function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
 
-    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    # Create the top-level branching seed used for default random-variable streams.
     branching_seed = BranchingSeed(seed, "")
 
     # Now that the time histories are started, we have no further use of the
@@ -906,7 +917,7 @@ end
 
 function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 
-    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    # Create the top-level branching seed that will be passed to the user's init function.
     branching_seed = BranchingSeed(seed, "")
 
     # Run the initialization to get the description of the models given the prototype.
@@ -931,11 +942,11 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 end
 
 """
-    initialize(user_data; init_fcn, seed = BranchingSeed(0, ""), t_start = 0)
+    initialize(user_data; init_fcn, seed = 0, t_start = 0)
 
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
 optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
-it.
+it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -946,6 +957,8 @@ end
 
 This is useful for debugging model initialization. Given a `ModelDescription` (such as would
 be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
+The `seed` is used for random variables that do not provide their own
+`RandomVariableDescription` seed.
 """
 function initialize(
     model_description::ModelDescription;
@@ -973,7 +986,8 @@ Runs a simulation, returning the time history, end time, and final model.
   `UpdatesOutput`.
 * `close_fcn`: Will be called when simulation completes (even if an error is caught) with
   `(t, model)`. No return value is expected.
-* `seed`: A top-level seed (Int) to control all random number generation in the sim.
+* `seed`: A top-level seed (Int) to control all random number generation in the sim. The
+  `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
 """
 function simulate(
