@@ -549,9 +549,13 @@ end
                 z = 0.,
             ),
             discrete_random_variables = (;
-                z_draw = (rng, t) -> randn(rng),
+                z_draw = RandomVariableDescription{Float64}(
+                    (rng, t) -> randn(rng);
+                    seed = seed / "z_draw",
+                    title = "",
+                    dimensions = ["" => ""],
+                ),
             ),
-            rng = Xoshiro(seed / "submodel"),
         )
 
         # Use that initialization. Does this make it take a draw?
@@ -566,13 +570,22 @@ end
                 z = submodel.z_draw, # Store the submodel's initial draw so we can test it.
             ),
             discrete_random_variables = (;
-                x_draw = (rng, t) -> randn(rng),
-                y_draw = (rng, t) -> rand(rng),
+                x_draw = RandomVariableDescription{Float64}(
+                    (rng, t) -> randn(rng);
+                    seed = seed / "x_draw",
+                    title = "",
+                    dimensions = ["" => ""],
+                ),
+                y_draw = RandomVariableDescription{Float64}(
+                    (rng, t) -> rand(rng);
+                    seed = seed / "y_draw",
+                    title = "",
+                    dimensions = ["" => ""],
+                ),
             ),
             models = (;
                 submodel = submodel_init,
             ),
-            rng = Xoshiro(seed),
         )
 
     end

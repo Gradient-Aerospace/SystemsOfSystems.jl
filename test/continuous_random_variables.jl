@@ -29,7 +29,7 @@ end
                 nothing;
                 t = 0//1 : 1//10 : t_final, # Force some steps to happen (not one big step).
                 seed,
-                init_fcn = (rng, t, seed) -> ModelDescription(;
+                init_fcn = (args...) -> ModelDescription(;
                     type = ContinuousRandomWalk,
                     continuous_states = (;
                         x = 0.,

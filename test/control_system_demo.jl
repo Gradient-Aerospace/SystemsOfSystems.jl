@@ -113,7 +113,10 @@ end
 
 # Describe all of the variables in the plant model, with their initial conditions.
 function init(t, specs::SensorSpecs, seed)
-    rng = Xoshiro(seed)
+
+    # Draw the bias.
+    bias = specs.sigma_bias * randn(Xoshiro(seed / "bias"))
+
     return ModelDescription(;
         type = Sensor,
         constants = (;
@@ -123,14 +126,15 @@ function init(t, specs::SensorSpecs, seed)
                 dimensions = ["dt" => "s",],
             ),
             bias = VariableDescription(
-                specs.sigma_bias * randn(rng);
+                bias;
                 title = "Sensor Bias",
                 dimensions = ["bias" => "m",],
             ),
         ),
         discrete_random_variables = (;
-            noise = VariableDescription(
+            noise = RandomVariableDescription{Float64}(
                 DiscreteWhiteNoise(specs.sigma_noise);
+                seed = seed / "noise",
                 title = "Measurement White Noise",
                 dimensions = ["noise" => "m",],
             ),
@@ -144,6 +148,7 @@ function init(t, specs::SensorSpecs, seed)
         ),
         t_next = t + specs.dt, # Our next step comes from our regular sample period.
     )
+
 end
 
 # Given the time and true position, this returns the most recent measurement.
@@ -403,11 +408,11 @@ function init(t, specs::ClosedLoopSystemSpecs, seed)
     return ModelDescription(;
         type = ClosedLoopSystem,
         models = (;
-            plant = init(t, specs.plant, branch(seed, "plant")),
-            sensor = init(t, specs.sensor, branch(seed, "sensor")),
-            target = init(t, specs.target, branch(seed, "target")),
-            controller = init(t, specs.controller, branch(seed, "controller")),
-            actuator = init(t, specs.actuator, branch(seed, "actuator")),
+            plant = init(t, specs.plant, seed / "plant"),
+            sensor = init(t, specs.sensor, seed / "sensor"),
+            target = init(t, specs.target, seed / "target"),
+            controller = init(t, specs.controller, seed / "controller"),
+            actuator = init(t, specs.actuator, seed / "actuator"),
         ),
         discrete_outputs = (;
             control_error = VariableDescription{Float64}(
