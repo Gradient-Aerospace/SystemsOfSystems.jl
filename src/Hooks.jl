@@ -49,7 +49,7 @@ end
     create_hook(options::AbstractHookOptions, t, model)
 
 Returns a subtype of `AbstractHook` built from the provided `options`, where `t` is an array
-or `Rational{Int64}` corresponding to the set of times passed to `simulate` (i.e.,
+of `Rational{Int64}` corresponding to the set of times passed to `simulate` (i.e.,
 `first(t)` is when the sim will start, `last(t)` is when it will end, and anything in
 between is a desired output time for the sim, and `model` is the initial model.
 """

@@ -866,7 +866,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
             hook_outputs = Hooks.update_hook!(hook, t_next, m)
             if hook_outputs.stop
                 if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
-                    stop = HookRequestedStop(t, typeof(hook))
+                    stop = HookRequestedStop(t_next, hook)
                 end
             end
         end
@@ -879,7 +879,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
 
     # If there's a reason to stop, bail on the rest of this step.
     if !isa(stop, UnknownStopReason)
-        return (t_last, msd, stop, t_next_suggested)
+        return (t_next, msd, stop, t_next_suggested)
     end
 
     # Make the discrete draws.
