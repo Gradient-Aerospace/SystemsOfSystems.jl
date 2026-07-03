@@ -493,7 +493,7 @@ end
 
     dt_rk4 = 0.06 # Deliberately chosen to be inconsistent with the discrete systems' sample rates
     solver = if solver_type == "dp54"
-        Solvers.DormandPrince54Options() # TODO: Test that max_dt limits/doesn't limit.
+        Solvers.DormandPrince54Options()
     elseif solver_type == "rk4"
         Solvers.RungeKutta4Options(; dt = dt_rk4)
     end
