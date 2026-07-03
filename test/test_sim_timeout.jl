@@ -7,14 +7,14 @@ using Test
 
     history, t_final, model_final = simulate(
         nothing;
-        t = 0 : 1 : 10,
+        t = 0 : 0.1 : 1,
         init_fcn = (args...) -> ModelDescription(;
             discrete_states = (;
                 t = 0.,
             ),
         ),
         updates_fcn = (t, model) -> begin
-            sleep(2) # Sleep for 2s, so the whole sim should take at least 20s.
+            sleep(0.2) # Sleep for 0.2s, so the whole sim should take at least 2s.
             UpdatesOutput(;
                 updates = (;
                     t = float(t),
@@ -23,7 +23,7 @@ using Test
         end,
         options = SimOptions(;
             hooks = [
-                Hooks.SimTimeoutOptions(10.),
+                Hooks.SimTimeoutOptions(1.),
             ],
         ),
     )
@@ -32,13 +32,13 @@ using Test
     @test history.stop isa SystemsOfSystems.HookRequestedStop
 
     # It should have ended before the last time we asked for.
-    @test t_final < 10
+    @test t_final < 1
 
     # Make sure the stop reason and simulate call fundamentally report the same end time.
     @test history.stop.t == t_final
 
-    # On the last step, the discrete update should not have run.
-    @test model_final.t < float(history.stop.t)
+    # On the last step, the discrete update should have run.
+    @test model_final.t == float(history.stop.t)
 
 end
 

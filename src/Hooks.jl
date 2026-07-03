@@ -184,12 +184,15 @@ corrections prevent most drift. Before using a `ClockSync` hook for long-running
 high precision requirements on timing, test the performance of `ClockSync` on the target
 platform.
 
+Julia's `sleep` function has a minimum duration of 1ms. The default `sleep_margin` is 2ms to
+allow the model to enter the "tight timing loop" after sleeping.
+
 This type uses UInt64 for storage of the start and current times in nanoseconds. This means
 that real-time synchronization be sustained for ~584 years and is unlikely to limit the
 duration of the simulation.
 """
 @kwdef struct ClockSyncOptions <: AbstractHookOptions
-    sleep_margin::Float64 = 0.005 # 1ms is the minimum precision of `sleep`.
+    sleep_margin::Float64 = 0.002
 end
 
 """

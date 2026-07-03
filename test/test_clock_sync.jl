@@ -36,37 +36,24 @@ using Test
 
 
     # Run once to burn off compile times.
-    t = 0 : 1 : 1
+    t = 0 : 0.1 : 0.1
     history, t_final, model_final = run_sim(t, [])
 
     # Now run for timing's sake.
-    t = 0 : 1 : 10
+    t = 0 : 0.1 : 1
     history, t_final, model_final = run_sim(t, [Hooks.ClockSyncOptions()])
 
     # Make sure it went to completion.
     @test t_final == last(t)
 
-    @show history["/"]["current_time_s"]
-
     # Make sure samples never triggered _before_ the appropriate time.
     diffs = history["/"]["current_time_s"].data .- history["/"]["current_time_s"].time
     @test all(diffs .>= 0.)
 
-    # Make sure things never took too long.
+    # Make sure things never took too long. Note: the accuracy should be way better than
+    # this, but this runs in CI, and we don't want spurious failures there.
     @test all(diffs .< 0.1)
 
 end
-
-# function test_time_ns_precision()
-#     t0 = time_ns()
-#     while true
-#         t = time_ns()
-#         if t != t0
-#             println((t - t0) * 1e-9)
-#             break
-#         end
-#     end
-#     return nothing
-# end
 
 end
