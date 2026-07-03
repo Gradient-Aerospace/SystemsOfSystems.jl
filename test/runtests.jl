@@ -3,12 +3,13 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Solvers, Logs, Monitors
 # using GLMakie # For plots
-using Random: Xoshiro, rand, randn
 
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
 
 include("continuous_random_variables.jl")
+
+include("random_variable_seeds.jl")
 
 include("control_system_demo.jl")
 
@@ -534,122 +535,6 @@ end
     # Make sure the first several steps are precisely what we specified.
     @test t[1:4] == t_specified[1:4]
     @test t[end] == t_specified[end]
-
-end
-
-# Test that random variables without explicit `RandomVariableDescription` seeds still get
-# their own default streams based on their field names.
-@testset "default random variable seeds" begin
-
-    seed = BranchingSeed(7, "")
-
-    model_description = ModelDescription(;
-        continuous_random_variables = (;
-            w_draw = (rng, t_last, t_next) -> randn(rng),
-        ),
-        discrete_random_variables = (;
-            x_draw = (rng, t) -> randn(rng),
-            y_draw = (rng, t) -> randn(rng),
-        ),
-    )
-
-    model = initialize(model_description; seed)
-
-    # The default seed for each random variable should be the model's seed branched by that
-    # variable's own field name.
-    @test model.w_draw == randn(Xoshiro(seed / "w_draw"))
-    @test model.x_draw == randn(Xoshiro(seed / "x_draw"))
-    @test model.y_draw == randn(Xoshiro(seed / "y_draw"))
-
-    # Two same-shaped random variables in the same model should not be locked to identical
-    # streams.
-    @test model.x_draw != model.y_draw
-
-end
-
-# Test that random draws taken during `initialize` match the draws from `simulate`. Note
-# that this only works for submodel descriptions when random variables record their own
-# seeds with `RandomVariableDescription`.
-@testset "initialize" begin
-
-    function this_init_fcn(t, _, seed)
-
-        # Let the submodel initialize with a derived seed, as a parent model normally would.
-        submodel_seed = seed / "submodel"
-
-        submodel_init = ModelDescription(;
-            continuous_outputs = (;
-                z = 0.,
-            ),
-            discrete_random_variables = (;
-                z_draw = RandomVariableDescription{Float64}(
-                    (rng, t) -> randn(rng);
-                    seed = submodel_seed / "z_draw",
-                    title = "",
-                    dimensions = ["" => ""],
-                ),
-            ),
-        )
-
-        # Use that initialization. Does this make it take a draw?
-        submodel = initialize(submodel_init)
-
-        return ModelDescription(;
-            continuous_outputs = (;
-                x = 0., # We'll record the discrete draws as continuous outputs so that we
-                y = 0., # have the values for them on the first sample.
-            ),
-            discrete_states = (;
-                z = submodel.z_draw, # Store the submodel's initial draw so we can test it.
-            ),
-            discrete_random_variables = (;
-                x_draw = RandomVariableDescription{Float64}(
-                    (rng, t) -> randn(rng);
-                    seed = seed / "x_draw",
-                    title = "",
-                    dimensions = ["" => ""],
-                ),
-                y_draw = RandomVariableDescription{Float64}(
-                    (rng, t) -> rand(rng);
-                    seed = seed / "y_draw",
-                    title = "",
-                    dimensions = ["" => ""],
-                ),
-            ),
-            models = (;
-                submodel = submodel_init,
-            ),
-        )
-
-    end
-
-    # Use both initialize and simulate to see if the same draws are happening.
-    model = initialize(nothing; init_fcn = this_init_fcn, seed = 5)
-    history, _, _ = simulate(
-        nothing;
-        init_fcn = this_init_fcn,
-        rates_fcn = (t, model) -> RatesOutput(;
-            outputs = (;
-                x = model.x_draw,
-                y = model.y_draw,
-            ),
-            models = (;
-                submodel = RatesOutput(;
-                    outputs = (;
-                        z = model.submodel.z_draw,
-                    ),
-                ),
-            ),
-        ),
-        t = 0 : 1 : 10,
-        seed = 5,
-    )
-
-    # The initialized model should match the first samples in the time histories for the
-    # outputs that record the draws.
-    @test model.x_draw == history["/"]["x"].data[1]
-    @test model.y_draw == history["/"]["y"].data[1]
-    @test model.z == history["/submodel"]["z"].data[1]
 
 end
 
