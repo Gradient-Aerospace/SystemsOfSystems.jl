@@ -864,8 +864,11 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     log_discrete_stuff!(t_next, mh, updates)
 
     # Update the hooks.
-    for m in hooks
-        Hooks.update_hook!(m, t_next) # TODO: Let these stop the loop.
+    if !isempty(hooks)
+        m = model(msd)
+        for hook in hooks
+            Hooks.update_hook!(hook, t_next, m) # TODO: Let these stop/pause the loop.
+        end
     end
 
     return (t_next, msd, UnknownStopReason(), t_next_suggested)
