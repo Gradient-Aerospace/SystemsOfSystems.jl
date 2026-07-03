@@ -4,7 +4,8 @@ module SystemsOfSystems
 export initialize, simulate, SimOptions, Solvers, Monitors, Logs
 
 # Modeling
-export ModelDescription, VariableDescription, RatesOutput, UpdatesOutput
+export ModelDescription, VariableDescription, RandomVariableDescription, RatesOutput,
+    UpdatesOutput
 export is_regular_step_triggering
 
 # Utilities
@@ -12,7 +13,7 @@ export BranchingSeed, branch
 export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation
 
-using Random: Xoshiro, AbstractRNG
+using Random: Xoshiro
 import Random
 
 include("TimeSeries.jl")
@@ -34,13 +35,14 @@ elements of the model, including:
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
 * `discrete_outputs`: A named tuple of each of the continuous outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
-   the model, where the elements are functions mapping `(rng, t_last, t_next)` to a value.
+   the model. Each element can be a function mapping `(rng, t_last, t_next)` to a value, or
+   a `RandomVariableDescription`.
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
-  model, where the elements are functions mapping `(rng, t)` to a value.
+  model. Each element can be a function mapping `(rng, t)` to a value, or a
+  `RandomVariableDescription`.
 * `models`: A named tuple containing the ModelDescription of each submodel.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
   integrator will step no latter than this time, but may step earlier.
-* `rng`: The random number generator to use for the random variable functions.
 
 For the constants, states, and outputs, the value corresponding with each field can either
 be a raw value (e.g., 6.) or a `VariableDescription`, such as:
@@ -64,7 +66,6 @@ struct ModelDescription
     discrete_random_variables
     models
     t_next
-    rng::Union{Nothing, AbstractRNG}
 end
 ModelDescription(;
     type = Nothing,
@@ -77,33 +78,14 @@ ModelDescription(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-    rng = nothing, # User can specify what they want, or nothing to inherit an RNG based on their breadcrumbs.
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
     models,
-    rationalize(t_next), rng,
+    rationalize(t_next),
 )
-
-"""
-This is the same as ModelDescription, except that any VariableDescription stuff has been
-pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
-"""
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
-    type::Type{T} # This could actually be any function that takes kwargs.
-    constants::CT
-    continuous_states::XCT
-    discrete_states::XDT
-    continuous_outputs::YCT
-    discrete_outputs::YDT
-    continuous_random_variables::WCT
-    discrete_random_variables::WDT
-    models::MT
-    t_next::Rational{Int64}
-    rng::Xoshiro
-end
 
 """
 Describes a model's continuous-time derivatives and outputs.
@@ -155,59 +137,11 @@ UpdatesOutput(;
 ) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
 
 """
-These can be used to decorate the variables in a `ModelDescription`. The decorations become
-part of the `TimeSeries` for that variable. Example:
-
-```
-VariableDescription(
-    SA[1., 2., 3];
-    title = "Position",
-    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
-    interpolator = LinearInterpolation(),
-)
-```
-
-A `missing` value is allowed, but in that case, the type must be provided explicitly so that
-the `TimeSeries` knows what kind of types to expect. Example:
-
-```
-VariableDescription{SVector{3, Float64}}(
-    missing;
-    title = "Position",
-    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
-)
-```
-
-A variable's dimensions can also be grouped together. This only affects plots. Grouped
-dimensions will be plotted in a singnle axis, rather than each dimension getting its own
-axis. This can help make plots more compact, and it can be clearer to have multiple lines
-sharing a single axis in some cases. By default, each dimension will get its own group.
-
-A variable can also specify the interpolation policy that will be passed through to its
-`TimeSeries`. When omitted, the `TimeSeries` chooses its normal default based on whether
-the signal is continuous or discrete.
-"""
-struct VariableDescription{T}
-    value::Union{Missing, T}
-    title::String
-    dimensions::Vector{Dimension}
-    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
-    interpolator::Any
-    # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
-end
-VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
-function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
-    return VariableDescription{T}(
-        value, title, Dimension[dimensions...], groups, interpolator,
-    )
-end
-
-"""
     BranchingSeed
 
-This type is useful for making a tree of random number generators that trace back to a
-single random number generator. Here's an example of creating a `BranchingSeed` and creating
-a random number generator from it:
+This type is useful for making a tree of random seeds that trace back to a single top-level
+seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
+from it:
 
 ```
 seed = BranchingSeed(0, "")
@@ -268,33 +202,95 @@ function Base.:/(seed::BranchingSeed, name::AbstractString)
     return branch(seed, name)
 end
 
-"Creates a Xoshiro RNG from the given BranchingSeed."
-Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
+"""
+These can be used to decorate the variables in a `ModelDescription`. The decorations become
+part of the `TimeSeries` for that variable. Example:
 
-strip_fluff_from_variable(var) = var
-strip_fluff_from_variable(var::VariableDescription) = var.value
+```
+VariableDescription(
+    SA[1., 2., 3];
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+    interpolator = LinearInterpolation(),
+)
+```
 
-function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
-    rng = isnothing(desc.rng) ? Xoshiro(seed) : deepcopy(desc.rng)
-    return TypedModelDescription(;
-        type = desc.type,
-        constants = map(strip_fluff_from_variable, desc.constants),
-        continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
-        discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
-        continuous_outputs = map(strip_fluff_from_variable, desc.continuous_outputs),
-        discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
-        continuous_random_variables = map(strip_fluff_from_variable, desc.continuous_random_variables),
-        discrete_random_variables = map(strip_fluff_from_variable, desc.discrete_random_variables),
-        models = NamedTuple(
-            field => create_typed_model_description(
-                desc.models[field], branch(seed, string(field)),
-            )
-            for field in fieldnames(typeof(desc.models))
-        ),
-        t_next = desc.t_next,
-        rng,
+A `missing` value is allowed, but in that case, the type must be provided explicitly so that
+the `TimeSeries` knows what kind of types to expect. Example:
+
+```
+VariableDescription{SVector{3, Float64}}(
+    missing;
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+)
+```
+
+A variable's dimensions can also be grouped together. This only affects plots. Grouped
+dimensions will be plotted in a single axis, rather than each dimension getting its own
+axis. This can help make plots more compact, and it can be clearer to have multiple lines
+sharing a single axis in some cases. By default, each dimension will get its own group.
+
+A variable can also specify the interpolation policy that will be passed through to its
+`TimeSeries`. When omitted, the `TimeSeries` chooses its normal default based on whether
+the signal is continuous or discrete.
+"""
+struct VariableDescription{T}
+    value::Union{Missing, T}
+    title::String
+    dimensions::Vector{Dimension}
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+    interpolator::Any
+    # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
+end
+VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
+function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
+    return VariableDescription{T}(
+        value, title, Dimension[dimensions...], groups, interpolator,
     )
 end
+
+"""
+    RandomVariableDescription{T}
+
+Describes a random variable of type `T`. The `f` field should be a function or type
+satisfying `f(rng, t)::T` for a discrete random variable or `f(rng, t_last, t_next)::T` for
+a continuous random variable. It also stores a `seed::BranchingSeed` for its own random
+number generator, which is useful when a model description needs to reproduce the same draw
+outside of its usual parent model. The remaining fields, `title`, `dimensions`, and
+`groups`, are the same as for `VariableDescription`.
+"""
+struct RandomVariableDescription{T}
+    f::Any
+    seed::BranchingSeed
+    title::String
+    dimensions::Vector{Dimension}
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+end
+RandomVariableDescription(f; kwargs...) = RandomVariableDescription{Any}(f; kwargs...)
+function RandomVariableDescription{T}(
+    f;
+    seed,
+    title,
+    dimensions,
+    groups = missing,
+) where {T}
+    return RandomVariableDescription{T}(f, seed, title, Dimension[dimensions...], groups)
+end
+
+"""
+    RandomVariable{F, T}
+
+Stores a function to take draws from `f::F` using the `rng::Xoshiro` such that `f(rng, t)`
+produces a random draw of type `T`, where `t` is time.
+"""
+struct RandomVariable{F, T}
+    f::F
+    rng::Xoshiro
+end
+
+"Creates a Xoshiro RNG from the given BranchingSeed."
+Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
 
 ##################
 # User Utilities #
@@ -367,6 +363,87 @@ function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
 end
 
 #########################
+# TypedModelDescription #
+#########################
+
+"""
+This is the same as ModelDescription, except that any VariableDescription stuff has been
+pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
+"""
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+    type::Type{T} # This could actually be any function that takes kwargs.
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
+    t_next::Rational{Int64}
+end
+
+strip_fluff_from_variable(var) = var
+strip_fluff_from_variable(var::VariableDescription) = var.value
+
+# If the user provided something like DiscreteWhiteNoise directly, just use the default
+# seed with it.
+function strip_fluff_from_random_variable(f::DiscreteWhiteNoise{T}, seed) where {T}
+    return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
+end
+function strip_fluff_from_random_variable(f::ContinuousWhiteNoise{T}, seed) where {T}
+    return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
+end
+
+# If the user provided a RandomVariable directly, assume they know exactly what they're
+# doing and just use it.
+strip_fluff_from_random_variable(rv::RandomVariable, seed) = rv
+
+# If the user provided a random variable description, pull out the part we care about.
+function strip_fluff_from_random_variable(rvd::RandomVariableDescription{T}, seed) where {T}
+    return RandomVariable{typeof(rvd.f), T}(rvd.f, Xoshiro(rvd.seed))
+end
+
+# If the user provided something else for taking draws..., well, we don't know what type it
+# produces, so we'll have to assume it's an Any. (This should use a
+# RandomVariableDescription if they want to be more explicit.)
+function strip_fluff_from_random_variable(f, seed)
+    return RandomVariable{typeof(f), Any}(f, Xoshiro(seed))
+end
+
+function strip_fluff_from_random_variable_set(random_variables, seed)
+    return NamedTuple{fieldnames(typeof(random_variables))}(
+        map(fieldnames(typeof(random_variables))) do fn
+            strip_fluff_from_random_variable(random_variables[fn], seed / string(fn))
+        end
+    )
+end
+
+function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
+    return TypedModelDescription(;
+        type = desc.type,
+        constants = map(strip_fluff_from_variable, desc.constants),
+        continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
+        discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
+        continuous_outputs = map(strip_fluff_from_variable, desc.continuous_outputs),
+        discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
+        continuous_random_variables = strip_fluff_from_random_variable_set(
+            desc.continuous_random_variables, seed,
+        ),
+        discrete_random_variables = strip_fluff_from_random_variable_set(
+            desc.discrete_random_variables, seed,
+        ),
+        models = NamedTuple(
+            field => create_typed_model_description(
+                desc.models[field], seed / string(field),
+            )
+            for field in fieldnames(typeof(desc.models))
+        ),
+        t_next = desc.t_next,
+    )
+end
+
+#########################
 # ModelStateDescription #
 #########################
 
@@ -381,7 +458,7 @@ end
     models::MT
     t_next::Rational{Int64}
 end
-ModelStateDescription{T}(;
+function ModelStateDescription{T}(;
     constants = (;),
     continuous_states = (;),
     discrete_states = (;),
@@ -389,11 +466,17 @@ ModelStateDescription{T}(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-) where {T} = ModelStateDescription{T, typeof(constants), typeof(continuous_states), typeof(discrete_states), typeof(continuous_random_variables), typeof(discrete_random_variables), typeof(models)}(
-    constants, continuous_states, discrete_states,
-    continuous_random_variables, discrete_random_variables, models,
-    rationalize(t_next),
-)
+) where {T}
+    return ModelStateDescription{
+        T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
+        typeof(continuous_random_variables), typeof(discrete_random_variables),
+        typeof(models)
+    }(
+        constants, continuous_states, discrete_states,
+        continuous_random_variables, discrete_random_variables, models,
+        rationalize(t_next),
+    )
+end
 
 # This has no allocations for bits types.
 function model(desc::ModelStateDescription{Nothing})
@@ -541,9 +624,23 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # The Loop #
 ############
 
+# Functions for drawing from the sets of random variables
+function draw_crvs(crvs, t_last, t_next)
+    return map(crvs) do rv
+        return rv.f(rv.rng, t_last, t_next)
+    end
+end
+function draw_drvs(drvs, t)
+    return map(drvs) do rv
+        return rv.f(rv.rng, t)
+    end
+end
+
 function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
-        continuous_random_variables = map(drvf -> drvf(ommd.rng, t_last, t_next), ommd.continuous_random_variables),
+        continuous_random_variables = draw_crvs(
+            ommd.continuous_random_variables, t_last, t_next,
+        ),
         models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
@@ -558,8 +655,10 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        continuous_random_variables = map(crvf -> crvf(ommd.rng, float(t), t + 1.), ommd.continuous_random_variables),
-        discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
+        continuous_random_variables = draw_crvs(
+            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
+        ),
+        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         models = NamedTuple(
             mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
@@ -570,7 +669,7 @@ end
 
 function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
-        discrete_random_variables = map(drvf -> drvf(ommd.rng, t), ommd.discrete_random_variables),
+        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         models = NamedTuple{keys(msd.models)}(
             map(ommd.models, msd.models) do ommd_submodel, msd_submodel
                 draw_wd(t, ommd_submodel, msd_submodel)
@@ -799,7 +898,7 @@ end
 
 function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
 
-    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    # Create the top-level branching seed used for default random-variable streams.
     branching_seed = BranchingSeed(seed, "")
 
     # Now that the time histories are started, we have no further use of the
@@ -818,7 +917,7 @@ end
 
 function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 
-    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
+    # Create the top-level branching seed that will be passed to the user's init function.
     branching_seed = BranchingSeed(seed, "")
 
     # Run the initialization to get the description of the models given the prototype.
@@ -843,11 +942,11 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 end
 
 """
-    initialize(user_data; init_fcn, seed = BranchingSeed(0, ""), t_start = 0)
+    initialize(user_data; init_fcn, seed = 0, t_start = 0)
 
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
 optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
-it.
+it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -858,6 +957,8 @@ end
 
 This is useful for debugging model initialization. Given a `ModelDescription` (such as would
 be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
+The `seed` is used for random variables that do not provide their own
+`RandomVariableDescription` seed.
 """
 function initialize(
     model_description::ModelDescription;
@@ -885,7 +986,8 @@ Runs a simulation, returning the time history, end time, and final model.
   `UpdatesOutput`.
 * `close_fcn`: Will be called when simulation completes (even if an error is caught) with
   `(t, model)`. No return value is expected.
-* `seed`: A top-level seed (Int) to control all random number generation in the sim.
+* `seed`: A top-level seed (Int) to control all random number generation in the sim. The
+  `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
 """
 function simulate(

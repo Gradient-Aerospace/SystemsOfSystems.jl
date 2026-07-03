@@ -2,7 +2,7 @@ using Random: Xoshiro, randn, rand
 using HDF5: h5open, Group
 import Dimensions
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, branch, TimeSeries, DiscreteWhiteNoise
+    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription
 
 #########
 # Plant #
@@ -113,7 +113,10 @@ end
 
 # Describe all of the variables in the plant model, with their initial conditions.
 function init(t, specs::SensorSpecs, seed)
-    rng = Xoshiro(seed)
+
+    # Draw the bias.
+    bias = specs.sigma_bias * randn(Xoshiro(seed / "bias"))
+
     return ModelDescription(;
         type = Sensor,
         constants = (;
@@ -123,14 +126,15 @@ function init(t, specs::SensorSpecs, seed)
                 dimensions = ["dt" => "s",],
             ),
             bias = VariableDescription(
-                specs.sigma_bias * randn(rng);
+                bias;
                 title = "Sensor Bias",
                 dimensions = ["bias" => "m",],
             ),
         ),
         discrete_random_variables = (;
-            noise = VariableDescription(
+            noise = RandomVariableDescription{Float64}(
                 DiscreteWhiteNoise(specs.sigma_noise);
+                seed = seed / "noise",
                 title = "Measurement White Noise",
                 dimensions = ["noise" => "m",],
             ),
@@ -144,6 +148,7 @@ function init(t, specs::SensorSpecs, seed)
         ),
         t_next = t + specs.dt, # Our next step comes from our regular sample period.
     )
+
 end
 
 # Given the time and true position, this returns the most recent measurement.
@@ -394,20 +399,19 @@ end
     controller::PDController
 end
 
-# The ClosedLoopSystem model's initialization just initializes all of the sub-models and
-# gives each one a unique random number generator. It also describes one top-level output
-# signal we want.
+# The ClosedLoopSystem model's initialization just initializes all of the sub-models with
+# branched seeds. It also describes one top-level output signal we want.
 function init(t, specs::ClosedLoopSystemSpecs, seed)
 
     # Initialize each submodel, as well as this model's own outputs.
     return ModelDescription(;
         type = ClosedLoopSystem,
         models = (;
-            plant = init(t, specs.plant, branch(seed, "plant")),
-            sensor = init(t, specs.sensor, branch(seed, "sensor")),
-            target = init(t, specs.target, branch(seed, "target")),
-            controller = init(t, specs.controller, branch(seed, "controller")),
-            actuator = init(t, specs.actuator, branch(seed, "actuator")),
+            plant = init(t, specs.plant, seed / "plant"),
+            sensor = init(t, specs.sensor, seed / "sensor"),
+            target = init(t, specs.target, seed / "target"),
+            controller = init(t, specs.controller, seed / "controller"),
+            actuator = init(t, specs.actuator, seed / "actuator"),
         ),
         discrete_outputs = (;
             control_error = VariableDescription{Float64}(
@@ -489,7 +493,7 @@ end
 
     dt_rk4 = 0.06 # Deliberately chosen to be inconsistent with the discrete systems' sample rates
     solver = if solver_type == "dp54"
-        Solvers.DormandPrince54Options() # TODO: Test that max_dt limits/doesn't limit.
+        Solvers.DormandPrince54Options()
     elseif solver_type == "rk4"
         Solvers.RungeKutta4Options(; dt = dt_rk4)
     end
@@ -611,7 +615,7 @@ end
 
     # Let's also test that we can initialize from a ModelDescription, like a user might need
     # to do during initialization.
-    seed = SystemsOfSystems.BranchingSeed(0, "/")
+    seed = SystemsOfSystems.BranchingSeed(0, "")
     model_description = init(0//1, system_specs, seed)
     system = SystemsOfSystems.initialize(model_description; seed)
     @test system isa ClosedLoopSystem
