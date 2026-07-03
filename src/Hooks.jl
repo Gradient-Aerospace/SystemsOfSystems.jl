@@ -33,25 +33,28 @@ All subtypes are expected to provide the following interface:
 abstract type AbstractHook end
 
 """
-    create_hook(options::AbstractHookOptions, t_start, t_end)
+    create_hook(options::AbstractHookOptions, t, model)
 
-Returns a subtype of `AbstractHook` built from the provided `options`, where `t_start` and
-`t_end` are the start and end times of the simulation.
+Returns a subtype of `AbstractHook` built from the provided `options`, where `t` is an array
+or `Rational{Int64}` corresponding to the set of times passed to `simulate` (i.e.,
+`first(t)` is when the sim will start, `last(t)` is when it will end, and anything in
+between is a desired output time for the sim, and `model` is the initial model.
 """
 function create_hook end
 
 """
-    update_hook!(hook::AbstractHook, t)
+    update_hook!(hook::AbstractHook, t, model)
 
-Allows the hook to update its internal state at time `t`.
+Allows the `hook` to update its internal state at time `t` using the `model`.
 """
 function update_hook! end
 
 """
-    close_hook!(hook::AbstractHook, t)
+    close_hook!(hook::AbstractHook, t_end, model)
 
 Called at the end of the simulation (whether the sim completed nominally or had an error),
-allowing the hook to close i/o resources, summarize, etc.
+allowing the `hook` to close i/o resources, summarize, etc., where `t_end` is the final sim
+time and `model` is the final model.
 """
 function close_hook! end
 
@@ -81,25 +84,22 @@ struct ProgressBar <: AbstractHook
     t_start::Float64
 end
 
-# TODO: Should this take in the initial model?
-function create_hook(options::ProgressBarOptions, t_start, t_end) # Inputs?
+function create_hook(options::ProgressBarOptions, t, model)
     return ProgressBar(
         Progress(
-            Int64(floor(1000 * (t_end - t_start)));
+            Int64(floor(1000 * (last(t) - first(t)))); # Make 1000 update "stages".
             dt = options.update_interval,
             desc = options.description,
         ),
-        float(t_start),
+        float(first(t)),
     )
 end
 
-# TODO: Should this take in the model?
-function update_hook!(hook::ProgressBar, t)
+function update_hook!(hook::ProgressBar, t, model)
     update!(hook.progress, Int64(floor(1000 * (t - hook.t_start))))
 end
 
-# TODO: Should this take in the model?
-function close_hook!(hook::ProgressBar, t)
+function close_hook!(hook::ProgressBar, t, model)
     finish!(hook.progress)
 end
 

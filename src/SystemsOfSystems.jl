@@ -1009,8 +1009,9 @@ function simulate(
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
     model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
+    initial_model = model(msd)
 
-    # Use those descriptions to start the time histories.
+    # Use those descriptions to set up the time histories.
     log, mh = create_log(options.log, model_description, options.time_dimension)
 
     # Log the initial stuff.
@@ -1020,23 +1021,28 @@ function simulate(
     solver = create_solver(options.solver, msd)
 
     # Create the hooks.
-    hooks = map(mo -> Hooks.create_hook(mo, t_start, t_end), options.hooks)
+    hooks = map(options.hooks) do hook_options
+        return Hooks.create_hook(hook_options, t, initial_model)
+    end
 
-    # Begin the loop.
+    # Propagate until we're done.
     t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
 
+    # Create the final model.
+    final_model = model(msd)
+
     # Close out the models.
-    close_fcn(t_end, model(msd))
+    close_fcn(t_end, final_model)
 
     # Wrap up all of the history into a single object.
     history = SimHistory(model_description, log, stop)
 
     # Close the hooks.
     for m in hooks
-        Hooks.close_hook!(m, t_end)
+        Hooks.close_hook!(m, t_end, final_model)
     end
 
-    return (history, t_end, model(msd))
+    return (history, t_end, final_model)
 
 end
 
