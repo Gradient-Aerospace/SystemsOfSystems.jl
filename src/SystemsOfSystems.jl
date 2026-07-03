@@ -529,6 +529,10 @@ struct ModelRequestedStop <: AbstractStopReason
     model_path::String # What ultimately populates this?
     reason::String
 end
+struct HookRequestedStop <: AbstractStopReason
+    t::Rational{Int64}
+    hook_type::Type
+end
 struct EncounteredError <: AbstractStopReason
     time::Float64
     exception::Exception
@@ -539,6 +543,7 @@ describe(stop::AbstractStopReason) = string(typeof(stop))
 describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
 describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
 describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
+describe(stop::HookRequestedStop) = "A $(stop.hook_type) hook requested a stop at t = $(float(stop.t))."
 describe(stop::EncounteredError) = "The sim experienced an error."
 
 ##############
@@ -843,16 +848,6 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     # Log the beginning of that sample now that we have its draws and derivatives.
     log_continuous_stuff!(t_last, mh, solver_outputs.msd_km1, solver_outputs.rates)
 
-    # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
-    if isa(stop, UnknownStopReason) && t_last == t_end
-        stop = ReachedEndTime(t_end)
-    end
-
-    # If there's a reason to stop, bail on the rest of this step.
-    if !isa(stop, UnknownStopReason)
-        return (t_last, msd, stop, t_next_suggested)
-    end
-
     # Update the hooks.
     #
     # We do this here so that hooks can interact with sim time in a reasonable way. Consider
@@ -865,8 +860,23 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     if !isempty(hooks)
         m = model(msd)
         for hook in hooks
-            Hooks.update_hook!(hook, t_next, m) # TODO: Let these stop the loop.
+            hook_outputs = Hooks.update_hook!(hook, t_next, m)
+            if hook_outputs.stop
+                if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
+                    stop = HookRequestedStop(t, typeof(hook))
+                end
+            end
         end
+    end
+
+    # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
+    if isa(stop, UnknownStopReason) && t_last == t_end
+        stop = ReachedEndTime(t_end)
+    end
+
+    # If there's a reason to stop, bail on the rest of this step.
+    if !isa(stop, UnknownStopReason)
+        return (t_last, msd, stop, t_next_suggested)
     end
 
     # Make the discrete draws.

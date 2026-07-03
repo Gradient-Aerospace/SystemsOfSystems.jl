@@ -33,6 +33,19 @@ All subtypes are expected to provide the following interface:
 abstract type AbstractHook end
 
 """
+    HookOutputs
+
+The output type for `update_hook!`, allowing the hook to communicate to the sim loop.
+
+Fields:
+
+* `stop::Bool`: Set to true to stop the sim (default: false)
+"""
+@kwdef struct HookOutputs
+    stop::Bool = false
+end
+
+"""
     create_hook(options::AbstractHookOptions, t, model)
 
 Returns a subtype of `AbstractHook` built from the provided `options`, where `t` is an array
@@ -99,10 +112,12 @@ end
 
 function update_hook!(hook::ProgressBar, t, model)
     update!(hook.progress, Int64(floor(1000 * (t - hook.t_start))))
+    return HookOutputs()
 end
 
 function close_hook!(hook::ProgressBar, t, model)
     finish!(hook.progress)
+    return nothing
 end
 
 end
