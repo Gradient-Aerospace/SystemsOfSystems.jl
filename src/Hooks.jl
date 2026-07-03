@@ -130,6 +130,10 @@ end
     SimTimeoutOptions
 
 Stores the options for a `SimTimeout`, which will end the simulation if it takes too long.
+
+Fields:
+
+* `max_run_time`: The maximum run time before the hook should terminate the sim (s)
 """
 @kwdef struct SimTimeoutOptions <: AbstractHookOptions
     max_run_time::Float64
@@ -157,6 +161,65 @@ function update_hook!(hook::SimTimeout, t, model)
     return HookOutputs(;
         stop = current_time_ns - hook.initial_time_ns > hook.max_run_time_ns,
     )
+end
+
+#############
+# ClockSync #
+#############
+
+"""
+    ClockSyncOptions
+
+Stores the options for a `ClockSync`, which stalls in order to keep the simulation loop from
+running faster than realtime. If the amount of desired stall time is larger than
+`sleep_margin` (s), it will sleep until `sleep_margin` before the next trigger time. After
+that, it enters a tight loop using `time_ns()` to determine when it's time to continue with
+the simulation.
+
+This type uses UInt64 for storage of the start and current times in nanoseconds. This means
+that real-time synchronization be sustained for ~584 years and is unlikely to limit the
+duration of the simulation.
+"""
+@kwdef struct ClockSyncOptions <: AbstractHookOptions
+    sleep_margin::Float64 = 0.005 # 1ms is the minimum precision of `sleep`.
+end
+
+"""
+    ClockSync
+
+See `ClockSyncOptions`.
+"""
+@kwdef struct ClockSync <: AbstractHook
+    t_start::Float64
+    initial_time_ns::UInt64
+    sleep_margin_ns::UInt64
+end
+
+function create_hook(options::ClockSyncOptions, t, model)
+    return ClockSync(;
+        t_start         = float(first(t)),
+        initial_time_ns = time_ns(),
+        sleep_margin_ns = UInt64(floor(options.sleep_margin * 1e9)),
+    )
+end
+
+function update_hook!(hook::ClockSync, t, model)
+
+    # Figure how what sim step we're up to.
+    sim_time_ns = UInt64(floor((float(t) - hook.t_start) * 1e9))
+
+    # See if we have time (and margin) to go to sleep.
+    run_time_ns = time_ns() - hook.initial_time_ns
+    if sim_time_ns > run_time_ns + hook.sleep_margin_ns
+        sleep((sim_time_ns - (run_time_ns + hook.sleep_margin_ns)) * 1e-9)
+    end
+
+    # Now enter a tight loop until it's time to run.
+    while (time_ns() - hook.initial_time_ns) < sim_time_ns
+    end
+
+    return HookOutputs()
+
 end
 
 end

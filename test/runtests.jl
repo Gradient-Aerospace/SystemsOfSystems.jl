@@ -11,6 +11,7 @@ include("continuous_random_variables.jl")
 include("random_variable_seeds.jl")
 include("control_system_demo.jl")
 include("test_sim_timeout.jl")
+include("test_clock_sync.jl")
 
 # We implement a custom interpolation type just to test that we can.
 struct OffsetLinearInterpolation
