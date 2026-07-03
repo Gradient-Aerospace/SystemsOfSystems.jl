@@ -1,7 +1,7 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Solvers, Monitors, Logs
+export initialize, simulate, SimOptions, Solvers, Hooks, Logs
 
 # Modeling
 export ModelDescription, VariableDescription, RandomVariableDescription, RatesOutput,
@@ -554,20 +554,20 @@ function draw_wc end
 include("Solvers.jl")
 using .Solvers
 
-include("Monitors.jl")
+include("Hooks.jl")
 
 """
 A set of options for the `simulate` function, with keyword arguments for:
 
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
-* `monitors`: A vector of monitors (e.g., `[ProgressBarOptions(),]`)
+* `hooks`: A vector of hooks (e.g., `[ProgressBarOptions(),]`)
 * `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
 """
 @kwdef struct SimOptions
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
-    monitors::Vector{Monitors.AbstractMonitorOptions} = []
+    hooks::Vector{Hooks.AbstractHookOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
     # catch_errors::Bool = true
 end
@@ -802,7 +802,7 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     )
 end
 
-function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitors, t_end, t_next_suggested)
+function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, t_end, t_next_suggested)
 
     # Figure out how big this step can be.
 
@@ -863,16 +863,16 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
 
-    # Update the monitors.
-    for m in monitors
-        Monitors.update_monitor!(m, t_next) # TODO: Let these stop the loop.
+    # Update the hooks.
+    for m in hooks
+        Hooks.update_hook!(m, t_next) # TODO: Let these stop the loop.
     end
 
     return (t_next, msd, UnknownStopReason(), t_next_suggested)
 
 end
 
-function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     t_completed = first(t)
     t_end = last(t)
     t_next_suggested = t_completed + get_initial_time_step(solver)
@@ -881,7 +881,7 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
         while isa(stop, UnknownStopReason)
             t_completed, msd, stop, t_next_suggested = step!(
                 mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
-                solver, monitors, t_end, t_next_suggested,
+                solver, hooks, t_end, t_next_suggested,
             )
         end
     catch err
@@ -1019,11 +1019,11 @@ function simulate(
     # Create the solver.
     solver = create_solver(options.solver, msd)
 
-    # Create the monitors.
-    monitors = map(mo -> Monitors.create_monitor(mo, t_start, t_end), options.monitors)
+    # Create the hooks.
+    hooks = map(mo -> Hooks.create_hook(mo, t_start, t_end), options.hooks)
 
     # Begin the loop.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
 
     # Close out the models.
     close_fcn(t_end, model(msd))
@@ -1031,9 +1031,9 @@ function simulate(
     # Wrap up all of the history into a single object.
     history = SimHistory(model_description, log, stop)
 
-    # Close the monitors.
-    for m in monitors
-        Monitors.close_monitor!(m, t_end)
+    # Close the hooks.
+    for m in hooks
+        Hooks.close_hook!(m, t_end)
     end
 
     return (history, t_end, model(msd))

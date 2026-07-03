@@ -2,7 +2,7 @@
 
 ## General
 
-- [ ] Rename "monitors" to "hooks"?
+- [x] Rename "monitors" to "hooks"?
 
 ## Documentation
 

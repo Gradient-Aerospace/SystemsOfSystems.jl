@@ -1,7 +1,7 @@
 using HDF5Vectors # For the HDF5Logger
 using Test
 using SystemsOfSystems
-using SystemsOfSystems: Solvers, Logs, Monitors
+using SystemsOfSystems: Solvers, Logs, Hooks
 # using GLMakie # For plots
 
 out_dir = "out"
@@ -272,7 +272,7 @@ end
         options = SimOptions(;
             solver,
             log,
-            monitors = [Monitors.ProgressBarOptions()],
+            hooks = [Hooks.ProgressBarOptions()],
         ),
     )
 
