@@ -176,6 +176,14 @@ running faster than realtime. If the amount of desired stall time is larger than
 that, it enters a tight loop using `time_ns()` to determine when it's time to continue with
 the simulation.
 
+Since `time_ns()` is used for timing, it is unaffected by system clock updates, and it
+updates continuously. This value ultimately comes from the operating system, the computer's
+oscillator, and time synchronization sources, which are only used to determine how many
+oscillations occur per externally-referenced unit of time. On Linux and macOS, the external
+corrections prevent most drift. Before using a `ClockSync` hook for long-running sims with
+high precision requirements on timing, test the performance of `ClockSync` on the target
+platform.
+
 This type uses UInt64 for storage of the start and current times in nanoseconds. This means
 that real-time synchronization be sustained for ~584 years and is unlikely to limit the
 duration of the simulation.

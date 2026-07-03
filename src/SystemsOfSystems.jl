@@ -851,6 +851,16 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     # Log the beginning of that sample now that we have its draws and derivatives.
     log_continuous_stuff!(t_last, mh, solver_outputs.msd_km1, solver_outputs.rates)
 
+    # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
+    if isa(stop, UnknownStopReason) && t_last == t_end
+        stop = ReachedEndTime(t_end)
+    end
+
+    # If there's a reason to stop, bail on the rest of this step.
+    if !isa(stop, UnknownStopReason)
+        return (t_next, msd, stop, t_next_suggested)
+    end
+
     # Update the hooks.
     #
     # We do this here so that hooks can interact with sim time in a reasonable way. Consider
@@ -867,19 +877,10 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
             if hook_outputs.stop
                 if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
                     stop = HookRequestedStop(t_next, hook)
+                    return (t_next, msd, stop, t_next_suggested)
                 end
             end
         end
-    end
-
-    # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
-    if isa(stop, UnknownStopReason) && t_last == t_end
-        stop = ReachedEndTime(t_end)
-    end
-
-    # If there's a reason to stop, bail on the rest of this step.
-    if !isa(stop, UnknownStopReason)
-        return (t_next, msd, stop, t_next_suggested)
     end
 
     # Make the discrete draws.

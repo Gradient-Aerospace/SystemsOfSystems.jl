@@ -1,9 +1,9 @@
-module TestSimTimeout
+module TestClockSync
 
 using SystemsOfSystems
 using Test
 
-@testset "SimTimeout" begin
+@testset "ClockSync" begin
 
     function run_sim(t, hooks)
         return simulate(

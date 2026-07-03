@@ -10,6 +10,7 @@ mkpath(joinpath(@__DIR__, out_dir))
 include("continuous_random_variables.jl")
 include("random_variable_seeds.jl")
 include("control_system_demo.jl")
+include("test_hooks.jl")
 include("test_sim_timeout.jl")
 include("test_clock_sync.jl")
 
