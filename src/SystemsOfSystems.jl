@@ -877,7 +877,6 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
             if hook_outputs.stop
                 if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
                     stop = HookRequestedStop(t_next, hook)
-                    return (t_next, msd, stop, t_next_suggested)
                 end
             end
         end
@@ -893,7 +892,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
 
-    return (t_next, msd, UnknownStopReason(), t_next_suggested)
+    return (t_next, msd, stop, t_next_suggested)
 
 end
 
