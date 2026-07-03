@@ -853,6 +853,22 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
         return (t_last, msd, stop, t_next_suggested)
     end
 
+    # Update the hooks.
+    #
+    # We do this here so that hooks can interact with sim time in a reasonable way. Consider
+    # a real-time hook. It will have been initialized at t = 0, at which point it will start
+    # a stopwatch. It doesn't want to run the t = 0.1s update until 0.1s have passed since
+    # it ran its t = 0 update. By putting this here, we've identified `t_next` and solved
+    # the continuous-time stuff up to `t_next`. Now, we run this here, allowing the hook
+    # to sleep until its time for the discrete step at t_next to happen.
+    #
+    if !isempty(hooks)
+        m = model(msd)
+        for hook in hooks
+            Hooks.update_hook!(hook, t_next, m) # TODO: Let these stop the loop.
+        end
+    end
+
     # Make the discrete draws.
     msd = draw_wd(t_next, ommd, msd)
 
@@ -862,14 +878,6 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
 
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
-
-    # Update the hooks.
-    if !isempty(hooks)
-        m = model(msd)
-        for hook in hooks
-            Hooks.update_hook!(hook, t_next, m) # TODO: Let these stop/pause the loop.
-        end
-    end
 
     return (t_next, msd, UnknownStopReason(), t_next_suggested)
 

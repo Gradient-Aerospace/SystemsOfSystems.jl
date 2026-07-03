@@ -45,7 +45,9 @@ function create_hook end
 """
     update_hook!(hook::AbstractHook, t, model)
 
-Allows the `hook` to update its internal state at time `t` using the `model`.
+Allows the `hook` to update its internal state at time `t` using the `model`. The model will
+correspond with continuous-time updates up to `t`, and it will not yet have performed its
+discrete update at `t`.
 """
 function update_hook! end
 
