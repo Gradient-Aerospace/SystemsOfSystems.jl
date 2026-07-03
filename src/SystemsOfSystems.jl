@@ -569,7 +569,7 @@ A set of options for the `simulate` function, with keyword arguments for:
 
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
-* `hooks`: A vector of hooks (e.g., `[ProgressBarOptions(),]`)
+* `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
 * `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
 """
 @kwdef struct SimOptions

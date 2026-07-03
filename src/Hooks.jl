@@ -216,7 +216,7 @@ end
 
 function update_hook!(hook::ClockSync, t, model)
 
-    # Figure how what sim step we're up to.
+    # Figure what sim step we're up to.
     sim_time_ns = UInt64(floor((float(t) - hook.t_start) * 1e9))
 
     # See if we have time (and margin) to go to sleep.
