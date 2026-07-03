@@ -71,7 +71,9 @@ Called at the end of the simulation (whether the sim completed nominally or had 
 allowing the `hook` to close i/o resources, summarize, etc., where `t_end` is the final sim
 time and `model` is the final model.
 """
-function close_hook! end
+function close_hook!(hook::AbstractHook, t_end, model)
+    return nothing
+end
 
 ###############
 # ProgressBar #
@@ -118,6 +120,43 @@ end
 function close_hook!(hook::ProgressBar, t, model)
     finish!(hook.progress)
     return nothing
+end
+
+##############
+# SimTimeout #
+##############
+
+"""
+    SimTimeoutOptions
+
+Stores the options for a `SimTimeout`, which will end the simulation if it takes too long.
+"""
+@kwdef struct SimTimeoutOptions <: AbstractHookOptions
+    max_run_time::Float64
+end
+
+"""
+    SimTimeout
+
+See `SimTimeoutOptions`.
+"""
+@kwdef struct SimTimeout <: AbstractHook
+    max_run_time_ns::UInt64
+    initial_time_ns::UInt64
+end
+
+function create_hook(options::SimTimeoutOptions, t, model)
+    return SimTimeout(;
+        max_run_time_ns = UInt64(floor(options.max_run_time * 1e9)),
+        initial_time_ns = time_ns(),
+    )
+end
+
+function update_hook!(hook::SimTimeout, t, model)
+    current_time_ns = time_ns()
+    return HookOutputs(;
+        stop = current_time_ns - hook.initial_time_ns > hook.max_run_time_ns,
+    )
 end
 
 end

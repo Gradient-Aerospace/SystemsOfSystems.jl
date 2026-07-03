@@ -516,6 +516,12 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
     )
 end
 
+#########
+# Hooks #
+#########
+
+include("Hooks.jl")
+
 ################
 # Stop Reasons #
 ################
@@ -531,7 +537,7 @@ struct ModelRequestedStop <: AbstractStopReason
 end
 struct HookRequestedStop <: AbstractStopReason
     t::Rational{Int64}
-    hook_type::Type
+    hook::Hooks.AbstractHook
 end
 struct EncounteredError <: AbstractStopReason
     time::Float64
@@ -543,7 +549,7 @@ describe(stop::AbstractStopReason) = string(typeof(stop))
 describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
 describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
 describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
-describe(stop::HookRequestedStop) = "A $(stop.hook_type) hook requested a stop at t = $(float(stop.t))."
+describe(stop::HookRequestedStop) = "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
 describe(stop::EncounteredError) = "The sim experienced an error."
 
 ##############
@@ -557,9 +563,6 @@ using .Logs
 function draw_wc end
 
 include("Solvers.jl")
-using .Solvers
-
-include("Hooks.jl")
 
 """
 A set of options for the `simulate` function, with keyword arguments for:
@@ -599,7 +602,7 @@ The `keys`, `values`, and `pairs` functions also pass through to the underlying 
 """
 struct SimHistory
     model::ModelDescription
-    log::AbstractLog
+    log::Logs.AbstractLog
     stop::AbstractStopReason
 end
 
@@ -839,7 +842,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
 
     # Step the continuous system. Note that this might not step all the way to the preferred
     # t_next.
-    solver_outputs   = solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
+    solver_outputs   = Solvers.solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
     t_next           = solver_outputs.t_completed
     msd              = solver_outputs.msd_k
     stop             = solver_outputs.stop
@@ -896,7 +899,7 @@ end
 function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_completed + get_initial_time_step(solver)
+    t_next_suggested = t_completed + Solvers.get_initial_time_step(solver)
     stop = UnknownStopReason()
     try
         while isa(stop, UnknownStopReason)
@@ -1033,13 +1036,13 @@ function simulate(
     initial_model = model(msd)
 
     # Use those descriptions to set up the time histories.
-    log, mh = create_log(options.log, model_description, options.time_dimension)
+    log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
 
     # Log the initial stuff.
     log_discrete_stuff!(t_start, mh, ommd)
 
     # Create the solver.
-    solver = create_solver(options.solver, msd)
+    solver = Solvers.create_solver(options.solver, msd)
 
     # Create the hooks.
     hooks = map(options.hooks) do hook_options
