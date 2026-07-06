@@ -1,17 +1,18 @@
 using HDF5Vectors # For the HDF5Logger
 using Test
 using SystemsOfSystems
-using SystemsOfSystems: Solvers, Logs, Monitors
+using SystemsOfSystems: Solvers, Logs, Hooks
 # using GLMakie # For plots
 
 out_dir = "out"
 mkpath(joinpath(@__DIR__, out_dir))
 
 include("continuous_random_variables.jl")
-
 include("random_variable_seeds.jl")
-
 include("control_system_demo.jl")
+include("test_hooks.jl")
+include("test_sim_timeout.jl")
+include("test_clock_sync.jl")
 
 # We implement a custom interpolation type just to test that we can.
 struct OffsetLinearInterpolation
@@ -272,7 +273,7 @@ end
         options = SimOptions(;
             solver,
             log,
-            monitors = [Monitors.ProgressBarOptions()],
+            hooks = [Hooks.ProgressBarOptions()],
         ),
     )
 

@@ -3,9 +3,9 @@ TODO
 """
 module Solvers
 
-export create_solver, get_initial_time_step, solve
-
-using ..SystemsOfSystems: ModelStateDescription, RatesOutput, AbstractStopReason, UnknownStopReason, model, draw_wc, copy_model_state_description_except
+using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
+    AbstractStopReason, UnknownStopReason,
+    model, draw_wc, copy_model_state_description_except
 import SystemsOfSystems
 
 ##################

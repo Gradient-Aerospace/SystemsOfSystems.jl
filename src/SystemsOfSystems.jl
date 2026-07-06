@@ -1,7 +1,7 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Solvers, Monitors, Logs
+export initialize, simulate, SimOptions, Solvers, Hooks, Logs
 
 # Modeling
 export ModelDescription, VariableDescription, RandomVariableDescription, RatesOutput,
@@ -516,6 +516,12 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
     )
 end
 
+#########
+# Hooks #
+#########
+
+include("Hooks.jl")
+
 ################
 # Stop Reasons #
 ################
@@ -529,6 +535,10 @@ struct ModelRequestedStop <: AbstractStopReason
     model_path::String # What ultimately populates this?
     reason::String
 end
+struct HookRequestedStop <: AbstractStopReason
+    t::Rational{Int64}
+    hook::Hooks.AbstractHook
+end
 struct EncounteredError <: AbstractStopReason
     time::Float64
     exception::Exception
@@ -539,6 +549,7 @@ describe(stop::AbstractStopReason) = string(typeof(stop))
 describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
 describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
 describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
+describe(stop::HookRequestedStop) = "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
 describe(stop::EncounteredError) = "The sim experienced an error."
 
 ##############
@@ -552,22 +563,19 @@ using .Logs
 function draw_wc end
 
 include("Solvers.jl")
-using .Solvers
-
-include("Monitors.jl")
 
 """
 A set of options for the `simulate` function, with keyword arguments for:
 
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
-* `monitors`: A vector of monitors (e.g., `[ProgressBarOptions(),]`)
+* `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
 * `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
 """
 @kwdef struct SimOptions
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
-    monitors::Vector{Monitors.AbstractMonitorOptions} = []
+    hooks::Vector{Hooks.AbstractHookOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
     # catch_errors::Bool = true
 end
@@ -594,7 +602,7 @@ The `keys`, `values`, and `pairs` functions also pass through to the underlying 
 """
 struct SimHistory
     model::ModelDescription
-    log::AbstractLog
+    log::Logs.AbstractLog
     stop::AbstractStopReason
 end
 
@@ -802,7 +810,7 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     )
 end
 
-function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitors, t_end, t_next_suggested)
+function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, t_end, t_next_suggested)
 
     # Figure out how big this step can be.
 
@@ -834,7 +842,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
     # Step the continuous system. Note that this might not step all the way to the preferred
     # t_next.
-    solver_outputs   = solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
+    solver_outputs   = Solvers.solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
     t_next           = solver_outputs.t_completed
     msd              = solver_outputs.msd_k
     stop             = solver_outputs.stop
@@ -850,7 +858,28 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
 
     # If there's a reason to stop, bail on the rest of this step.
     if !isa(stop, UnknownStopReason)
-        return (t_last, msd, stop, t_next_suggested)
+        return (t_next, msd, stop, t_next_suggested)
+    end
+
+    # Update the hooks.
+    #
+    # We do this here so that hooks can interact with sim time in a reasonable way. Consider
+    # a real-time hook. It will have been initialized at t = 0, at which point it will start
+    # a stopwatch. It doesn't want to run the t = 0.1s update until 0.1s have passed since
+    # it ran its t = 0 update. By putting this here, we've identified `t_next` and solved
+    # the continuous-time stuff up to `t_next`. Now, we run this here, allowing the hook
+    # to sleep until its time for the discrete step at t_next to happen.
+    #
+    if !isempty(hooks)
+        m = model(msd)
+        for hook in hooks
+            hook_outputs = Hooks.update_hook!(hook, t_next, m)
+            if hook_outputs.stop
+                if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
+                    stop = HookRequestedStop(t_next, hook)
+                end
+            end
+        end
     end
 
     # Make the discrete draws.
@@ -863,25 +892,20 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, monitor
     # Log the updated values.
     log_discrete_stuff!(t_next, mh, updates)
 
-    # Update the monitors.
-    for m in monitors
-        Monitors.update_monitor!(m, t_next) # TODO: Let these stop the loop.
-    end
-
-    return (t_next, msd, UnknownStopReason(), t_next_suggested)
+    return (t_next, msd, stop, t_next_suggested)
 
 end
 
-function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_completed + get_initial_time_step(solver)
+    t_next_suggested = t_completed + Solvers.get_initial_time_step(solver)
     stop = UnknownStopReason()
     try
         while isa(stop, UnknownStopReason)
             t_completed, msd, stop, t_next_suggested = step!(
                 mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
-                solver, monitors, t_end, t_next_suggested,
+                solver, hooks, t_end, t_next_suggested,
             )
         end
     catch err
@@ -1009,34 +1033,40 @@ function simulate(
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
     model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
+    initial_model = model(msd)
 
-    # Use those descriptions to start the time histories.
-    log, mh = create_log(options.log, model_description, options.time_dimension)
+    # Use those descriptions to set up the time histories.
+    log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
 
     # Log the initial stuff.
     log_discrete_stuff!(t_start, mh, ommd)
 
     # Create the solver.
-    solver = create_solver(options.solver, msd)
+    solver = Solvers.create_solver(options.solver, msd)
 
-    # Create the monitors.
-    monitors = map(mo -> Monitors.create_monitor(mo, t_start, t_end), options.monitors)
+    # Create the hooks.
+    hooks = map(options.hooks) do hook_options
+        return Hooks.create_hook(hook_options, t, initial_model)
+    end
 
-    # Begin the loop.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, monitors)
+    # Propagate until we're done.
+    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+
+    # Create the final model.
+    final_model = model(msd)
 
     # Close out the models.
-    close_fcn(t_end, model(msd))
+    close_fcn(t_end, final_model)
 
     # Wrap up all of the history into a single object.
     history = SimHistory(model_description, log, stop)
 
-    # Close the monitors.
-    for m in monitors
-        Monitors.close_monitor!(m, t_end)
+    # Close the hooks.
+    for m in hooks
+        Hooks.close_hook!(m, t_end, final_model)
     end
 
-    return (history, t_end, model(msd))
+    return (history, t_end, final_model)
 
 end
 
