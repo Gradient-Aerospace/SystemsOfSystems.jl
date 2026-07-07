@@ -13,7 +13,7 @@ export BranchingSeed, branch
 export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation
 
-using Random: Xoshiro
+using Random: Xoshiro, AbstractRNG
 import Random
 
 include("TimeSeries.jl")
@@ -43,6 +43,7 @@ elements of the model, including:
 * `models`: A named tuple containing the ModelDescription of each submodel.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
   integrator will step no latter than this time, but may step earlier.
+* `rng`: The random number generator to use for the random variable functions.
 
 For the constants, states, and outputs, the value corresponding with each field can either
 be a raw value (e.g., 6.) or a `VariableDescription`, such as:
@@ -66,6 +67,7 @@ struct ModelDescription
     discrete_random_variables
     models
     t_next
+    rng::Union{Nothing, AbstractRNG}
 end
 ModelDescription(;
     type = Nothing,
@@ -78,14 +80,35 @@ ModelDescription(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
+    rng = nothing, # User can specify what they want, or nothing to inherit an RNG based on their breadcrumbs.
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
     models,
-    rationalize(t_next),
+    rationalize(t_next), rng,
 )
+
+"""
+This is the same as ModelDescription, except that any VariableDescription stuff has been
+pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
+"""
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+    type::Type{T} # This could actually be any function that takes kwargs.
+    constants::CT
+    continuous_states::XCT
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    continuous_random_variables::WCT
+    discrete_random_variables::WDT
+    models::MT
+    t_next::Rational{Int64}
+    rng::Xoshiro
+    has_continuous_random_subtree::Bool
+    has_discrete_random_subtree::Bool
+end
 
 """
 Describes a model's continuous-time derivatives and outputs.
@@ -103,12 +126,14 @@ struct RatesOutput{RT, OT, MT}
     models::MT
     stop::Bool # This could be AbstractStopReason, but that makes this type allocate, which is annoying, so for now, we leave this as bool.
 end
+const EMPTY_RATES_OUTPUT = RatesOutput((;), (;), (;), false)
 RatesOutput(;
     rates = (;),
     outputs = (;),
     models = (;),
     stop = false,
-) = RatesOutput(rates, outputs, models, stop)
+) = rates === (;) && outputs === (;) && models === (;) && stop === false ?
+    EMPTY_RATES_OUTPUT : RatesOutput(rates, outputs, models, stop)
 
 """
 Describes a model's discrete-time updates and outputs.
@@ -128,20 +153,68 @@ struct UpdatesOutput{UT, OT, MT}
     t_next::Rational{Int64}
     stop::Bool
 end
+const EMPTY_UPDATES_OUTPUT = UpdatesOutput((;), (;), (;), 0//1, false)
 UpdatesOutput(;
     updates = (;),
     outputs = (;),
     models = (;),
     t_next = 0//1,
     stop = false,
-) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
+) = updates === (;) && outputs === (;) && models === (;) && t_next === 0//1 && stop === false ?
+    EMPTY_UPDATES_OUTPUT : UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
 
 """
-    BranchingSeed
+These can be used to decorate the variables in a `ModelDescription`. The decorations become
+part of the `TimeSeries` for that variable. Example:
 
-This type is useful for making a tree of random seeds that trace back to a single top-level
-seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
-from it:
+```
+VariableDescription(
+    SA[1., 2., 3];
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+    interpolator = LinearInterpolation(),
+)
+```
+
+A `missing` value is allowed, but in that case, the type must be provided explicitly so that
+the `TimeSeries` knows what kind of types to expect. Example:
+
+```
+VariableDescription{SVector{3, Float64}}(
+    missing;
+    title = "Position",
+    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
+)
+```
+
+A variable's dimensions can also be grouped together. This only affects plots. Grouped
+dimensions will be plotted in a singnle axis, rather than each dimension getting its own
+axis. This can help make plots more compact, and it can be clearer to have multiple lines
+sharing a single axis in some cases. By default, each dimension will get its own group.
+
+A variable can also specify the interpolation policy that will be passed through to its
+`TimeSeries`. When omitted, the `TimeSeries` chooses its normal default based on whether
+the signal is continuous or discrete.
+"""
+struct VariableDescription{T}
+    value::Union{Missing, T}
+    title::String
+    dimensions::Vector{Dimension}
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+    interpolator::Any
+    # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
+end
+VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
+function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
+    return VariableDescription{T}(
+        value, title, Dimension[dimensions...], groups, interpolator,
+    )
+end
+
+"""
+This type is useful for making a tree of random number generators that trace back to a
+single random number generator. Here's an example of creating a `BranchingSeed` and creating
+a random number generator from it:
 
 ```
 seed = BranchingSeed(0, "")
@@ -193,62 +266,10 @@ function branch(seed::BranchingSeed, name::AbstractString)
     return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
 end
 
-"""
-    seed::BranchingSeed / name::AbstractString
+Base.:/(seed::BranchingSeed, name::AbstractString) = branch(seed, name)
 
-This is syntactic sugar for `branch(seed, name)`.
-"""
-function Base.:/(seed::BranchingSeed, name::AbstractString)
-    return branch(seed, name)
-end
-
-"""
-These can be used to decorate the variables in a `ModelDescription`. The decorations become
-part of the `TimeSeries` for that variable. Example:
-
-```
-VariableDescription(
-    SA[1., 2., 3];
-    title = "Position",
-    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
-    interpolator = LinearInterpolation(),
-)
-```
-
-A `missing` value is allowed, but in that case, the type must be provided explicitly so that
-the `TimeSeries` knows what kind of types to expect. Example:
-
-```
-VariableDescription{SVector{3, Float64}}(
-    missing;
-    title = "Position",
-    dimensions = ["x" => "m", "y" => "m", "z" => "m"],
-)
-```
-
-A variable's dimensions can also be grouped together. This only affects plots. Grouped
-dimensions will be plotted in a single axis, rather than each dimension getting its own
-axis. This can help make plots more compact, and it can be clearer to have multiple lines
-sharing a single axis in some cases. By default, each dimension will get its own group.
-
-A variable can also specify the interpolation policy that will be passed through to its
-`TimeSeries`. When omitted, the `TimeSeries` chooses its normal default based on whether
-the signal is continuous or discrete.
-"""
-struct VariableDescription{T}
-    value::Union{Missing, T}
-    title::String
-    dimensions::Vector{Dimension}
-    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
-    interpolator::Any
-    # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
-end
-VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
-function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
-    return VariableDescription{T}(
-        value, title, Dimension[dimensions...], groups, interpolator,
-    )
-end
+"Creates a Xoshiro RNG from the given BranchingSeed."
+Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
 
 """
     RandomVariableDescription{T}
@@ -265,7 +286,7 @@ struct RandomVariableDescription{T}
     seed::BranchingSeed
     title::String
     dimensions::Vector{Dimension}
-    groups::Union{Missing, Vector{Pair{String, Vector{String}}}} # Empty/missing groups won't be automatically plotted
+    groups::Union{Missing, Vector{Pair{String, Vector{String}}}}
 end
 RandomVariableDescription(f; kwargs...) = RandomVariableDescription{Any}(f; kwargs...)
 function RandomVariableDescription{T}(
@@ -279,18 +300,67 @@ function RandomVariableDescription{T}(
 end
 
 """
-    RandomVariable{F, T}
-
-Stores a function to take draws from `f::F` using the `rng::Xoshiro` such that `f(rng, t)`
-produces a random draw of type `T`, where `t` is time.
+Stores a function to take draws from `f` using a dedicated `Xoshiro` stream.
 """
 struct RandomVariable{F, T}
     f::F
     rng::Xoshiro
 end
 
-"Creates a Xoshiro RNG from the given BranchingSeed."
-Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
+strip_fluff_from_variable(var) = var
+strip_fluff_from_variable(var::VariableDescription) = var.value
+
+# If the user provided something like DiscreteWhiteNoise directly, just use the default
+# field-name-derived seed with it.
+strip_fluff_from_random_variable(f, seed) = RandomVariable{typeof(f), Any}(f, Xoshiro(seed))
+
+# Keep an already-realized random variable as-is.
+strip_fluff_from_random_variable(rv::RandomVariable, seed) = rv
+
+# If the user provided a random variable description, pull out the function and explicit
+# seed. Explicit seeds make the stream independent of where the model is mounted.
+function strip_fluff_from_random_variable(rvd::RandomVariableDescription{T}, seed) where {T}
+    return RandomVariable{typeof(rvd.f), T}(rvd.f, Xoshiro(rvd.seed))
+end
+
+function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
+
+    models = NamedTuple(
+        field => create_typed_model_description(
+            desc.models[field], branch(seed, string(field)),
+        )
+        for field in fieldnames(typeof(desc.models))
+    )
+    return TypedModelDescription(;
+        type = desc.type,
+        constants = map(strip_fluff_from_variable, desc.constants),
+        continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
+        discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
+        continuous_outputs = map(strip_fluff_from_variable, desc.continuous_outputs),
+        discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
+        continuous_random_variables = NamedTuple(
+            field => strip_fluff_from_random_variable(
+                desc.continuous_random_variables[field], seed / string(field),
+            )
+            for field in fieldnames(typeof(desc.continuous_random_variables))
+        ),
+        discrete_random_variables = NamedTuple(
+            field => strip_fluff_from_random_variable(
+                desc.discrete_random_variables[field], seed / string(field),
+            )
+            for field in fieldnames(typeof(desc.discrete_random_variables))
+        ),
+        models,
+        t_next = desc.t_next,
+        rng = isnothing(desc.rng) ? Xoshiro(seed) : desc.rng,
+        has_continuous_random_subtree = !isempty(desc.continuous_random_variables) || any(values(models)) do submodel
+            submodel.has_continuous_random_subtree
+        end,
+        has_discrete_random_subtree = !isempty(desc.discrete_random_variables) || any(values(models)) do submodel
+            submodel.has_discrete_random_subtree
+        end,
+    )
+end
 
 ##################
 # User Utilities #
@@ -314,6 +384,14 @@ is_regular_step_triggering(10.1, 0.20, 0.1) # true
 """
 function is_regular_step_triggering(t, step, offset = 0//1)
     return iszero(step) || (mod(rationalize(t - offset), rationalize(step)) == 0//1)
+end
+function is_regular_step_triggering(
+    t::Rational{Int64}, step::Rational{Int64}, offset::Rational{Int64} = 0//1,
+)
+    return iszero(step) || (mod(t - offset, step) == 0//1)
+end
+function is_regular_step_triggering(t::Rational{Int64}, step::Rational{Int64}, offset)
+    return is_regular_step_triggering(t, step, rationalize(offset))
 end
 
 """
@@ -363,87 +441,6 @@ function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
 end
 
 #########################
-# TypedModelDescription #
-#########################
-
-"""
-This is the same as ModelDescription, except that any VariableDescription stuff has been
-pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
-"""
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
-    type::Type{T} # This could actually be any function that takes kwargs.
-    constants::CT
-    continuous_states::XCT
-    discrete_states::XDT
-    continuous_outputs::YCT
-    discrete_outputs::YDT
-    continuous_random_variables::WCT
-    discrete_random_variables::WDT
-    models::MT
-    t_next::Rational{Int64}
-end
-
-strip_fluff_from_variable(var) = var
-strip_fluff_from_variable(var::VariableDescription) = var.value
-
-# If the user provided something like DiscreteWhiteNoise directly, just use the default
-# seed with it.
-function strip_fluff_from_random_variable(f::DiscreteWhiteNoise{T}, seed) where {T}
-    return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
-end
-function strip_fluff_from_random_variable(f::ContinuousWhiteNoise{T}, seed) where {T}
-    return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
-end
-
-# If the user provided a RandomVariable directly, assume they know exactly what they're
-# doing and just use it.
-strip_fluff_from_random_variable(rv::RandomVariable, seed) = rv
-
-# If the user provided a random variable description, pull out the part we care about.
-function strip_fluff_from_random_variable(rvd::RandomVariableDescription{T}, seed) where {T}
-    return RandomVariable{typeof(rvd.f), T}(rvd.f, Xoshiro(rvd.seed))
-end
-
-# If the user provided something else for taking draws..., well, we don't know what type it
-# produces, so we'll have to assume it's an Any. (This should use a
-# RandomVariableDescription if they want to be more explicit.)
-function strip_fluff_from_random_variable(f, seed)
-    return RandomVariable{typeof(f), Any}(f, Xoshiro(seed))
-end
-
-function strip_fluff_from_random_variable_set(random_variables, seed)
-    return NamedTuple{fieldnames(typeof(random_variables))}(
-        map(fieldnames(typeof(random_variables))) do fn
-            strip_fluff_from_random_variable(random_variables[fn], seed / string(fn))
-        end
-    )
-end
-
-function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
-    return TypedModelDescription(;
-        type = desc.type,
-        constants = map(strip_fluff_from_variable, desc.constants),
-        continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
-        discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
-        continuous_outputs = map(strip_fluff_from_variable, desc.continuous_outputs),
-        discrete_outputs = map(strip_fluff_from_variable, desc.discrete_outputs),
-        continuous_random_variables = strip_fluff_from_random_variable_set(
-            desc.continuous_random_variables, seed,
-        ),
-        discrete_random_variables = strip_fluff_from_random_variable_set(
-            desc.discrete_random_variables, seed,
-        ),
-        models = NamedTuple(
-            field => create_typed_model_description(
-                desc.models[field], seed / string(field),
-            )
-            for field in fieldnames(typeof(desc.models))
-        ),
-        t_next = desc.t_next,
-    )
-end
-
-#########################
 # ModelStateDescription #
 #########################
 
@@ -458,7 +455,7 @@ end
     models::MT
     t_next::Rational{Int64}
 end
-function ModelStateDescription{T}(;
+ModelStateDescription{T}(;
     constants = (;),
     continuous_states = (;),
     discrete_states = (;),
@@ -466,40 +463,86 @@ function ModelStateDescription{T}(;
     discrete_random_variables = (;),
     models = (;),
     t_next = 0//1,
-) where {T}
-    return ModelStateDescription{
-        T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
-        typeof(continuous_random_variables), typeof(discrete_random_variables),
-        typeof(models)
-    }(
-        constants, continuous_states, discrete_states,
-        continuous_random_variables, discrete_random_variables, models,
-        rationalize(t_next),
-    )
+) where {T} = ModelStateDescription{T, typeof(constants), typeof(continuous_states), typeof(discrete_states), typeof(continuous_random_variables), typeof(discrete_random_variables), typeof(models)}(
+    constants, continuous_states, discrete_states,
+    continuous_random_variables, discrete_random_variables, models,
+    rationalize(t_next),
+)
+
+const _COUNT_MODEL_CALLS = Ref(false)
+const _MODEL_CALL_COUNT = Ref(0)
+
+function __init__()
+    _COUNT_MODEL_CALLS[] = get(ENV, "SOS_COUNT_MODEL_CALLS", "0") == "1"
+    return nothing
 end
 
-# This has no allocations for bits types.
-function model(desc::ModelStateDescription{Nothing})
-    return (;
-        desc.constants...,
-        desc.continuous_states...,
-        desc.continuous_random_variables...,
-        desc.discrete_states...,
-        desc.discrete_random_variables...,
-        map(model, desc.models)...,
+function _count_model_call!()
+    if _COUNT_MODEL_CALLS[]
+        _MODEL_CALL_COUNT[] += 1
+    end
+    return nothing
+end
+reset_model_call_count!() = (_MODEL_CALL_COUNT[] = 0; nothing)
+model_call_count() = _MODEL_CALL_COUNT[]
+
+function _model_field_values(
+    ::Type{CT}, ::Type{XCT}, ::Type{XDT}, ::Type{WCT}, ::Type{WDT}, ::Type{MT},
+) where {CT, XCT, XDT, WCT, WDT, MT}
+    names = (
+        fieldnames(CT)...,
+        fieldnames(XCT)...,
+        fieldnames(WCT)...,
+        fieldnames(XDT)...,
+        fieldnames(WDT)...,
+        fieldnames(MT)...,
     )
+    values = [
+        [:(getfield(desc.constants, $(QuoteNode(name)))) for name in fieldnames(CT)]...,
+        [:(getfield(desc.continuous_states, $(QuoteNode(name)))) for name in fieldnames(XCT)]...,
+        [:(getfield(desc.continuous_random_variables, $(QuoteNode(name)))) for name in fieldnames(WCT)]...,
+        [:(getfield(desc.discrete_states, $(QuoteNode(name)))) for name in fieldnames(XDT)]...,
+        [:(getfield(desc.discrete_random_variables, $(QuoteNode(name)))) for name in fieldnames(WDT)]...,
+        [:(model(getfield(desc.models, $(QuoteNode(name))))) for name in fieldnames(MT)]...,
+    ]
+    return _deduplicate_model_field_values(names, values)
 end
 
-# This has no allocations for bits types.
-function model(desc::ModelStateDescription{T}) where {T}
-    return T(;
-        desc.constants...,
-        desc.continuous_states...,
-        desc.continuous_random_variables...,
-        desc.discrete_states...,
-        desc.discrete_random_variables...,
-        map(model, desc.models)...,
-    )
+function _deduplicate_model_field_values(names, values)
+    keep = Int[]
+    seen = Set{Symbol}()
+    for k in reverse(eachindex(names))
+        name = names[k]
+        if !(name in seen)
+            push!(keep, k)
+            push!(seen, name)
+        end
+    end
+    reverse!(keep)
+    return Tuple(names[k] for k in keep), values[keep]
+end
+
+@generated function model(
+    desc::ModelStateDescription{Nothing, CT, XCT, XDT, WCT, WDT, MT},
+) where {CT, XCT, XDT, WCT, WDT, MT}
+
+    names, values = _model_field_values(CT, XCT, XDT, WCT, WDT, MT)
+    return quote
+        _count_model_call!()
+        NamedTuple{$names}(($(values...),))
+    end
+
+end
+
+@generated function model(
+    desc::ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT},
+) where {T, CT, XCT, XDT, WCT, WDT, MT}
+    names, values = _model_field_values(CT, XCT, XDT, WCT, WDT, MT)
+    kwargs = Expr(:parameters, (Expr(:kw, name, value) for (name, value) in zip(names, values))...)
+    return quote
+        _count_model_call!()
+        $(Expr(:call, T, kwargs))
+    end
 end
 
 # This has no allocations for bits types.
@@ -515,6 +558,175 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
         kwargs...
     )
 end
+
+function copy_model_state_description_continuous(
+    md::ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT},
+    continuous_states::XCT2,
+    models::MT2,
+) where {T, CT, XCT, XDT, WCT, WDT, MT, XCT2, MT2}
+    return ModelStateDescription{T, CT, XCT2, XDT, WCT, WDT, MT2}(
+        md.constants,
+        continuous_states,
+        md.discrete_states,
+        md.continuous_random_variables,
+        md.discrete_random_variables,
+        models,
+        md.t_next,
+    )
+end
+
+function copy_model_state_description_discrete(
+    md::ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT},
+    discrete_states::XDT2,
+    models::MT2,
+    t_next::Rational{Int64},
+) where {T, CT, XCT, XDT, WCT, WDT, MT, XDT2, MT2}
+    return ModelStateDescription{T, CT, XCT, XDT2, WCT, WDT, MT2}(
+        md.constants,
+        md.continuous_states,
+        discrete_states,
+        md.continuous_random_variables,
+        md.discrete_random_variables,
+        models,
+        t_next,
+    )
+end
+
+####################
+# Fast RK4 Runtime #
+####################
+
+"""
+    build_fast_runtime(ommd, msd, rates_fcn, updates_fcn, solver)
+
+Internal extension point for no-log RK4 runtimes.
+
+The default runtime is a cached model builder. It keeps immutable subtrees that have no
+continuous state fixed during RK4 stages and reconstructs only the stateful branches.
+External packages can add more specialized runtimes by extending this method.
+
+The returned runtime is used only when the simulation has no log, no hooks, an RK4 solver,
+and no continuous random-variable subtree. Returning `nothing` disables the fast path.
+"""
+function build_fast_runtime(ommd, msd::ModelStateDescription, rates_fcn, updates_fcn, solver)
+    get(ENV, "SOS_FAST_RK4", "1") == "cached" || return nothing
+    return _build_cached_model_runtime(msd)
+end
+
+supports_fast_rk4_runtime(runtime) = false
+
+# Optional model-specific fast path for one RK4 step. Returning `nothing` falls back to the
+# generic no-output RK4 implementation.
+fast_rk4_step!(runtime, ommd, solver, t_last, t_next, msd, rates_fcn) = nothing
+
+# Optional model-specific discrete update path. `fast_updates!` is used by the normal loop
+# when it still needs an UpdatesOutput for logging; `fast_update_msd!` is used by the fully
+# no-log loop when the model-state description alone is enough.
+fast_updates!(runtime, t, msd, updates_fcn) = nothing
+fast_update_msd!(runtime, t, msd, updates_fcn) = nothing
+
+# Dynamics/update calls that skip output construction. Models can specialize these when
+# `rates(..., Val(false))` or `updates(..., Val(false))` APIs exist.
+rates_no_outputs(rates_fcn, t, model) = rates_fcn(t, model)
+updates_no_outputs(updates_fcn, t, model) = updates_fcn(t, model)
+
+struct CachedModelRuntime{M, MT, C}
+    model::M
+    models::MT
+end
+
+supports_fast_rk4_runtime(::CachedModelRuntime) = true
+
+@generated function _has_continuous_state_subtree(::Type{MSD}) where {MSD <: ModelStateDescription}
+    xct = MSD.parameters[3]
+    mt = MSD.parameters[7]
+    checks = [
+        :(_has_continuous_state_subtree(fieldtype($mt, $(QuoteNode(name)))))
+        for name in fieldnames(mt)
+    ]
+    if isempty(checks)
+        return :(!isempty(fieldnames($xct)))
+    end
+    return :(!isempty(fieldnames($xct)) || $(foldl((a, b) -> :($a || $b), checks)))
+end
+
+_has_continuous_state_subtree(msd::ModelStateDescription) =
+    _has_continuous_state_subtree(typeof(msd))
+
+function _build_cached_model_runtime(msd::ModelStateDescription)
+    models = NamedTuple{keys(msd.models)}(
+        map(_build_cached_model_runtime, values(msd.models)),
+    )
+    cached_model = model(msd)
+    cacheable = !_has_continuous_state_subtree(msd)
+    return CachedModelRuntime{typeof(cached_model), typeof(models), cacheable}(
+        cached_model, models,
+    )
+end
+
+fast_model(::Nothing, msd::ModelStateDescription) = model(msd)
+fast_model(runtime::CachedModelRuntime{M, MT, true}, msd::ModelStateDescription) where {M, MT} =
+    runtime.model
+
+function _fast_model_field_values(
+    ::Type{RT}, ::Type{CT}, ::Type{XCT}, ::Type{XDT}, ::Type{WCT}, ::Type{WDT},
+    ::Type{MT},
+) where {RT, CT, XCT, XDT, WCT, WDT, MT}
+    names = (
+        fieldnames(CT)...,
+        fieldnames(XCT)...,
+        fieldnames(WCT)...,
+        fieldnames(XDT)...,
+        fieldnames(WDT)...,
+        fieldnames(MT)...,
+    )
+    values = [
+        [:(getfield(desc.constants, $(QuoteNode(name)))) for name in fieldnames(CT)]...,
+        [:(getfield(desc.continuous_states, $(QuoteNode(name)))) for name in fieldnames(XCT)]...,
+        [:(getfield(desc.continuous_random_variables, $(QuoteNode(name)))) for name in fieldnames(WCT)]...,
+        [:(getfield(desc.discrete_states, $(QuoteNode(name)))) for name in fieldnames(XDT)]...,
+        [:(getfield(desc.discrete_random_variables, $(QuoteNode(name)))) for name in fieldnames(WDT)]...,
+        [:(fast_model(
+            getfield(runtime.models, $(QuoteNode(name))),
+            getfield(desc.models, $(QuoteNode(name))),
+        )) for name in fieldnames(MT)]...,
+    ]
+    return _deduplicate_model_field_values(names, values)
+end
+
+@generated function fast_model(
+    runtime::CachedModelRuntime{M, RT, false},
+    desc::ModelStateDescription{Nothing, CT, XCT, XDT, WCT, WDT, MT},
+) where {M, RT, CT, XCT, XDT, WCT, WDT, MT}
+    names, values = _fast_model_field_values(RT, CT, XCT, XDT, WCT, WDT, MT)
+    return :(NamedTuple{$names}(($(values...),)))
+end
+
+@generated function fast_model(
+    runtime::CachedModelRuntime{M, RT, false},
+    desc::ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT},
+) where {M, RT, T, CT, XCT, XDT, WCT, WDT, MT}
+    names, values = _fast_model_field_values(RT, CT, XCT, XDT, WCT, WDT, MT)
+    kwargs = Expr(:parameters, (Expr(:kw, name, value) for (name, value) in zip(names, values))...)
+    return Expr(:call, T, kwargs)
+end
+
+_fast_rk4_enabled() = get(ENV, "SOS_FAST_RK4", "1") != "0"
+
+function _maybe_build_fast_runtime(mh, hooks, ommd, rates_fcn, updates_fcn, solver, msd)
+    if _fast_rk4_enabled() &&
+       mh === nothing &&
+       isempty(hooks) &&
+       solver isa Solvers.RungeKutta4 &&
+       !ommd.has_continuous_random_subtree
+        runtime = build_fast_runtime(ommd, msd, rates_fcn, updates_fcn, solver)
+        supports_fast_rk4_runtime(runtime) && return runtime
+    end
+    return nothing
+end
+
+refresh_fast_runtime(runtime, mh, hooks, ommd, rates_fcn, updates_fcn, solver, msd) =
+    _maybe_build_fast_runtime(mh, hooks, ommd, rates_fcn, updates_fcn, solver, msd)
 
 #########
 # Hooks #
@@ -559,10 +771,14 @@ describe(stop::EncounteredError) = "The sim experienced an error."
 include("Logs.jl")
 using .Logs
 
+const _RECORD_OUTPUTS = Ref(true)
+record_outputs() = _RECORD_OUTPUTS[]
+
 # We define this here so Solvers can import the symbol.
 function draw_wc end
 
 include("Solvers.jl")
+using .Solvers
 
 """
 A set of options for the `simulate` function, with keyword arguments for:
@@ -602,7 +818,7 @@ The `keys`, `values`, and `pairs` functions also pass through to the underlying 
 """
 struct SimHistory
     model::ModelDescription
-    log::Logs.AbstractLog
+    log::AbstractLog
     stop::AbstractStopReason
 end
 
@@ -632,12 +848,12 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # The Loop #
 ############
 
-# Functions for drawing from the sets of random variables
 function draw_crvs(crvs, t_last, t_next)
     return map(crvs) do rv
         return rv.f(rv.rng, t_last, t_next)
     end
 end
+
 function draw_drvs(drvs, t)
     return map(drvs) do rv
         return rv.f(rv.rng, t)
@@ -645,6 +861,7 @@ function draw_drvs(drvs, t)
 end
 
 function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+    ommd.has_continuous_random_subtree || return msd
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
             ommd.continuous_random_variables, t_last, t_next,
@@ -664,7 +881,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.continuous_states,
         ommd.discrete_states,
         continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
+            ommd.continuous_random_variables, float(t), t + 1.,
         ),
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         models = NamedTuple(
@@ -676,6 +893,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
 end
 
 function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+    ommd.has_discrete_random_subtree || return msd
     return copy_model_state_description_except(msd;
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         models = NamedTuple{keys(msd.models)}(
@@ -737,17 +955,21 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
-    return NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if hasfield(T2, f)
-                updated_discrete_states[f]
-            else
-                discrete_states[f]
-            end
-        end
-    )
+@generated function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
+    names = fieldnames(T1)
+    values = [
+        hasfield(T2, name) ?
+            :(getfield(updated_discrete_states, $(QuoteNode(name)))) :
+            :(getfield(discrete_states, $(QuoteNode(name))))
+        for name in names
+    ]
+    return :(NamedTuple{$names}(($(values...),)))
 end
+
+is_empty_updates_output(updates_output::UpdatesOutput) =
+    isempty(fieldnames(typeof(updates_output.updates))) &&
+    isempty(fieldnames(typeof(updates_output.models))) &&
+    iszero(updates_output.t_next)
 
 # Note: the return type parameter here helps this to not allocate, but it might be overly
 # restrictive. If types can change, should MSD know about that ahead of time?
@@ -755,32 +977,19 @@ end
 # `submodels` is a named tuple of MSDs.
 # `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
 #
-function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
-
-    # A model's `models` section of the UpdatesOutput need not be complete. E.g., if it has
-    # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
-    # operation). However, in order to make this operation efficient, we'll build a
-    # "complete" set of updates, where every model is listed, and if it wasn't in the
-    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
-    # we'll have a named tuple that matches submodels in fields (including their order),
-    # and we can just map out `update` function to the corresponding submodels and updates.
-    #
-    # This is one of our more tedious concessions to efficiency, but honestly, it's not all
-    # that bad.
-    #
-    complete_submodels_updates = NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if hasfield(T2, f)
-                submodels_updates[f]
-            else
-                UpdatesOutput()
-            end
-        end
-    )
-
-    # Now this map doesn't allocate at all:
-    return map(update, submodels, complete_submodels_updates)
-
+@generated function update_submodels(
+    submodels::NamedTuple{names}, submodels_updates::T2,
+) where {names, T2}
+    values = [
+        hasfield(T2, name) ?
+            :(update(
+                getfield(submodels, $(QuoteNode(name))),
+                getfield(submodels_updates, $(QuoteNode(name))),
+            )) :
+            :(getfield(submodels, $(QuoteNode(name))))
+        for name in names
+    ]
+    return :(NamedTuple{$names}(($(values...),)))
 end
 
 # If there's no t_next, keep the last one.
@@ -789,13 +998,31 @@ function update_model_t_next(last_t_next, updated_t_next)
 end
 
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
-    return copy_model_state_description_except(
-        msd;
+    is_empty_updates_output(updates_output) && return msd
+    return copy_model_state_description_discrete(
+        msd,
         # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
-        models = update_submodels(msd.models, updates_output.models),
-        t_next = update_model_t_next(msd.t_next, updates_output.t_next),
+        update_discrete_states(msd.discrete_states, updates_output.updates),
+        update_submodels(msd.models, updates_output.models),
+        update_model_t_next(msd.t_next, updates_output.t_next),
     )
+end
+
+@generated function find_soonest_t_next_from_submodels(t_last, models::NamedTuple{names}) where {names}
+    updates = [
+        quote
+            t_next_from_submodel = find_soonest_t_next_from_models(
+                t_last, getfield(models, $(QuoteNode(name))),
+            )
+            soonest = min(soonest, t_next_from_submodel)
+        end
+        for name in names
+    ]
+    return quote
+        soonest = 1//0
+        $(updates...)
+        return soonest
+    end
 end
 
 function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
@@ -804,13 +1031,13 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     else
         1//0 # If t_next is in the past, it no longer limits us.
     end
-    return minimum(
-        find_soonest_t_next_from_models(t_last, el) for el in msd.models;
-        init = t_next_from_this_model,
-    )
+    return min(t_next_from_this_model, find_soonest_t_next_from_submodels(t_last, msd.models))
 end
 
-function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, t_end, t_next_suggested)
+function step!(
+    mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, t_end,
+    t_next_suggested, fast_runtime,
+)
 
     # Figure out how big this step can be.
 
@@ -832,17 +1059,42 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
 
     # Get the soonest from what the user asked for, what the integrator suggested, and what
-    # the models requested.
-    t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
+    # the models requested. When no one observes solver samples, let fixed-step solvers take
+    # internal substeps and only return at user/model event boundaries.
+    use_internal_substepping =
+        mh === nothing && isempty(hooks) && Solvers.handles_internal_substepping(solver)
+    t_next = if use_internal_substepping
+        min(t_next_from_user, t_next_from_models)
+    else
+        min(t_next_from_user, t_next_suggested, t_next_from_models)
+    end
 
     # Perform the continuous-time update from t_last to t_next.
     # println("Stepping from $(float(t_last)) to $(float(t_next)).")
 
     # Potentially, we should draw_wc and keep the end step time no matter what.
 
+    use_no_output_fast_path = mh === nothing && isempty(hooks) && _fast_rk4_enabled()
+
     # Step the continuous system. Note that this might not step all the way to the preferred
     # t_next.
-    solver_outputs   = Solvers.solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
+    solver_outputs = if solver isa Solvers.RungeKutta4
+        if use_no_output_fast_path
+            solve(
+                ommd, solver, t_last, t_next, msd, rates_fcn, t_end, fast_runtime,
+                Val(false),
+            )
+        else
+            solve(
+                ommd, solver, t_last, t_next, msd, rates_fcn, t_end, fast_runtime,
+                Val(true),
+            )
+        end
+    elseif fast_runtime === nothing
+        solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
+    else
+        solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end, fast_runtime)
+    end
     t_next           = solver_outputs.t_completed
     msd              = solver_outputs.msd_k
     stop             = solver_outputs.stop
@@ -858,54 +1110,141 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
 
     # If there's a reason to stop, bail on the rest of this step.
     if !isa(stop, UnknownStopReason)
-        return (t_next, msd, stop, t_next_suggested)
+        return (t_next, msd, stop, t_next_suggested, fast_runtime)
     end
 
-    # Update the hooks.
-    #
-    # We do this here so that hooks can interact with sim time in a reasonable way. Consider
-    # a real-time hook. It will have been initialized at t = 0, at which point it will start
-    # a stopwatch. It doesn't want to run the t = 0.1s update until 0.1s have passed since
-    # it ran its t = 0 update. By putting this here, we've identified `t_next` and solved
-    # the continuous-time stuff up to `t_next`. Now, we run this here, allowing the hook
-    # to sleep until its time for the discrete step at t_next to happen.
-    #
+    # Hooks observe the continuous-time state at the discrete step boundary before
+    # discrete updates run. They can also request a stop, for example on real-time timeout.
     if !isempty(hooks)
         m = model(msd)
         for hook in hooks
             hook_outputs = Hooks.update_hook!(hook, t_next, m)
-            if hook_outputs.stop
-                if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
-                    stop = HookRequestedStop(t_next, hook)
-                end
+            if hook_outputs.stop && isa(stop, UnknownStopReason)
+                stop = HookRequestedStop(t_next, hook)
             end
         end
     end
 
-    # Make the discrete draws.
-    msd = draw_wd(t_next, ommd, msd)
+    run_discrete_update = !use_internal_substepping ||
+        (t_next == t_next_from_user) ||
+        (t_next == t_next_from_models)
 
-    # Perform the discrete update from t_next^- to t_next^+.
-    updates = updates_fcn(t_next, model(msd))
-    msd = update(msd, updates)
+    if run_discrete_update
+        # Make the discrete draws.
+        msd = draw_wd(t_next, ommd, msd)
 
-    # Log the updated values.
-    log_discrete_stuff!(t_next, mh, updates)
+        # Perform the discrete update from t_next^- to t_next^+.
+        updates = EMPTY_UPDATES_OUTPUT
+        fast_update = if use_no_output_fast_path && fast_runtime !== nothing
+            fast_updates!(fast_runtime, t_next, msd, updates_fcn)
+        else
+            nothing
+        end
+        if fast_update !== nothing
+            msd, updates = fast_update
+        elseif use_no_output_fast_path
+            update_model = fast_model(fast_runtime, msd)
+            updates = updates_no_outputs(updates_fcn, t_next, update_model)
+            msd = update(msd, updates)
+        else
+            update_model = fast_model(fast_runtime, msd)
+            updates = updates_fcn(t_next, update_model)
+            msd = update(msd, updates)
+        end
+        if fast_runtime !== nothing
+            fast_runtime = refresh_fast_runtime(
+                fast_runtime,
+                mh, hooks, ommd, rates_fcn, updates_fcn, solver, msd,
+            )
+        end
 
-    return (t_next, msd, stop, t_next_suggested)
+        # Log the updated values.
+        log_discrete_stuff!(t_next, mh, updates)
+    end
 
+    return (t_next, msd, stop, t_next_suggested, fast_runtime)
+
+end
+
+function loop_fast_rk4_no_log!(
+    t,
+    ommd,
+    rates_fcn,
+    updates_fcn,
+    msd,
+    solver::Solvers.RungeKutta4,
+    fast_runtime,
+)
+    t_completed = first(t)
+    t_end = last(t)
+    t_next_suggested = t_completed + get_initial_time_step(solver)
+    k_next_requested_stop = searchsortedlast(t, t_completed) + 1
+
+    try
+        while t_completed < t_end
+            while k_next_requested_stop <= lastindex(t) &&
+                    t[k_next_requested_stop] <= t_completed
+                k_next_requested_stop += 1
+            end
+            t_next_from_user = if k_next_requested_stop > lastindex(t)
+                last(t)
+            else
+                t[k_next_requested_stop]
+            end
+            t_next_from_models = find_soonest_t_next_from_models(t_completed, msd)
+            t_next = min(t_next_from_user, t_next_from_models)
+
+            t_completed, _msd_km1, msd, t_next_suggested = Solvers.solve_no_outputs(
+                ommd, solver, t_completed, t_next, msd, rates_fcn, fast_runtime,
+            )
+
+            if (t_completed == t_next_from_user) || (t_completed == t_next_from_models)
+                msd = draw_wd(t_completed, ommd, msd)
+                updated_msd = fast_update_msd!(
+                    fast_runtime, t_completed, msd, updates_fcn,
+                )
+                if updated_msd !== nothing
+                    msd = updated_msd
+                else
+                    update_model = fast_model(fast_runtime, msd)
+                    updates = updates_no_outputs(updates_fcn, t_completed, update_model)
+                    msd = update(msd, updates)
+                end
+                fast_runtime = refresh_fast_runtime(
+                    fast_runtime,
+                    nothing, (), ommd, rates_fcn, updates_fcn,
+                    solver, msd,
+                )
+            end
+        end
+        return (t_completed, msd, ReachedEndTime(t_end))
+    catch err
+        trace = stacktrace(catch_backtrace())
+        showerror(stderr, err, trace)
+        return (t_completed, msd, EncounteredError(float(t_completed), err, trace))
+    end
 end
 
 function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_completed + Solvers.get_initial_time_step(solver)
+    t_next_suggested = t_completed + get_initial_time_step(solver)
+    fast_runtime = _maybe_build_fast_runtime(mh, hooks, ommd, rates_fcn, updates_fcn, solver, msd)
+    if mh === nothing &&
+            isempty(hooks) &&
+            solver isa Solvers.RungeKutta4 &&
+            fast_runtime !== nothing &&
+            _fast_rk4_enabled()
+        return loop_fast_rk4_no_log!(
+            t, ommd, rates_fcn, updates_fcn, msd, solver, fast_runtime,
+        )
+    end
     stop = UnknownStopReason()
     try
         while isa(stop, UnknownStopReason)
-            t_completed, msd, stop, t_next_suggested = step!(
+            t_completed, msd, stop, t_next_suggested, fast_runtime = step!(
                 mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
-                solver, hooks, t_end, t_next_suggested,
+                solver, hooks, t_end, t_next_suggested, fast_runtime,
             )
         end
     catch err
@@ -922,7 +1261,7 @@ end
 
 function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
 
-    # Create the top-level branching seed used for default random-variable streams.
+    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
     branching_seed = BranchingSeed(seed, "")
 
     # Now that the time histories are started, we have no further use of the
@@ -941,7 +1280,7 @@ end
 
 function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 
-    # Create the top-level branching seed that will be passed to the user's init function.
+    # Initialize the RNG and make a salt that we'll use to seed submodels' RNGs.
     branching_seed = BranchingSeed(seed, "")
 
     # Run the initialization to get the description of the models given the prototype.
@@ -966,11 +1305,11 @@ function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
 end
 
 """
-    initialize(user_data; init_fcn, seed = 0, t_start = 0)
+    initialize(user_data; init_fcn, seed = BranchingSeed(0, ""), t_start = 0)
 
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
 optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
-it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
+it.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -981,8 +1320,6 @@ end
 
 This is useful for debugging model initialization. Given a `ModelDescription` (such as would
 be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
-The `seed` is used for random variables that do not provide their own
-`RandomVariableDescription` seed.
 """
 function initialize(
     model_description::ModelDescription;
@@ -1010,8 +1347,7 @@ Runs a simulation, returning the time history, end time, and final model.
   `UpdatesOutput`.
 * `close_fcn`: Will be called when simulation completes (even if an error is caught) with
   `(t, model)`. No return value is expected.
-* `seed`: A top-level seed (Int) to control all random number generation in the sim. The
-  `init_fcn` receives this as a `BranchingSeed`.
+* `seed`: A top-level seed (Int) to control all random number generation in the sim.
 * `options`: See `SimOptions`.
 """
 function simulate(
@@ -1033,26 +1369,34 @@ function simulate(
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
     model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
-    initial_model = model(msd)
 
-    # Use those descriptions to set up the time histories.
-    log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
+    # Use those descriptions to start the time histories.
+    log, mh = create_log(options.log, model_description, options.time_dimension)
 
     # Log the initial stuff.
     log_discrete_stuff!(t_start, mh, ommd)
 
     # Create the solver.
-    solver = Solvers.create_solver(options.solver, msd)
+    solver = create_solver(options.solver, msd)
+
+    initial_model = model(msd)
 
     # Create the hooks.
     hooks = map(options.hooks) do hook_options
         return Hooks.create_hook(hook_options, t, initial_model)
     end
 
-    # Propagate until we're done.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+    # Begin the loop. Continuous outputs are only consumed by logs, so hot model code can
+    # skip output-only work for NullLogOptions.
+    record_outputs_was = _RECORD_OUTPUTS[]
+    _RECORD_OUTPUTS[] = mh !== nothing
+    stop = UnknownStopReason()
+    try
+        t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+    finally
+        _RECORD_OUTPUTS[] = record_outputs_was
+    end
 
-    # Create the final model.
     final_model = model(msd)
 
     # Close out the models.
@@ -1062,8 +1406,8 @@ function simulate(
     history = SimHistory(model_description, log, stop)
 
     # Close the hooks.
-    for m in hooks
-        Hooks.close_hook!(m, t_end, final_model)
+    for hook in hooks
+        Hooks.close_hook!(hook, t_end, final_model)
     end
 
     return (history, t_end, final_model)

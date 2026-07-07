@@ -328,6 +328,98 @@ end
 
 end
 
+@testset "RK4 no-log internal substepping" begin
+    dt = 1 // 250
+    t_end = 1 // 25
+    solver = Solvers.RungeKutta4Options(; dt)
+
+    linear_init = (args...) -> ModelDescription(;
+        constants = (; time_constant = 2.0),
+        continuous_states = (; x = 1.0),
+    )
+    linear_rates = (t, model) -> RatesOutput(;
+        rates = (; x = -model.x / model.time_constant),
+    )
+
+    _, _, linear_logged = simulate(
+        nothing;
+        init_fcn = linear_init,
+        rates_fcn = linear_rates,
+        t = 0.0:float(dt):float(t_end),
+        options = SimOptions(; solver, log = Logs.BasicLogOptions(), hooks = []),
+    )
+    _, _, linear_no_log = simulate(
+        nothing;
+        init_fcn = linear_init,
+        rates_fcn = linear_rates,
+        t = (0.0, float(t_end)),
+        options = SimOptions(; solver, log = Logs.NullLogOptions(), hooks = []),
+    )
+    @test linear_no_log.x ≈ linear_logged.x atol = 1e-12 rtol = 0
+
+    nonlinear_init = (args...) -> ModelDescription(;
+        continuous_states = (; x = 0.25),
+    )
+    nonlinear_rates = (t, model) -> RatesOutput(;
+        rates = (; x = sin(t) + model.x^2),
+    )
+
+    _, _, nonlinear_logged = simulate(
+        nothing;
+        init_fcn = nonlinear_init,
+        rates_fcn = nonlinear_rates,
+        t = 0.0:float(dt):float(t_end),
+        options = SimOptions(; solver, log = Logs.BasicLogOptions(), hooks = []),
+    )
+    _, _, nonlinear_no_log = simulate(
+        nothing;
+        init_fcn = nonlinear_init,
+        rates_fcn = nonlinear_rates,
+        t = (0.0, float(t_end)),
+        options = SimOptions(; solver, log = Logs.NullLogOptions(), hooks = []),
+    )
+    @test nonlinear_no_log.x ≈ nonlinear_logged.x atol = 1e-12 rtol = 0
+end
+
+@testset "RK4 no-log preserves model event updates" begin
+    dt = 1 // 250
+    t_end = 5 * dt
+    solver = Solvers.RungeKutta4Options(; dt)
+
+    init = (args...) -> ModelDescription(;
+        continuous_states = (; x = 0.0),
+        discrete_states = (; n = 0),
+        t_next = dt,
+    )
+    rates = (t, model) -> RatesOutput(;
+        rates = (; x = Float64(model.n)),
+    )
+    updates = (t, model) -> UpdatesOutput(;
+        updates = (; n = model.n + 1),
+        t_next = t + dt,
+    )
+
+    _, _, logged = simulate(
+        nothing;
+        init_fcn = init,
+        rates_fcn = rates,
+        updates_fcn = updates,
+        t = 0.0:float(dt):float(t_end),
+        options = SimOptions(; solver, log = Logs.BasicLogOptions(), hooks = []),
+    )
+    _, _, no_log = simulate(
+        nothing;
+        init_fcn = init,
+        rates_fcn = rates,
+        updates_fcn = updates,
+        t = (0.0, float(t_end)),
+        options = SimOptions(; solver, log = Logs.NullLogOptions(), hooks = []),
+    )
+
+    @test no_log.n == logged.n == 5
+    @test no_log.x ≈ logged.x atol = 1e-12 rtol = 0
+end
+
 # Here's a discrete-only sim.
 @testset failfast = false "discrete exponential" begin
 
