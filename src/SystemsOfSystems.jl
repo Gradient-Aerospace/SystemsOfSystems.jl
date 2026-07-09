@@ -360,10 +360,54 @@ function strip_fluff_from_random_variable_set(random_variables, seed)
     )
 end
 
-function create_typed_model_description(
+# This type is used to store resources that need to be closed. It's only used during
+# initialization.
+@kwdef struct ResourceManager
+    descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
+    payloads::Vector{Any} = Any[]
+end
+function add_resource!(manager::ResourceManager, description::Resources.AbstractResource, payload)
+    push!(manager.descriptions, description)
+    push!(manager.payloads, payload)
+    return nothing
+end
+function try_to_close_resource(resource, payload)
+        try
+            Resources.close_resource(resource, payload)
+        catch err
+            trace = catch_backtrace()
+            @error "Failed to close resource = $resource. Continuing..." exception = (err, trace)
+        end
+end
+function close_resources(manager::ResourceManager)
+    for (description, payload) in zip(manager.descriptions, manager.payloads)
+        try_to_close_resource(description, payload)
+    end
+    return nothing
+end
+
+function create_typed_model_description!(
+    manager::ResourceManager,
     desc::ModelDescription, seed::BranchingSeed,
     outdir::Union{Nothing, String}, model_path::String,
 )
+
+    # Create the resources one by one, recording a function to close each if something goes
+    # wrong.
+    payloads = Any[]
+    for resource in desc.resources
+        payload = Resource.open_resource(resource, outdir, model_path)
+        add_resource!(manager, resource, payload)
+        push!(payloads, payload)
+    end
+
+    # Make the set of resources.
+    resources = NamedTuple(
+        field => payload
+        for (field, payload) in zip(fieldnames(typeof(desc.resources)), payloads)
+    )
+
+    # Strip the "fluff" from everything, returning just the types we'll need in the loop.
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -378,18 +422,17 @@ function create_typed_model_description(
             desc.discrete_random_variables, seed,
         ),
         models = NamedTuple(
-            field => create_typed_model_description(
+            field => create_typed_model_description!(
+                manager,
                 desc.models[field], seed / string(field), outdir,
                 model_path * "/" * string(field)
             )
             for field in fieldnames(typeof(desc.models))
         ),
-        resources = NamedTuple(
-            field => Resource.open_resource(desc.resources[field], outdir, model_path)
-            for field in fieldnames(typeof(desc.resources))
-        ),
+        resources,
         t_next = desc.t_next,
     )
+
 end
 
 #########################
@@ -504,11 +547,10 @@ describe(stop::EncounteredError) = "The sim experienced an error."
 # SimOptions #
 ##############
 
-include("Logs.jl")
-
 # We define this here so Solvers can import the symbol.
 function draw_wc end
 
+include("Logs.jl")
 include("Solvers.jl")
 
 """
@@ -882,14 +924,12 @@ function _initialize(
     outdir = nothing,
 )
 
-    # Run the initialization to get the description of the models given the prototype.
+    # Run the initialization to get the description of the model given the prototype.
     seed = get_branching_seed(seed)
     model_description = init_fcn(t_start, model_prototype, seed)
 
     # We can now get the typed model description and model state description.
-    (; ommd, msd) = _initialize(model_description; t_start, model_path, seed, outdir)
-
-    return (; model_description, ommd, msd)
+    return _initialize(model_description; t_start, model_path, seed, outdir)
 
 end
 
@@ -903,16 +943,31 @@ function _initialize(
     outdir = nothing,
 )
 
-    # We should be done with VariableDescriptions, etc., at this point. Now, we can strip
-    # all of those out to obtain the simplified TypedModelDescription.
-    seed = get_branching_seed(seed)
-    ommd = create_typed_model_description(model_description, seed, outdir, model_path)
+    # We'll keep track of resources we create along the way so that we can close them.
+    manager = ResourceManager()
 
-    # We can now fill in the draws to have a complete "model state description", from which
-    # we can construct the model form.
-    msd = create_model_state(t_start, ommd)
+    try
 
-    return (; model_description, ommd, msd)
+        # We should be done with VariableDescriptions, etc., at this point. Now, we can
+        # strip all of those out to obtain the simplified TypedModelDescription.
+        seed = get_branching_seed(seed)
+        ommd = create_typed_model_description!(manager, model_description, seed, outdir, model_path)
+
+        # We can now fill in the draws to have a complete "model state description", from
+        # which we can construct the model form.
+        msd = create_model_state(t_start, ommd)
+
+        return (; model_description, ommd, msd, manager)
+
+    catch err
+
+        # Make sure we close anything we opened along the way.
+        close_resources(manager)
+
+        # Now return to the regular error.
+        rethrow(err)
+
+    end
 
 end
 
@@ -962,27 +1017,18 @@ will automatically close all opened resources, even if there was an error.
 All additional `args` and `kwargs` are the same as for the other initialization functions.
 """
 function initialize(f::Function, args...; kwargs...)
-    (; model_description, ommd, msd) = _initialize(args...; kwargs...)
+
+    # Initialize everything. If there's an error during this process, all resources that
+    # were opened along the way will be closed, and then the error will be re-thrown, so if
+    # this function completes, all of the resources (and everything else) went well.
+    (; model_description, ommd, msd, manager) = _initialize(args...; kwargs...)
+
+    # Now try to run the function, returning whatever it returns.
     try
         f(model(msd))
     finally
-        close_resources(model_description, msd)
+        close_resources(manager)
     end
-end
-
-function close_resources(desc::ModelDescription, msd::ModelStateDescription)
-
-    # Let the submodels close their resources.
-    for mn in fieldnames(typeof(desc.models))
-        close_resources(desc.models[mn], msd.models[mn])
-    end
-
-    # Close this model's resources.
-    for fn in fieldnames(typeof(desc.resources))
-        close_resource(desc.resources[fn], msd.resources[fn])
-    end
-
-    return nothing
 
 end
 
@@ -1001,7 +1047,7 @@ function Base.close(desc::ModelDescription, m)
 
     # Close this model's resources.
     for fn in fieldnames(typeof(desc.resources))
-        close_resource(desc.resources[fn], m[fn])
+        try_to_close_resource(desc.resources[fn], m[fn])
     end
 
     return nothing
@@ -1053,48 +1099,60 @@ function simulate(
 
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
-    model_description, ommd, msd = _initialize(
+    model_description, ommd, msd, manager = _initialize(
         model_prototype;
         init_fcn, t_start, seed, options.outdir,
     )
-    initial_model = model(msd)
 
-    # TODO: Now that we're initialized, potentially with resources that have been created,
-    # should we put this whole thing in a try/catch?
+    # Outputs from the try block
+    history = nothing
+    final_model = nothing
 
-    # Use those descriptions to set up the time histories.
-    log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
+    try
 
-    # Log the initial stuff.
-    log_discrete_stuff!(t_start, mh, ommd)
+        # Use those descriptions to set up the time histories.
+        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
 
-    # Create the solver.
-    solver = Solvers.create_solver(options.solver, msd)
+        # Log the initial stuff.
+        log_discrete_stuff!(t_start, mh, ommd)
 
-    # Create the hooks.
-    hooks = map(options.hooks) do hook_options
-        return Hooks.create_hook(hook_options, t, initial_model)
+        # Create the solver.
+        solver = Solvers.create_solver(options.solver, msd)
+
+        # Create the hooks.
+        initial_model = model(msd)
+        hooks = map(options.hooks) do hook_options
+            return Hooks.create_hook(hook_options, t, initial_model)
+        end
+
+        # Propagate until we're done.
+        t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+
+        # Create the final model.
+        final_model = model(msd)
+
+        # Close out the models.
+        close_fcn(t_end, final_model)
+
+        # Wrap up all of the history into a single object.
+        history = SimHistory(model_description, log, stop)
+
+        # Close the hooks.
+        for hook in hooks
+            try
+                Hooks.close_hook!(hook, t_end, final_model)
+            catch err
+                trace = catch_backtrace()
+                @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+            end
+        end
+
+    finally
+
+        # Close any open resources.
+        close_resources(manager)
+
     end
-
-    # Propagate until we're done.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
-
-    # Create the final model.
-    final_model = model(msd)
-
-    # Close out the models.
-    close_fcn(t_end, final_model)
-
-    # Wrap up all of the history into a single object.
-    history = SimHistory(model_description, log, stop)
-
-    # Close the hooks.
-    for m in hooks
-        Hooks.close_hook!(m, t_end, final_model)
-    end
-
-    # Close any open resources.
-    close_resources(model_description, msd)
 
     return (history, t_end, final_model)
 
