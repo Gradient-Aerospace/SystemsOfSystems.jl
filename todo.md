@@ -22,8 +22,6 @@
 - [x] Test systems of systems.
 - [x] Test the close function.
 - [x] Test "missing" outputs.
-- [x] Figure out how to log per-random-variable RNG state in a way we could load later.
-- [ ] Add logging of per-random-variable RNG state.
 - [x] Test random variables.
 - [ ] Test all the types we intend to support.
 - [ ] Test plots.
@@ -31,7 +29,6 @@
 - [ ] Test for type stability.
 - [ ] Test documentation with jldoctest.
 - [ ] Test non-zero start times.
-- [ ] Figure out how to capture console output.
 
 ## Features
 
@@ -40,3 +37,5 @@
 - [ ] Allow submodels to be tuples or vectors.
 - [ ] Create general ButcherTableau solvers (fixed step, adaptive step) and have RungeKutta4 and DormandPrince54 use it. Add a couple of other solvers, like Bogacki-Shampine 3(2) and Heun.
 - [ ] Allow each model to provide its own function to return the integration error of its states. This would be useful for, e.g., specifying that a position vector's error is the norm of the whole thing, not the individual elements.
+- [ ] Add logging of per-random-variable RNG state.
+- [ ] Figure out how to capture console output.

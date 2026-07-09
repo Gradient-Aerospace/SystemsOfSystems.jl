@@ -24,7 +24,7 @@ function my_init_fcn(t, params, seed)
             x_dot = 0.,
         ),
         files = (;
-            io = OutputFileDescription(;
+            io = OutputFile(;
                 name = "my_file.txt",
             ),
         ),
@@ -45,7 +45,7 @@ function my_updates_fcn(t, model)
     return UpdatesOutput()
 end
 
-@testset "OutputFileDescription" begin
+@testset "OutputFile" begin
 
     # Test that it can open a file for us.
     history, _, m = simulate(
@@ -101,8 +101,8 @@ function my_init_fcn2(t, params, seed)
             x_dot = 0.,
         ),
         files = (;
-            io = OutputFileDescription(;
-                name = "my_file.txt",
+            io = Resource(;
+                name = "my_file2.txt",
                 open_fcn = my_open_fcn,
                 close_fcn = my_close_fcn,
             ),
@@ -124,7 +124,7 @@ function my_updates_fcn2(t, model)
     return UpdatesOutput()
 end
 
-@testset "Customization of OutputFileDescription" begin
+@testset "Resource" begin
 
     # Test that it can open a file for us. Here, we'll put the whole thing in another model
     # to test that file scope is correct.
@@ -152,7 +152,7 @@ end
     )
 
     # Test that it put the file there, we wrote to it, and now it's closed.
-    out_file_name = joinpath(out_dir, "files", "my_model", "my_file.txt")
+    out_file_name = joinpath(out_dir, "files", "my_file2.txt")
     @test isfile(out_file_name) == true
     @test isopen(m.my_model.io[2]) == false
     open(out_file_name) do f
@@ -167,7 +167,6 @@ end
 
 end
 
-
 function my_init_fcn3(t, params, seed; name, scoped)
     return ModelDescription(;
         type = MyModel,
@@ -176,7 +175,7 @@ function my_init_fcn3(t, params, seed; name, scoped)
             x_dot = 0.,
         ),
         files = (;
-            io = OutputFileDescription(;
+            io = OutputFile(;
                 name,
                 scoped,
             ),
@@ -184,7 +183,7 @@ function my_init_fcn3(t, params, seed; name, scoped)
     )
 end
 
-@testset "initialization" for scoped in (true, false), output in (false, true)
+@testset "initialization of OutputFile for scoped = $scoped, output = $output" for scoped in (true, false), output in (false, true)
 
     temp_dir = joinpath(out_dir, "files", "temp")
     mkpath(temp_dir)
@@ -202,7 +201,7 @@ end
                             x_dot = 0.,
                         ),
                         files = (;
-                            io = OutputFileDescription(;
+                            io = OutputFile(;
                                 name = "my_file_" * (scoped ? "" : "un") * "scoped.txt",
                                 scoped,
                             ),

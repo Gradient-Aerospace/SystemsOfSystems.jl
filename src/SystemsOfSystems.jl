@@ -1,99 +1,32 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Solvers, Hooks, Logs
+export initialize, simulate, SimOptions, Solvers, Hooks, Logs, Resources
 
-# Modeling
-export ModelDescription, VariableDescription, RandomVariableDescription, RatesOutput,
-    UpdatesOutput
-export is_regular_step_triggering
+# Model descriptions
+export ModelDescription, VariableDescription, RandomVariableDescription,
+    RatesOutput, UpdatesOutput,
+    OutputFile, Resource
 
 # Utilities
-export BranchingSeed, branch
-export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
-    SampleAndHold, LinearInterpolation
+export Dimension, TimeSeries,
+    BranchingSeed, branch,
+    AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation,
+    ContinuousWhiteNoise, DiscreteWhiteNoise,
+    is_regular_step_triggering
 
 using Random: Xoshiro
-import Random
 
 include("TimeSeries.jl")
 using .TimeSeriesStuff
 
-#################
-# BranchingSeed #
-#################
+include("BranchingSeeds.jl")
+using .BranchingSeeds
 
-"""
-    BranchingSeed
+include("Resources.jl")
+using .Resources
 
-This type is useful for making a tree of random seeds that trace back to a single top-level
-seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
-from it:
-
-```
-seed = BranchingSeed(0, "")
-rng = Xoshiro(seed)
-```
-
-Here is an example of a function that takes in a seed and creates multiple RNGs from it:
-
-```
-function foo(seed)
-
-    # Create a top-level branching seed.
-    branching_seed = BranchingSeed(seed, "")
-
-    # Model Process A.
-    branching_seed_a = branch(branching_seed, "a")
-    rng_a = Xoshiro(branching_seed_a)
-    x = randn(rng_a, 100)
-
-    # Model Process B.
-    branching_seed_b = branch(branching_seed, "b")
-    rng_b = Xoshiro(branching_seed_b)
-    y = randn(rng_b, 200)
-
-    ...
-
-end
-```
-
-In this example, the draws from `rng_a` and `rng_b` are independent of each other, but they
-both still change when the top-level seed changes. This allows a user to model separate
-random processes, where changing how many random draws are used as part of "process a"
-doesn't change the draws of "process b". It's a very useful pattern for making models with
-submodels; each submodel can `branch` from its parent's seed according to that model's name.
-Then, even if models are swapped for different models, the remaining models will still
-generate the same random draws over time.
-"""
-struct BranchingSeed
-    salt::Int64
-    breadcrumbs::String
-end
-
-"""
-    branch(seed::BranchingSeed, name::AbstractString)
-
-Creates a new `BranchingSeed` from the given `seed` by appending the given `name`.
-"""
-function branch(seed::BranchingSeed, name::AbstractString)
-    return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
-end
-
-"""
-    seed::BranchingSeed / name::AbstractString
-
-This is syntactic sugar for `branch(seed, name)`.
-"""
-function Base.:/(seed::BranchingSeed, name::AbstractString)
-    return branch(seed, name)
-end
-
-"Creates a Xoshiro RNG from the given BranchingSeed."
-Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
-
-get_branching_seed(seed::BranchingSeed) = seed
-get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
+include("Hooks.jl")
 
 #########################
 # User Function Outputs #
@@ -141,7 +74,7 @@ struct ModelDescription
     continuous_random_variables
     discrete_random_variables
     models
-    files
+    resources
     t_next
 end
 ModelDescription(;
@@ -154,14 +87,14 @@ ModelDescription(;
     continuous_random_variables = (;),
     discrete_random_variables = (;),
     models = (;),
-    files = (;),
+    resources = (;),
     t_next = 0//1,
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
-    models, files,
+    models, resources,
     rationalize(t_next),
 )
 
@@ -301,64 +234,6 @@ struct RandomVariable{F, T}
     rng::Xoshiro
 end
 
-"""
-    OutputFileDescription
-
-Describes an output file that SystemsOfSystems should open after initialzation and close
-after simulation.
-
-After `init_fcn` has run, this will create the requested file `name`. If `name` is an
-absolute path, that file will be created. If it is a relative path, the file will be stored
-in the `outdir` provided to the `simulate` as `<outdir>/model/submodel/subsubmodel/<name>`
-when `scoped == true` and `<outdir>/<name>` otherwise.
-"""
-@kwdef struct OutputFileDescription
-    name::String
-    scoped::Bool = true
-    open_fcn::Any = (file_name) -> open(file_name, "w")
-    close_fcn::Any = (file_stream) -> close(file_stream)
-end
-export OutputFileDescription
-
-function open_file(file_desc::OutputFileDescription, outdir, model_path)
-
-    # Figure out where to put the file.
-    file_name = file_desc.name
-    if !isabspath(file_name)
-
-        # Prepend the model path.
-        if file_desc.scoped
-            file_name = joinpath(model_path, file_name)
-        end
-
-        # The top-level model's path will be "". The first level of submodels will be
-        # "/submodel". We need to remove that initial "/" to treat this as a relative path.
-        if startswith(file_name, "/")
-            file_name = file_name[2:end]
-        end
-
-        # Prepend the outdir.
-        if !isnothing(outdir)
-            file_name = joinpath(outdir, file_name)
-        end
-
-    end
-
-    # Make sure the whole path up to that file exists.
-    file_dir = dirname(file_name)
-    mkpath(file_dir)
-
-    # Call the user's function to let it open the file or do whatever it does, and store
-    # whatever it returns as the "file".
-    return file_desc.open_fcn(file_name)
-
-end
-
-function close_file(desc::OutputFileDescription, user_data)
-    desc.close_fcn(user_data)
-    return nothing
-end
-
 ##################
 # User Utilities #
 ##################
@@ -401,7 +276,6 @@ process(rng, t_last, t_next) # Yields appropriate random draws.
 @kwdef struct ContinuousWhiteNoise{T}
     sigma::T
 end
-export ContinuousWhiteNoise
 function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
     return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
 end
@@ -424,7 +298,6 @@ process(rng, t) # Yields appropriate random draws.
 @kwdef struct DiscreteWhiteNoise{T}
     sigma::T
 end
-export DiscreteWhiteNoise
 function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
     return nu.sigma .* randn(rng, T)
 end
@@ -437,7 +310,7 @@ end
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 """
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT, FT}
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
     constants::CT
     continuous_states::XCT
@@ -447,7 +320,7 @@ pulled out and all types are fixed as type parameters. This is what's used by th
     continuous_random_variables::WCT
     discrete_random_variables::WDT
     models::MT
-    files::FT
+    resources::RT
     t_next::Rational{Int64}
 end
 
@@ -511,9 +384,9 @@ function create_typed_model_description(
             )
             for field in fieldnames(typeof(desc.models))
         ),
-        files = NamedTuple(
-            field => open_file(desc.files[field], outdir, model_path)
-            for field in fieldnames(typeof(desc.files))
+        resources = NamedTuple(
+            field => Resource.open_resource(desc.resources[field], outdir, model_path)
+            for field in fieldnames(typeof(desc.resources))
         ),
         t_next = desc.t_next,
     )
@@ -524,14 +397,14 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT, FT}
+@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT, RT}
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
     continuous_random_variables::WCT
     discrete_random_variables::WDT
     models::MT
-    files::FT
+    resources::RT
     t_next::Rational{Int64}
 end
 function ModelStateDescription{T}(;
@@ -541,17 +414,17 @@ function ModelStateDescription{T}(;
     continuous_random_variables = (;),
     discrete_random_variables = (;),
     models = (;),
-    files = (;),
+    resources = (;),
     t_next = 0//1,
 ) where {T}
     return ModelStateDescription{
         T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
         typeof(continuous_random_variables), typeof(discrete_random_variables),
-        typeof(models), typeof(files),
+        typeof(models), typeof(resources),
     }(
         constants, continuous_states, discrete_states,
         continuous_random_variables, discrete_random_variables,
-        models, files,
+        models, resources,
         rationalize(t_next),
     )
 end
@@ -565,7 +438,7 @@ function model(desc::ModelStateDescription{Nothing})
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
-        desc.files...,
+        desc.resources...,
     )
 end
 
@@ -578,7 +451,7 @@ function model(desc::ModelStateDescription{T}) where {T}
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
-        desc.files...,
+        desc.resources...,
     )
 end
 
@@ -591,17 +464,11 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
         md.continuous_random_variables,
         md.discrete_random_variables,
         md.models,
-        md.files,
+        md.resources,
         md.t_next,
         kwargs...
     )
 end
-
-#########
-# Hooks #
-#########
-
-include("Hooks.jl")
 
 ################
 # Stop Reasons #
@@ -752,7 +619,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
             mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
         ),
-        ommd.files,
+        ommd.resources,
         ommd.t_next,
     )
 end
@@ -997,9 +864,12 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     return (t_completed, msd, stop)
 end
 
-############
-# simulate #
-############
+##############
+# initialize #
+##############
+
+get_branching_seed(seed::BranchingSeed) = seed
+get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
 
 # This takes in a model prototype (the user data) and runs the initialization function to
 # get the model description. It then sets up the typed model description and model state.
@@ -1052,6 +922,9 @@ end
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
 optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
 it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
+
+If the `model_description` contains any resources (open files, connections), call
+`Base.close(model_description, model)` to release those resources.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -1064,6 +937,9 @@ This is useful for debugging model initialization. Given a `ModelDescription` (s
 be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
 The `seed` is used for random variables that do not provide their own
 `RandomVariableDescription` seed.
+
+If the `model_description` contains any resources (open files, connections), call
+`Base.close(model_description, model)` to release those resources.
 """
 function initialize(model_description::ModelDescription; kwargs...)
     return model(_initialize(model_description; kwargs...).msd)
@@ -1081,7 +957,7 @@ end
 ```
 
 This is useful when a model opens a file. When the `do` block is finished, this function
-will automatically close all opened files, even if there was an error.
+will automatically close all opened resources, even if there was an error.
 
 All additional `args` and `kwargs` are the same as for the other initialization functions.
 """
@@ -1090,27 +966,51 @@ function initialize(f::Function, args...; kwargs...)
     try
         f(model(msd))
     finally
-        close_files(model_description, msd)
+        close_resources(model_description, msd)
     end
 end
 
-# TODO: Consider if this should actually be close(desc, model) so that the user can call it
-# the same way as `initialize`.
-function close_files(desc::ModelDescription, msd::ModelStateDescription)
+function close_resources(desc::ModelDescription, msd::ModelStateDescription)
 
-    # Let the submodels close their files.
+    # Let the submodels close their resources.
     for mn in fieldnames(typeof(desc.models))
-        close_files(desc.models[mn], msd.models[mn])
+        close_resources(desc.models[mn], msd.models[mn])
     end
 
-    # Close this model's files.
-    for fn in fieldnames(typeof(desc.files))
-        close_file(desc.files[fn], msd.files[fn])
+    # Close this model's resources.
+    for fn in fieldnames(typeof(desc.resources))
+        close_resource(desc.resources[fn], msd.resources[fn])
     end
 
     return nothing
 
 end
+
+"""
+    Base.close(desc::ModelDescription, m)
+
+Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
+the model.
+"""
+function Base.close(desc::ModelDescription, m)
+
+    # Let the submodels close their resources.
+    for mn in fieldnames(typeof(desc.models))
+        Base.close(desc.models[mn], m[mn])
+    end
+
+    # Close this model's resources.
+    for fn in fieldnames(typeof(desc.resources))
+        close_resource(desc.resources[fn], m[fn])
+    end
+
+    return nothing
+
+end
+
+############
+# simulate #
+############
 
 """
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
@@ -1159,7 +1059,7 @@ function simulate(
     )
     initial_model = model(msd)
 
-    # TODO: Now that we're initialized, potentially with files that have been created,
+    # TODO: Now that we're initialized, potentially with resources that have been created,
     # should we put this whole thing in a try/catch?
 
     # Use those descriptions to set up the time histories.
@@ -1193,8 +1093,8 @@ function simulate(
         Hooks.close_hook!(m, t_end, final_model)
     end
 
-    # Close any open files.
-    close_files(model_description, msd)
+    # Close any open resources.
+    close_resources(model_description, msd)
 
     return (history, t_end, final_model)
 
