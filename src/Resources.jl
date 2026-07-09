@@ -1,6 +1,25 @@
 module Resources
 
-export AbstractResource, OutputFile, Resource, open_resource, close_resource
+export AbstractResource, OutputFile, Resource, ResourceInputs, open_resource, close_resource
+
+"""
+    ResourceInputs
+
+Stores a set of inputs that an `AbstractResource` can use in its `open_source` method.
+
+Fields:
+
+* `outdir`: The top-level output directory given to the `simulate` function
+* `model_path`: The "path" to the model, the same as the keys used to access model results
+  in a `SimHistory`
+
+This structure is not fixed. Fields may be added to this in the future, but the above fields
+will remain (or the release will be marked as a breaking change).
+"""
+@kwdef struct ResourceInputs
+    outdir::Union{Nothing, String}
+    model_path::String
+end
 
 """
     AbstractResource
@@ -11,11 +30,9 @@ implement `open_resource` and `close_resource`.
 abstract type AbstractResource end
 
 """
-    open_resource(resource::AbstractResource, outdir, model_path)
+    open_resource(resource::AbstractResource, inputs::ResourceInputs)
 
-Opens a `resource` using the top-level `outdir` provided to the `simulate` function and the
-`model_path` (e.g., `/submodel1/subsubmodel2`), returning a payload that the model will
-store.
+Opens a `resource` using the given `input` (see `ResourceInputs`).
 """
 function open_resource end
 
@@ -45,7 +62,7 @@ Fields:
 end
 export Resource
 
-function open_resource(file_desc::Resource, outdir, model_path)
+function open_resource(file_desc::Resource, ::ResourceInputs)
     return file_desc.open_fcn(file_desc.open_args...)
 end
 
@@ -71,7 +88,7 @@ when `scoped == true` and `<outdir>/<name>` otherwise.
 end
 export OutputFile
 
-function open_resource(file_desc::OutputFile, outdir, model_path)
+function open_resource(file_desc::OutputFile, inputs::ResourceInputs)
 
     # Figure out where to put the file.
     file_name = file_desc.name
@@ -79,7 +96,7 @@ function open_resource(file_desc::OutputFile, outdir, model_path)
 
         # Prepend the model path.
         if file_desc.scoped
-            file_name = joinpath(model_path, file_name)
+            file_name = joinpath(inputs.model_path, file_name)
         end
 
         # The top-level model's path will be "". The first level of submodels will be
@@ -89,8 +106,8 @@ function open_resource(file_desc::OutputFile, outdir, model_path)
         end
 
         # Prepend the outdir.
-        if !isnothing(outdir)
-            file_name = joinpath(outdir, file_name)
+        if !isnothing(inputs.outdir)
+            file_name = joinpath(inputs.outdir, file_name)
         end
 
     end

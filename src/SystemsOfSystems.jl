@@ -396,7 +396,7 @@ function create_typed_model_description!(
     # wrong.
     payloads = Any[]
     for resource in desc.resources
-        payload = Resource.open_resource(resource, outdir, model_path)
+        payload = Resource.open_resource(resource, ResourceInputs(; outdir, model_path))
         add_resource!(manager, resource, payload)
         push!(payloads, payload)
     end
