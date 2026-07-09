@@ -396,7 +396,7 @@ function create_typed_model_description!(
     # wrong.
     payloads = Any[]
     for resource in desc.resources
-        payload = Resource.open_resource(resource, ResourceInputs(; outdir, model_path))
+        payload = Resources.open_resource(resource, ResourceInputs(; outdir, model_path))
         add_resource!(manager, resource, payload)
         push!(payloads, payload)
     end
@@ -1047,7 +1047,7 @@ function Base.close(desc::ModelDescription, m)
 
     # Close this model's resources.
     for fn in fieldnames(typeof(desc.resources))
-        try_to_close_resource(desc.resources[fn], m[fn])
+        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
     end
 
     return nothing
