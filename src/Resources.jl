@@ -51,19 +51,20 @@ A container for a general resource, like a TCP/IP connection or a shared library
 Fields:
 
 * `open_args` - A vector of arguments to pass to the `open_fcn`
-* `open_fcn` - A function to call to open the resource, with the above arguments as inputs,
-  returning a "payload" that the model will store during simulation
+* `open_fcn` - A function to call to open the resource. The first argument will be a
+  `ResourceInputs`, and the remaining arguments will be the `open_args`. This should return
+  a "payload" that the model will store during simulation.
 * `close_fcn` - A function to call to close the resource, with the payload as the input
 """
 @kwdef struct Resource <: AbstractResource
-    open_args::Vector{Any}
+    open_args::Tuple
     open_fcn::Any
     close_fcn::Any
 end
 export Resource
 
-function open_resource(file_desc::Resource, ::ResourceInputs)
-    return file_desc.open_fcn(file_desc.open_args...)
+function open_resource(file_desc::Resource, inputs::ResourceInputs)
+    return file_desc.open_fcn(inputs, file_desc.open_args...)
 end
 
 function close_resource(desc::Resource, payload)
