@@ -1,4 +1,4 @@
-module TestFiles
+module TestResources
 
 using SystemsOfSystems
 using Test
@@ -23,7 +23,7 @@ function my_init_fcn(t, params, seed)
             x = 1.,
             x_dot = 0.,
         ),
-        files = (;
+        resources = (;
             io = OutputFile(;
                 name = "my_file.txt",
             ),
@@ -81,8 +81,8 @@ end
 end
 
 # We'll specify custom open/close functions.
-function my_open_fcn(file_name)
-    f = open(file_name, "w")
+function my_open_fcn(inputs, file_name)
+    f = open(joinpath(inputs.outdir, file_name), "w")
     println(f, "Time, State")
     return (file_name, f)
 end
@@ -100,9 +100,9 @@ function my_init_fcn2(t, params, seed)
             x = 1.,
             x_dot = 0.,
         ),
-        files = (;
+        resources = (;
             io = Resource(;
-                name = "my_file2.txt",
+                open_args = ("my_file2.txt",),
                 open_fcn = my_open_fcn,
                 close_fcn = my_close_fcn,
             ),
@@ -174,7 +174,7 @@ function my_init_fcn3(t, params, seed; name, scoped)
             x = 1.,
             x_dot = 0.,
         ),
-        files = (;
+        resources = (;
             io = OutputFile(;
                 name,
                 scoped,
@@ -200,7 +200,7 @@ end
                             x = 1.,
                             x_dot = 0.,
                         ),
-                        files = (;
+                        resources = (;
                             io = OutputFile(;
                                 name = "my_file_" * (scoped ? "" : "un") * "scoped.txt",
                                 scoped,
