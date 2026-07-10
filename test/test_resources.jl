@@ -93,7 +93,7 @@ function my_close_fcn(artifacts_from_open_fcn)
     return nothing
 end
 
-function my_init_fcn2(t, params, seed)
+function my_init_fcn2(t, params, seed, filename)
     return ModelDescription(;
         type = MyModel2,
         continuous_states = (;
@@ -102,7 +102,7 @@ function my_init_fcn2(t, params, seed)
         ),
         resources = (;
             io = Resource(;
-                open_args = ("my_file2.txt",),
+                open_args = (filename,),
                 open_fcn = my_open_fcn,
                 close_fcn = my_close_fcn,
             ),
@@ -133,7 +133,7 @@ end
         t = 0 : 0.3 : 1,
         init_fcn = (t, params, seed) -> ModelDescription(;
             models = (;
-                my_model = my_init_fcn2(t, nothing, seed / "my_model"),
+                my_model = my_init_fcn2(t, nothing, seed / "my_model", "my_file2.txt"),
             ),
         ),
         rates_fcn = (t, model) -> RatesOutput(;
@@ -228,6 +228,90 @@ end
         end
 
     end
+
+end
+
+@testset "Close gets called in case of error" begin
+
+    # It doesn't matter which resource type we use for this, so we'll use a generic
+    # Resource with some references, to make sure close gets called correctly.
+    file_was_opened = [false]
+    file_was_closed = [false]
+    @test_logs (:error,) history, _, m = simulate(
+        nothing;
+        t = 0 : 0.1 : 1,
+        init_fcn = (t, params, seed) -> ModelDescription(;
+            continuous_states = (;
+                x = 1.,
+                x_dot = 0.,
+            ),
+            resources = (;
+                io = Resource(;
+                    open_args = (),
+                    open_fcn = (args...) -> begin
+                        file_was_opened[1] = true
+                    end,
+                    close_fcn = (args...) -> begin
+                        file_was_closed[1] = true
+                    end,
+                ),
+            ),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (;
+                x = model.x_dot,
+                x_dot = -model.x,
+            ),
+        ),
+        updates_fcn = (t, model) -> begin
+            if t > 0.5
+                error("Expected")
+            end
+            UpdatesOutput()
+        end,
+    )
+
+    @test file_was_opened[1] == true
+    @test file_was_closed[1] == true
+
+    # Now lets do that for initialization. For this, we'll make the parent model set up a
+    # valid resource but then have a child model that errors out during initialization.
+    file_was_opened = [false]
+    file_was_closed = [false]
+    @test_throws "Expected" _ = initialize(
+        nothing;
+        init_fcn = (t, params, seed) -> ModelDescription(;
+            continuous_states = (;
+                x = 1.,
+                x_dot = 0.,
+            ),
+            resources = (;
+                io = Resource(;
+                    open_args = (),
+                    open_fcn = (args...) -> begin
+                        file_was_opened[1] = true
+                    end,
+                    close_fcn = (args...) -> begin
+                        file_was_closed[1] = true
+                    end,
+                ),
+            ),
+            models = (;
+                i_error_out = ModelDescription(;
+                    resources = (;
+                        failing_resource = Resource(;
+                            open_args = (),
+                            open_fcn = (args...) -> error("Expected"),
+                            close_fcn = (args...) -> nothing,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    @test file_was_opened[1] == true
+    @test file_was_closed[1] == true
 
 end
 

@@ -405,7 +405,8 @@ function create_typed_model_description!(
         push!(payloads, payload)
     end
 
-    # Make the set of resources.
+    # Make the set of resources. We do this first so that our resources are created before
+    # our children's -- simply a convention.
     resources = NamedTuple(
         field => payload
         for (field, payload) in zip(fieldnames(typeof(desc.resources)), payloads)
@@ -434,7 +435,7 @@ function create_typed_model_description!(
             for field in fieldnames(typeof(desc.models))
         ),
         resources,
-        t_next = desc.t_next,
+        t_next = rationalize(desc.t_next),
     )
 
 end
