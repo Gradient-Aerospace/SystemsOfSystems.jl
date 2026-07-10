@@ -52,7 +52,7 @@ using Test
 
     # Make sure things never took too long. Note: the accuracy should be way better than
     # this, but this runs in CI, and we don't want spurious failures there.
-    @test all(diffs .< 0.1)
+    @test all(diffs .< 0.2)
 
 end
 

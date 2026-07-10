@@ -1,23 +1,32 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Solvers, Hooks, Logs
+export initialize, simulate, SimOptions, Solvers, Hooks, Logs, Resources
 
-# Modeling
-export ModelDescription, VariableDescription, RandomVariableDescription, RatesOutput,
-    UpdatesOutput
-export is_regular_step_triggering
+# Model descriptions
+export ModelDescription, VariableDescription, RandomVariableDescription,
+    RatesOutput, UpdatesOutput,
+    OutputFile, Resource
 
 # Utilities
-export BranchingSeed, branch
-export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
-    SampleAndHold, LinearInterpolation
+export Dimension, TimeSeries,
+    BranchingSeed, branch,
+    AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation,
+    ContinuousWhiteNoise, DiscreteWhiteNoise,
+    is_regular_step_triggering
 
 using Random: Xoshiro
-import Random
 
 include("TimeSeries.jl")
 using .TimeSeriesStuff
+
+include("BranchingSeeds.jl")
+using .BranchingSeeds
+
+include("Resources.jl")
+using .Resources
+
+include("Hooks.jl")
 
 #########################
 # User Function Outputs #
@@ -41,6 +50,8 @@ elements of the model, including:
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
 * `models`: A named tuple containing the ModelDescription of each submodel.
+* `resources`: A named tuple containing a `Resources.AbstractResource`, for opening files
+  or creating connections that need to be closed when the simulation is over.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
   integrator will step no latter than this time, but may step earlier.
 
@@ -65,6 +76,7 @@ struct ModelDescription
     continuous_random_variables
     discrete_random_variables
     models
+    resources
     t_next
 end
 ModelDescription(;
@@ -77,13 +89,14 @@ ModelDescription(;
     continuous_random_variables = (;),
     discrete_random_variables = (;),
     models = (;),
+    resources = (;),
     t_next = 0//1,
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
-    models,
+    models, resources,
     rationalize(t_next),
 )
 
@@ -135,72 +148,6 @@ UpdatesOutput(;
     t_next = 0//1,
     stop = false,
 ) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
-
-"""
-    BranchingSeed
-
-This type is useful for making a tree of random seeds that trace back to a single top-level
-seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
-from it:
-
-```
-seed = BranchingSeed(0, "")
-rng = Xoshiro(seed)
-```
-
-Here is an example of a function that takes in a seed and creates multiple RNGs from it:
-
-```
-function foo(seed)
-
-    # Create a top-level branching seed.
-    branching_seed = BranchingSeed(seed, "")
-
-    # Model Process A.
-    branching_seed_a = branch(branching_seed, "a")
-    rng_a = Xoshiro(branching_seed_a)
-    x = randn(rng_a, 100)
-
-    # Model Process B.
-    branching_seed_b = branch(branching_seed, "b")
-    rng_b = Xoshiro(branching_seed_b)
-    y = randn(rng_b, 200)
-
-    ...
-
-end
-```
-
-In this example, the draws from `rng_a` and `rng_b` are independent of each other, but they
-both still change when the top-level seed changes. This allows a user to model separate
-random processes, where changing how many random draws are used as part of "process a"
-doesn't change the draws of "process b". It's a very useful pattern for making models with
-submodels; each submodel can `branch` from its parent's seed according to that model's name.
-Then, even if models are swapped for different models, the remaining models will still
-generate the same random draws over time.
-"""
-struct BranchingSeed
-    salt::Int64
-    breadcrumbs::String
-end
-
-"""
-    branch(seed::BranchingSeed, name::AbstractString)
-
-Creates a new `BranchingSeed` from the given `seed` by appending the given `name`.
-"""
-function branch(seed::BranchingSeed, name::AbstractString)
-    return BranchingSeed(seed.salt, seed.breadcrumbs * "/" * name)
-end
-
-"""
-    seed::BranchingSeed / name::AbstractString
-
-This is syntactic sugar for `branch(seed, name)`.
-"""
-function Base.:/(seed::BranchingSeed, name::AbstractString)
-    return branch(seed, name)
-end
 
 """
 These can be used to decorate the variables in a `ModelDescription`. The decorations become
@@ -289,9 +236,6 @@ struct RandomVariable{F, T}
     rng::Xoshiro
 end
 
-"Creates a Xoshiro RNG from the given BranchingSeed."
-Random.Xoshiro(seed::BranchingSeed) = Xoshiro(seed.salt + hash(seed.breadcrumbs))
-
 ##################
 # User Utilities #
 ##################
@@ -334,7 +278,6 @@ process(rng, t_last, t_next) # Yields appropriate random draws.
 @kwdef struct ContinuousWhiteNoise{T}
     sigma::T
 end
-export ContinuousWhiteNoise
 function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
     return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
 end
@@ -357,7 +300,6 @@ process(rng, t) # Yields appropriate random draws.
 @kwdef struct DiscreteWhiteNoise{T}
     sigma::T
 end
-export DiscreteWhiteNoise
 function (nu::DiscreteWhiteNoise{T})(rng, t) where {T}
     return nu.sigma .* randn(rng, T)
 end
@@ -370,7 +312,7 @@ end
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 """
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT}
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
     constants::CT
     continuous_states::XCT
@@ -380,6 +322,7 @@ pulled out and all types are fixed as type parameters. This is what's used by th
     continuous_random_variables::WCT
     discrete_random_variables::WDT
     models::MT
+    resources::RT
     t_next::Rational{Int64}
 end
 
@@ -419,7 +362,56 @@ function strip_fluff_from_random_variable_set(random_variables, seed)
     )
 end
 
-function create_typed_model_description(desc::ModelDescription, seed::BranchingSeed)
+# This type is used to store resources that need to be closed.
+@kwdef struct ResourceManager
+    descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
+    payloads::Vector{Any} = Any[]
+end
+function add_resource!(manager::ResourceManager, description::Resources.AbstractResource, payload)
+    push!(manager.descriptions, description)
+    push!(manager.payloads, payload)
+    return nothing
+end
+function try_to_close_resource(resource, payload)
+        try
+            Resources.close_resource(resource, payload)
+        catch err
+            trace = catch_backtrace()
+            @error "Failed to close resource = $resource. Continuing..." exception = (err, trace)
+        end
+end
+function close_resources(manager::ResourceManager)
+    # We close in the reverse order in which we opened. That's probably irrelevant, but it
+    # may be useful in some situations.
+    for (desc, payload) in Iterators.reverse(zip(manager.descriptions, manager.payloads))
+        try_to_close_resource(desc, payload)
+    end
+    return nothing
+end
+
+function create_typed_model_description!(
+    manager::ResourceManager,
+    desc::ModelDescription, seed::BranchingSeed,
+    outdir::Union{Nothing, String}, model_path::String,
+)
+
+    # Create the resources one by one, recording a function to close each if something goes
+    # wrong.
+    payloads = Any[]
+    for resource in desc.resources
+        payload = Resources.open_resource(resource, ResourceInputs(; outdir, model_path))
+        add_resource!(manager, resource, payload)
+        push!(payloads, payload)
+    end
+
+    # Make the set of resources. We do this first so that our resources are created before
+    # our children's -- simply a convention.
+    resources = NamedTuple(
+        field => payload
+        for (field, payload) in zip(fieldnames(typeof(desc.resources)), payloads)
+    )
+
+    # Strip the "fluff" from everything, returning just the types we'll need in the loop.
     return TypedModelDescription(;
         type = desc.type,
         constants = map(strip_fluff_from_variable, desc.constants),
@@ -434,13 +426,17 @@ function create_typed_model_description(desc::ModelDescription, seed::BranchingS
             desc.discrete_random_variables, seed,
         ),
         models = NamedTuple(
-            field => create_typed_model_description(
-                desc.models[field], seed / string(field),
+            field => create_typed_model_description!(
+                manager,
+                desc.models[field], seed / string(field), outdir,
+                model_path * "/" * string(field)
             )
             for field in fieldnames(typeof(desc.models))
         ),
-        t_next = desc.t_next,
+        resources,
+        t_next = rationalize(desc.t_next),
     )
+
 end
 
 #########################
@@ -448,14 +444,14 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
-
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT}
+@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT, RT}
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
     continuous_random_variables::WCT
     discrete_random_variables::WDT
     models::MT
+    resources::RT
     t_next::Rational{Int64}
 end
 function ModelStateDescription{T}(;
@@ -465,15 +461,17 @@ function ModelStateDescription{T}(;
     continuous_random_variables = (;),
     discrete_random_variables = (;),
     models = (;),
+    resources = (;),
     t_next = 0//1,
 ) where {T}
     return ModelStateDescription{
         T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
         typeof(continuous_random_variables), typeof(discrete_random_variables),
-        typeof(models)
+        typeof(models), typeof(resources),
     }(
         constants, continuous_states, discrete_states,
-        continuous_random_variables, discrete_random_variables, models,
+        continuous_random_variables, discrete_random_variables,
+        models, resources,
         rationalize(t_next),
     )
 end
@@ -487,6 +485,7 @@ function model(desc::ModelStateDescription{Nothing})
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
+        desc.resources...,
     )
 end
 
@@ -499,6 +498,7 @@ function model(desc::ModelStateDescription{T}) where {T}
         desc.discrete_states...,
         desc.discrete_random_variables...,
         map(model, desc.models)...,
+        desc.resources...,
     )
 end
 
@@ -511,16 +511,11 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
         md.continuous_random_variables,
         md.discrete_random_variables,
         md.models,
+        md.resources,
         md.t_next,
         kwargs...
     )
 end
-
-#########
-# Hooks #
-#########
-
-include("Hooks.jl")
 
 ################
 # Stop Reasons #
@@ -556,23 +551,23 @@ describe(stop::EncounteredError) = "The sim experienced an error."
 # SimOptions #
 ##############
 
-include("Logs.jl")
-using .Logs
-
 # We define this here so Solvers can import the symbol.
 function draw_wc end
 
+include("Logs.jl")
 include("Solvers.jl")
 
 """
 A set of options for the `simulate` function, with keyword arguments for:
 
+* `outdir`: A directory to save any outputs to (such as `Resources.OutputFile`)
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
 * `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
 * `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
 """
 @kwdef struct SimOptions
+    outdir::Union{Nothing, String} = nothing
     log::Union{Nothing, Logs.AbstractLogOptions} = Logs.BasicLogOptions()
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
     hooks::Vector{Hooks.AbstractHookOptions} = []
@@ -671,6 +666,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
             mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
         ),
+        ommd.resources,
         ommd.t_next,
     )
 end
@@ -725,7 +721,6 @@ end
 
 # This is called right after updating.
 function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
-    # TODO: Log the continuous states too, if those are allowed to change.
     for fn in keys(uo.updates)
         push!(mh.discrete_states[fn], float(t), uo.updates[fn])
     end
@@ -916,52 +911,68 @@ function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
     return (t_completed, msd, stop)
 end
 
-############
-# simulate #
-############
+##############
+# initialize #
+##############
 
-function _initialize(model_description::ModelDescription, seed = 0, t_start = 0//1)
+get_branching_seed(seed::BranchingSeed) = seed
+get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
 
-    # Create the top-level branching seed used for default random-variable streams.
-    branching_seed = BranchingSeed(seed, "")
+# This takes in a model prototype (the user data) and runs the initialization function to
+# get the model description. It then sets up the typed model description and model state.
+function _initialize(
+    model_prototype;
+    init_fcn,
+    t_start = 0//1,
+    model_path = "",
+    seed = BranchingSeed(0, model_path),
+    outdir = nothing,
+)
 
-    # Now that the time histories are started, we have no further use of the
-    # VariableDescriptions. Strip those out for the "original minimal model description".
-    # We'll always keep this original description around for its random-variable functions.
-    #
-    # This is what creates the TypedModelDescription for us.
-    ommd = create_typed_model_description(model_description, branching_seed)
+    # Run the initialization to get the description of the model given the prototype.
+    seed = get_branching_seed(seed)
+    model_description = init_fcn(t_start, model_prototype, seed)
 
-    # We can now fill in the draws to have a "model state description".
-    msd = create_model_state(t_start, ommd)
-
-    return model(msd)
+    # We can now get the typed model description and model state description.
+    return _initialize(model_description; t_start, model_path, seed, outdir)
 
 end
 
-function _initialize(model_prototype; init_fcn, seed = 0, t_start = 0//1)
+# Once we have the model description, this sets up the typed model description and model
+# state.
+function _initialize(
+    model_description::ModelDescription;
+    t_start = 0//1,
+    model_path = "",
+    seed = BranchingSeed(0, model_path),
+    outdir = nothing,
+)
 
-    # Create the top-level branching seed that will be passed to the user's init function.
-    branching_seed = BranchingSeed(seed, "")
+    # We'll keep track of resources we create along the way so that we can close them.
+    manager = ResourceManager()
 
-    # Run the initialization to get the description of the models given the prototype.
-    model_description = init_fcn(t_start, model_prototype, branching_seed)
+    try
 
-    # Now that the time histories are started, we have no further use of the
-    # VariableDescriptions. Strip those out for the "original minimal model description".
-    # We'll always keep this original description around for its random-variable functions.
-    #
-    # This is what creates the TypedModelDescription for us.
-    ommd = create_typed_model_description(model_description, branching_seed)
+        # We should be done with VariableDescriptions, etc., at this point. Now, we can
+        # strip all of those out to obtain the simplified TypedModelDescription.
+        seed = get_branching_seed(seed)
+        ommd = create_typed_model_description!(manager, model_description, seed, outdir, model_path)
 
-    # We can now fill in the draws to have a "model state description".
-    msd = create_model_state(t_start, ommd)
+        # We can now fill in the draws to have a complete "model state description", from
+        # which we can construct the model form.
+        msd = create_model_state(t_start, ommd)
 
-    # From the model state description, we can build the model itself (the single structure
-    # that has fields for all of the variables that were described in the original model
-    # description).
+        return (; model_description, ommd, msd, manager)
 
-    return (; model_description, ommd, msd)
+    catch err
+
+        # Make sure we close anything we opened along the way.
+        close_resources(manager)
+
+        # Now return to the regular error.
+        rethrow(err)
+
+    end
 
 end
 
@@ -971,6 +982,10 @@ end
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
 optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
 it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
+
+If the `model_description` contains any resources (open files, connections), call
+`Base.close(model_description, model)` to release those resources. Alternatively, consider
+using the `do` form: `initialize(model_prototype) do model ... end`.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -983,16 +998,75 @@ This is useful for debugging model initialization. Given a `ModelDescription` (s
 be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
 The `seed` is used for random variables that do not provide their own
 `RandomVariableDescription` seed.
+
+If the `model_description` contains any resources (open files, connections), call
+`Base.close(model_description, model)` to release those resources. Alternatively, consider
+using the `do` form: `initialize(model_prototype) do model ... end`.
 """
-function initialize(
-    model_description::ModelDescription;
-    seed::BranchingSeed = BranchingSeed(0, ""),
-    t_start = 0//1,
-)
-    ommd = create_typed_model_description(model_description, seed)
-    msd = create_model_state(t_start, ommd)
-    return model(msd)
+function initialize(model_description::ModelDescription; kwargs...)
+    return model(_initialize(model_description; kwargs...).msd)
 end
+
+"""
+    initialize(f, model_prototype_or_description; kwargs...)
+
+This form of `initialize` allows the `do` pattern:
+
+```
+initialize(model_description; kwargs...) do m
+    ...
+end
+```
+
+This is useful when a model opens a file. When the `do` block is finished, this function
+will automatically close all opened resources, even if there was an error.
+
+All additional `args` and `kwargs` are the same as for the other initialization functions.
+"""
+function initialize(f::Function, model_prototype_or_description; kwargs...)
+
+    # Initialize everything. If there's an error during this process, all resources that
+    # were opened along the way will be closed, and then the error will be re-thrown, so if
+    # this function completes, all of the resources (and everything else) went well.
+    (; model_description, ommd, msd, manager) = _initialize(
+        model_prototype_or_description;
+        kwargs...
+    )
+
+    # Now try to run the function, returning whatever it returns.
+    try
+        f(model(msd))
+    finally
+        close_resources(manager)
+    end
+
+end
+
+"""
+    Base.close(desc::ModelDescription, m)
+
+Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
+the model.
+"""
+function Base.close(desc::ModelDescription, m)
+
+    # Let the submodels close their resources, in the reverse order in which we opened them.
+    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
+        Base.close(desc.models[mn], getproperty(m, mn))
+    end
+
+    # Close this model's resources, again in reverse order.
+    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
+        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
+    end
+
+    return nothing
+
+end
+
+############
+# simulate #
+############
 
 """
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
@@ -1030,40 +1104,64 @@ function simulate(
     t_start = first(t)
     t_end = last(t)
 
+    # The user can provide an integer or BranchingSeed, but we want the latter.
+    seed = get_branching_seed(seed)
+
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
-    model_description, ommd, msd = _initialize(model_prototype; init_fcn, t_start, seed)
-    initial_model = model(msd)
+    model_description, ommd, msd, manager = _initialize(
+        model_prototype;
+        init_fcn, t_start, seed, options.outdir,
+    )
 
-    # Use those descriptions to set up the time histories.
-    log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
+    # Outputs from the try block
+    history = nothing
+    final_model = nothing
 
-    # Log the initial stuff.
-    log_discrete_stuff!(t_start, mh, ommd)
+    try
 
-    # Create the solver.
-    solver = Solvers.create_solver(options.solver, msd)
+        # Use those descriptions to set up the time histories.
+        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
 
-    # Create the hooks.
-    hooks = map(options.hooks) do hook_options
-        return Hooks.create_hook(hook_options, t, initial_model)
-    end
+        # Log the initial stuff.
+        log_discrete_stuff!(t_start, mh, ommd)
 
-    # Propagate until we're done.
-    t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+        # Create the solver.
+        solver = Solvers.create_solver(options.solver, msd)
 
-    # Create the final model.
-    final_model = model(msd)
+        # Create the hooks.
+        initial_model = model(msd)
+        hooks = map(options.hooks) do hook_options
+            return Hooks.create_hook(hook_options, t, initial_model)
+        end
 
-    # Close out the models.
-    close_fcn(t_end, final_model)
+        # Propagate until we're done.
+        t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
 
-    # Wrap up all of the history into a single object.
-    history = SimHistory(model_description, log, stop)
+        # Create the final model.
+        final_model = model(msd)
 
-    # Close the hooks.
-    for m in hooks
-        Hooks.close_hook!(m, t_end, final_model)
+        # Close out the models.
+        close_fcn(t_end, final_model)
+
+        # Wrap up all of the history into a single object.
+        history = SimHistory(model_description, log, stop)
+
+        # Close the hooks.
+        for hook in hooks
+            try
+                Hooks.close_hook!(hook, t_end, final_model)
+            catch err
+                trace = catch_backtrace()
+                @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+            end
+        end
+
+    finally
+
+        # Close any open resources.
+        close_resources(manager)
+
     end
 
     return (history, t_end, final_model)
