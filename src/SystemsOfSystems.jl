@@ -1008,7 +1008,7 @@ function initialize(model_description::ModelDescription; kwargs...)
 end
 
 """
-    initialize(f, args...; kwargs...)
+    initialize(f, model_prototype_or_description; kwargs...)
 
 This form of `initialize` allows the `do` pattern:
 
@@ -1023,12 +1023,15 @@ will automatically close all opened resources, even if there was an error.
 
 All additional `args` and `kwargs` are the same as for the other initialization functions.
 """
-function initialize(f::Function, args...; kwargs...)
+function initialize(f::Function, model_prototype_or_description; kwargs...)
 
     # Initialize everything. If there's an error during this process, all resources that
     # were opened along the way will be closed, and then the error will be re-thrown, so if
     # this function completes, all of the resources (and everything else) went well.
-    (; model_description, ommd, msd, manager) = _initialize(args...; kwargs...)
+    (; model_description, ommd, msd, manager) = _initialize(
+        model_prototype_or_description;
+        kwargs...
+    )
 
     # Now try to run the function, returning whatever it returns.
     try
@@ -1047,13 +1050,13 @@ the model.
 """
 function Base.close(desc::ModelDescription, m)
 
-    # Let the submodels close their resources.
-    for mn in fieldnames(typeof(desc.models))
+    # Let the submodels close their resources, in the reverse order in which we opened them.
+    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
         Base.close(desc.models[mn], getproperty(m, mn))
     end
 
-    # Close this model's resources.
-    for fn in fieldnames(typeof(desc.resources))
+    # Close this model's resources, again in reverse order.
+    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
         try_to_close_resource(desc.resources[fn], getproperty(m, fn))
     end
 
