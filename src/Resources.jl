@@ -5,7 +5,7 @@ export AbstractResource, OutputFile, Resource, ResourceInputs, open_resource, cl
 """
     ResourceInputs
 
-Stores a set of inputs that an `AbstractResource` can use in its `open_source` method.
+Stores a set of inputs that an `AbstractResource` can use in its `open_resource` method.
 
 Fields:
 
@@ -50,7 +50,7 @@ A container for a general resource, like a TCP/IP connection or a shared library
 
 Fields:
 
-* `open_args` - A vector of arguments to pass to the `open_fcn`
+* `open_args` - A tuple of arguments to pass to the `open_fcn`
 * `open_fcn` - A function to call to open the resource. The first argument will be a
   `ResourceInputs`, and the remaining arguments will be the `open_args`. This should return
   a "payload" that the model will store during simulation.

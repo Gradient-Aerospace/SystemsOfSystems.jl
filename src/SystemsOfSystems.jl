@@ -362,8 +362,7 @@ function strip_fluff_from_random_variable_set(random_variables, seed)
     )
 end
 
-# This type is used to store resources that need to be closed. It's only used during
-# initialization.
+# This type is used to store resources that need to be closed.
 @kwdef struct ResourceManager
     descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
     payloads::Vector{Any} = Any[]
@@ -561,7 +560,7 @@ include("Solvers.jl")
 """
 A set of options for the `simulate` function, with keyword arguments for:
 
-* `outdir`: A directory to save outputs any (such as `Resources.OutputFile`)
+* `outdir`: A directory to save any outputs to (such as `Resources.OutputFile`)
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
 * `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
