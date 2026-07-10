@@ -50,6 +50,8 @@ elements of the model, including:
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
 * `models`: A named tuple containing the ModelDescription of each submodel.
+* `resources`: A named tuple containing a `Resources.AbstractResource`, for opening files
+  or creating connections that need to be closed when the simulation is over.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
   integrator will step no latter than this time, but may step earlier.
 
@@ -380,8 +382,10 @@ function try_to_close_resource(resource, payload)
         end
 end
 function close_resources(manager::ResourceManager)
-    for (description, payload) in zip(manager.descriptions, manager.payloads)
-        try_to_close_resource(description, payload)
+    # We close in the reverse order in which we opened. That's probably irrelevant, but it
+    # may be useful in some situations.
+    for (desc, payload) in Iterators.reverse(zip(manager.descriptions, manager.payloads))
+        try_to_close_resource(desc, payload)
     end
     return nothing
 end
@@ -556,6 +560,7 @@ include("Solvers.jl")
 """
 A set of options for the `simulate` function, with keyword arguments for:
 
+* `outdir`: A directory to save outputs any (such as `Resources.OutputFile`)
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
 * `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
@@ -979,7 +984,8 @@ optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model
 it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
 
 If the `model_description` contains any resources (open files, connections), call
-`Base.close(model_description, model)` to release those resources.
+`Base.close(model_description, model)` to release those resources. Alternatively, consider
+using the `do` form: `initialize(model_prototype) do model ... end`.
 """
 function initialize(model_prototype; kwargs...)
     return model(_initialize(model_prototype; kwargs...).msd)
@@ -994,7 +1000,8 @@ The `seed` is used for random variables that do not provide their own
 `RandomVariableDescription` seed.
 
 If the `model_description` contains any resources (open files, connections), call
-`Base.close(model_description, model)` to release those resources.
+`Base.close(model_description, model)` to release those resources. Alternatively, consider
+using the `do` form: `initialize(model_prototype) do model ... end`.
 """
 function initialize(model_description::ModelDescription; kwargs...)
     return model(_initialize(model_description; kwargs...).msd)
@@ -1042,7 +1049,7 @@ function Base.close(desc::ModelDescription, m)
 
     # Let the submodels close their resources.
     for mn in fieldnames(typeof(desc.models))
-        Base.close(desc.models[mn], m[mn])
+        Base.close(desc.models[mn], getproperty(m, mn))
     end
 
     # Close this model's resources.
