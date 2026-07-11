@@ -224,7 +224,7 @@ end
 # This helper is shared by interpolation policies that need the usual "first sample at or
 # after t" lookup. Keeping it outside `TimeSeries(t)` means interpolators that do not need
 # this search do not have to pay for it.
-function sample_index_at_or_after(ts::TimeSeries, t)
+function sample_index_at_or_before(ts::TimeSeries, t)
     if isempty(ts.time)
         error("Cannot evaluate an empty TimeSeries.")
     end
@@ -233,49 +233,26 @@ function sample_index_at_or_after(ts::TimeSeries, t)
     if t < t_first || t > t_last
         error("Time $t is outside the range [$t_first, $t_last].")
     end
-    return searchsortedfirst(ts.time, t)
-end
-
-# This helper is shared by interpolation policies that need a normalized position between
-# the bracketing samples. It intentionally checks the bracket so direct interpolator calls
-# and future dense-output interpolators get a clearer error.
-function interpolation_fraction(ts::TimeSeries, k_hi::Int, t)
-    if k_hi == 1
-        error("Cannot interpolate before the first sample at t = $(ts.time[1]).")
-    end
-    t_lo = ts.time[k_hi - 1]
-    t_hi = ts.time[k_hi]
-    if t_hi == t_lo
-        error("Cannot interpolate when consecutive time points are identical at t = $t_lo.")
-    end
-    return (t - t_lo) / (t_hi - t_lo)
+    return searchsortedlast(ts.time, t)
 end
 
 function (::SampleAndHold)(ts::TimeSeries, t)
-    k_hi = sample_index_at_or_after(ts, t)
-    # At exact sample times, report the sample at that time. Between samples, hold the
-    # previous value. Keeping this policy here means custom interpolators get the same
-    # chance to define exact-time behavior for themselves.
-    if t == ts.time[k_hi]
-        return ts.data[k_hi]
-    end
-    return ts.data[k_hi - 1]
+    k = sample_index_at_or_before(ts, t)
+    return ts.data[k]
 end
 
 function (::LinearInterpolation)(ts::TimeSeries, t)
-    k_hi = sample_index_at_or_after(ts, t)
-    # The first stored sample has no previous sample to interpolate from. Returning through
-    # the interpolator still keeps the policy in one place.
-    if k_hi == 1
-        return ts.data[1]
+    k_last = sample_index_at_or_before(ts, t) # should be a valid index or we'd have errored
+    t_last = ts.time[k_last]
+    y_last = ts.data[k_last]
+    if t == t_last
+        return y_last # This is what we were asked for.
     end
-    if t == ts.time[k_hi]
-        return ts.data[k_hi]
-    end
-    y_lo = ts.data[k_hi - 1]
-    y_hi = ts.data[k_hi]
-    fraction_from_last_to_next = interpolation_fraction(ts, k_hi, t)
-    return y_lo + fraction_from_last_to_next * (y_hi - y_lo)
+    k_next = k_last + 1
+    t_next = ts.time[k_next]
+    y_next = ts.data[k_next]
+    fraction_from_last_to_next = (t - t_last) / (t_next - t_last)
+    return y_last + fraction_from_last_to_next * (y_next - y_last)
 end
 
 """

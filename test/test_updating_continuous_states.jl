@@ -46,6 +46,18 @@ using SystemsOfSystems
         @test history["/"]["x_dot"](t) ≈ -9.81 * 0.5 atol = 1e-6
     end
 
+    # Test interpolation, that the updated value isn't incorrectly interpolated backwards.
+    # Note that this uses linear interpolation, so the velocity will be fine, but the
+    # position will be off. It should be linearly interpolating between the value at t = 0.5
+    # and t = 1.
+    x_at_half = 1. - 0.5 * 9.81 * 0.5^2
+    x_at_full = 1. - 0.5 * 9.81 * 1.0^2
+    x_at_three_quarters = 0.5 * (x_at_half + x_at_full)
+    for t in 0.75 : 1. : 4.75
+        @test history["/"]["x"](t) ≈ x_at_three_quarters atol = 1e-6
+        @test history["/"]["x_dot"](t) ≈ -9.81 * 0.75 atol = 1e-6
+    end
+
 end
 
 end
