@@ -1,8 +1,16 @@
+module TestControlSystemDemo
+
 using Random: Xoshiro, randn, rand
 using HDF5: h5open, Group
+using Test
 import Dimensions
+import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription
+    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription,
+    Solvers, Logs, SimOptions, simulate
+
+out_dir = "out"
+mkpath(joinpath(@__DIR__, out_dir))
 
 #########
 # Plant #
@@ -636,3 +644,5 @@ end
     # TODO: Now test with the internal solve/update functions.
 
 end
+
+end # TestControlSystemDemo
