@@ -3,6 +3,17 @@ module TestUpdatingContinuousStates
 using Test
 using SystemsOfSystems
 
+struct StopAtOneSecondOptions <: Hooks.AbstractHookOptions end
+struct StopAtOneSecond <: Hooks.AbstractHook end
+
+function Hooks.create_hook(::StopAtOneSecondOptions, t, model)
+    return StopAtOneSecond()
+end
+
+function Hooks.update_hook!(::StopAtOneSecond, t, model)
+    return Hooks.HookOutputs(; stop = t == 1)
+end
+
 # Let's test that an object can fall for 1s but then resets back to its original position
 # and velocity.
 @testset "updating continuous states" begin
@@ -57,6 +68,44 @@ using SystemsOfSystems
         @test history["/"]["x"](t) ≈ x_at_three_quarters atol = 1e-6
         @test history["/"]["x_dot"](t) ≈ -9.81 * 0.75 atol = 1e-6
     end
+
+end
+
+# A hook can end the simulation on the same step as a continuous state update. Since there
+# won't be another solver step to log the updated state, the update itself must add the
+# final sample to the history.
+@testset "updating continuous states when a hook stops the simulation" begin
+
+    history, t_final, model_final = simulate(
+        nothing;
+        t = 0//1 : 1//2 : 5//1,
+        init_fcn = (t, params, seed) -> ModelDescription(;
+            continuous_states = (; x = 0.),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (; x = 1.),
+        ),
+        updates_fcn = (t, model) -> if t == 1
+            UpdatesOutput(;
+                updates = (; x = 10.),
+            )
+        else
+            UpdatesOutput()
+        end,
+        options = SimOptions(;
+            hooks = [StopAtOneSecondOptions(),],
+        ),
+    )
+
+    # The hook stops at 1 s, after which the update changes x from its integrated value of
+    # 1 to 10. The final history must contain both sides of the discontinuity and select
+    # the updated value at the exact event time.
+    x_history = history["/"]["x"]
+    @test t_final == 1
+    @test model_final.x == 10.
+    @test x_history.time[end-1:end] == [1., 1.]
+    @test x_history.data[end-1:end] ≈ [1., 10.]
+    @test x_history(t_final) == model_final.x
 
 end
 
