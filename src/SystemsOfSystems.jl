@@ -722,7 +722,9 @@ end
 # This is called right after updating.
 function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     for fn in keys(uo.updates)
-        push!(mh.discrete_states[fn], float(t), uo.updates[fn])
+        if haskey(mh.discrete_states, fn) # Only log the discrete states.
+            push!(mh.discrete_states[fn], float(t), uo.updates[fn])
+        end
     end
     for fn in keys(uo.outputs)
         push!(mh.discrete_outputs[fn], float(t), uo.outputs[fn])
@@ -732,13 +734,13 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
     end
 end
 
-function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
+function update_states(prior_states::T1, updated_states::T2) where {T1, T2}
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
             if hasfield(T2, f)
-                updated_discrete_states[f]
+                updated_states[f]
             else
-                discrete_states[f]
+                prior_states[f]
             end
         end
     )
@@ -786,8 +788,8 @@ end
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
     return copy_model_state_description_except(
         msd;
-        # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
+        continuous_states = update_states(msd.continuous_states, updates_output.updates),
+        discrete_states = update_states(msd.discrete_states, updates_output.updates),
         models = update_submodels(msd.models, updates_output.models),
         t_next = update_model_t_next(msd.t_next, updates_output.t_next),
     )
