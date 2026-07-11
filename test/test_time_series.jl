@@ -1,12 +1,12 @@
 module TestTimeSeries
 
-using HDF5Vectors # For the HDF5Logger
 using Test
+using HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
 using SystemsOfSystems: Logs
 
-out_dir = "out"
-mkpath(joinpath(@__DIR__, out_dir))
+const out_dir = joinpath(@__DIR__, "out")
+mkpath(out_dir)
 
 # We implement a custom interpolation type just to test that we can.
 struct OffsetLinearInterpolation
@@ -201,7 +201,7 @@ end
     Logs.close_log(basic_log)
 
     hdf5_log, hdf5_history = Logs.create_log(
-        Logs.HDF5LogOptions("$out_dir/variable_description_interpolator.h5"),
+        Logs.HDF5LogOptions(joinpath(out_dir, "variable_description_interpolator.h5")),
         model_description,
         SystemsOfSystems.Dimension("time", "s"),
     )

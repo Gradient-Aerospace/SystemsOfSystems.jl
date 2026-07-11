@@ -4,7 +4,8 @@ module RunTests
 # additional simulation features and options that build on that behavior.
 include("test_step_triggering.jl")
 include("test_time_series.jl")
-include("test_simulations.jl")
+include("test_basic_simulations.jl")
+include("test_solver_options.jl")
 include("test_continuous_random_variables.jl")
 include("test_random_variable_seeds.jl")
 include("test_control_system_demo.jl")

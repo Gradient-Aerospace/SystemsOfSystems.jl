@@ -1,8 +1,8 @@
 module TestRandomVariableSeeds
 
 using Test
-using SystemsOfSystems
 using Random: Xoshiro, rand, randn
+using SystemsOfSystems
 
 first_randn(seed) = randn(Xoshiro(seed))
 

@@ -1,13 +1,13 @@
-module TestSimulations
+module TestBasicSimulations
 
-using HDF5Vectors # For the HDF5Logger
 using Test
+using HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
 using SystemsOfSystems: Solvers, Logs, Hooks
 # using GLMakie # For plots
 
-out_dir = "out"
-mkpath(joinpath(@__DIR__, out_dir))
+const out_dir = joinpath(@__DIR__, "out")
+mkpath(out_dir)
 
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
@@ -22,7 +22,7 @@ mkpath(joinpath(@__DIR__, out_dir))
     log = if log_type == "ram"
         Logs.BasicLogOptions()
     elseif log_type == "hdf5"
-        Logs.HDF5LogOptions("$out_dir/exponential_logs.h5")
+        Logs.HDF5LogOptions(joinpath(out_dir, "exponential_logs.h5"))
     elseif log_type == "null"
         Logs.NullLogOptions()
     elseif log_type == "none"
@@ -101,7 +101,7 @@ mkpath(joinpath(@__DIR__, out_dir))
         x_ts = history["/"]["x"]
         @test x_ts.time isa HDF5Vectors.AbstractHDF5Vector
         @test x_ts.data isa HDF5Vectors.AbstractHDF5Vector
-        hdf5_log, = Logs.load_hdf5_log("$out_dir/exponential_logs.h5")
+        hdf5_log, = Logs.load_hdf5_log(joinpath(out_dir, "exponential_logs.h5"))
         @test collect(history["/"]["x"].time) == collect(hdf5_log["/"]["x"].time)
         @test collect(history["/"]["x"].data) == collect(hdf5_log["/"]["x"].data)
         Logs.close_log(hdf5_log)
@@ -241,87 +241,6 @@ end
 
 end
 
-@testset "failed steps in DP54 for max_dt = $max_dt" for max_dt in (10//1, 1//10)
-
-    # This should generate a sinusoid. When the time step is really large, it should fail
-    # integration tolerances and end up with smaller steps. When it's really smaller, it
-    # should observe the unnecessarily small steps.
-    history, t, x = simulate(
-        nothing;
-        init_fcn = (args...) -> ModelDescription(
-            continuous_states = (;
-                position = 1.,
-                velocity = 0.,
-            ),
-        ),
-        rates_fcn = (t, model) -> begin
-            RatesOutput(
-                rates = (;
-                    position = model.velocity,
-                    velocity = -model.position,
-                ),
-            )
-        end,
-        t = (0, 30),
-        options = SimOptions(;
-            solver = Solvers.DormandPrince54Options(;
-                initial_dt = max_dt, # Intentionally too big, to make sure this fails.
-                max_dt, # Intentionally smaller than necessary.
-            ),
-        ),
-    )
-
-    # Make sure we're always less than the maximum.
-    t = history["/"]["position"].time
-    for k in 2:length(t)
-        @test t[k] - t[k-1] - eps(t[k]) <= max_dt
-    end
-
-end
-
-@testset "user-specified time steps" begin
-
-    # This should generate a sinusoid. The max step will limit the step size here, but we'll
-    # request even shorter time steps for the first several steps.
-    max_dt = 1//2
-    t_specified = [0.01, 0.1, 0.2, 0.3, 30.] # Includes a non-zero start
-    history, t, x = simulate(
-        nothing;
-        init_fcn = (args...) -> ModelDescription(
-            continuous_states = (;
-                position = 1.,
-                velocity = 0.,
-            ),
-        ),
-        rates_fcn = (t, model) -> begin
-            RatesOutput(
-                rates = (;
-                    position = model.velocity,
-                    velocity = -model.position,
-                ),
-            )
-        end,
-        t = t_specified,
-        options = SimOptions(;
-            solver = Solvers.DormandPrince54Options(;
-                initial_dt = max_dt, # Intentionally too big, to make sure this fails.
-                max_dt, # Intentionally smaller than necessary.
-            ),
-        ),
-    )
-
-    # Make sure we're always less than the maximum.
-    t = history["/"]["position"].time
-    for k in 2:length(t)
-        @test t[k] - t[k-1] - eps(t[k]) <= max_dt
-    end
-
-    # Make sure the first several steps are precisely what we specified.
-    @test t[1:4] == t_specified[1:4]
-    @test t[end] == t_specified[end]
-
-end
-
 # TODO: Test continuous variables that _don't_ have rates outputs sometimes.
 
-end # TestSimulations
+end # TestBasicSimulations
