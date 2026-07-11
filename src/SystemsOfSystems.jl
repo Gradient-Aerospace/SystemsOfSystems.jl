@@ -715,22 +715,33 @@ function log_initial_discrete_stuff!(t, mh, md::TypedModelDescription)
     end
 end
 
-function log_discrete_stuff!(t, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription)
+function log_discrete_stuff!(
+    t, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
+    include_updated_continuous_states::Bool
+)
 end
 
 # This is called right after updating.
-function log_discrete_stuff!(t, mh, uo::UpdatesOutput, prior::ModelStateDescription)
+function log_discrete_stuff!(
+    t, mh, uo::UpdatesOutput, prior::ModelStateDescription,
+    include_updated_continuous_states::Bool
+)
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
     # log_continuous_stuff! will take care of logging the updated value at the beginning of
-    # its next step, which starts at `t` (`t` will be in the log twice).
+    # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
+    # a next sample, then `include_updated_continuous_states` should be true, and we'll go
+    # ahead and log the updated continuous-time state too.
     for fn in keys(uo.updates)
         if haskey(mh.discrete_states, fn) # Only log the discrete states.
             push!(mh.discrete_states[fn], float(t), uo.updates[fn])
         end
         if haskey(mh.continuous_states, fn)
             push!(mh.continuous_states[fn], float(t), prior.continuous_states[fn])
+            if include_updated_continuous_states
+                push!(mh.continuous_states[fn], float(t), uo.updates[fn])
+            end
         end
     end
 
@@ -742,7 +753,10 @@ function log_discrete_stuff!(t, mh, uo::UpdatesOutput, prior::ModelStateDescript
     # Models don't have to pass through updates for their submodels, but if they did, let's
     # use them.
     for fn in keys(uo.models)
-        log_discrete_stuff!(t, mh.models[fn], uo.models[fn], prior.models[fn])
+        log_discrete_stuff!(
+            t, mh.models[fn], uo.models[fn], prior.models[fn],
+            include_updated_continuous_states,
+        )
     end
 
 end
@@ -899,7 +913,12 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     updates = updates_fcn(t_next, model(msd))
 
     # Log the updated values.
-    log_discrete_stuff!(t_next, mh, updates, msd)
+    # Normally, this logs updated discrete states and _prior_ continuous-time states, since
+    # it counts on log_continuous_stuff! to log the continuous-time state on the next
+    # sample. However, if a hook requested a stop, then there won't be a next sample, so
+    # we need to go ahead and log the updated states too.
+    include_updated_continuous_states = !isa(stop, UnknownStopReason)
+    log_discrete_stuff!(t_next, mh, updates, msd, include_updated_continuous_states)
 
     # Now accept the update.
     msd = update(msd, updates)
