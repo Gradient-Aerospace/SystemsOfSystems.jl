@@ -47,7 +47,7 @@ ContinuousProblem(typed_description, rates_fcn) =
     ContinuousProblem(typed_description, rates_fcn, DefaultErrorPolicy())
 
 """
-    prepare_attempt(problem, t_start, t_end, state)
+    prepare_attempt(problem, t_start, t_end, dt, state)
 
 Prepare the beginning state for one numerical attempt over the official interval
 `[t_start, t_end]`.
@@ -61,11 +61,14 @@ function prepare_attempt(
     problem::ContinuousProblem,
     t_start,
     t_end,
+    dt::Float64,
     state::ModelStateDescription,
 )
+    t_start_f = float(t_start)
+    t_end_f = t_start_f + dt
     return draw_wc(
-        float(t_start),
-        float(t_end),
+        t_start_f,
+        t_end_f,
         problem.typed_description,
         state,
     )

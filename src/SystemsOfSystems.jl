@@ -13,9 +13,13 @@ export Dimension, TimeSeries,
     BranchingSeed, branch,
     AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
-    is_regular_step_triggering
+    KEEP_T_NEXT, NO_T_NEXT,
+    is_regular_step_triggering, next_regular_time
 
 using Random: Xoshiro
+
+include("SimulationTimes.jl")
+using .SimulationTimes
 
 include("TimeSeries.jl")
 using .TimeSeriesStuff
@@ -53,7 +57,8 @@ elements of the model, including:
 * `resources`: A named tuple containing a `Resources.AbstractResource`, for opening files
   or creating connections that need to be closed when the simulation is over.
 * `t_next`: The next sim time at which the model requests that the integrator stop. The
-  integrator will step no latter than this time, but may step earlier.
+  integrator will step no later than this time, but may step earlier. It defaults to
+  `NO_T_NEXT`, meaning the model has no finite scheduled event.
 
 For the constants, states, and outputs, the value corresponding with each field can either
 be a raw value (e.g., 6.) or a `VariableDescription`, such as:
@@ -90,14 +95,14 @@ ModelDescription(;
     discrete_random_variables = (;),
     models = (;),
     resources = (;),
-    t_next = 0//1,
+    t_next = NO_T_NEXT,
 ) = ModelDescription(
     type, constants,
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
     models, resources,
-    rationalize(t_next),
+    exact_time(t_next),
 )
 
 """
@@ -133,23 +138,24 @@ Describes a model's discrete-time updates and outputs.
 * `outputs`: A named tuple of discrete-time outputs (must match the original
   `ModelDescription`).
 * `models`: A named tuple contains the `UpdatesOutput` for each submodel.
-* `t_next`: The next time at which this model is requesting a stop.
+* `t_next`: A replacement for the model's next requested time. When omitted, it defaults to
+  `KEEP_T_NEXT` and retains the previous request. `NO_T_NEXT` cancels a finite request.
 * `stop`: Set to true to request that the simulation stop after this update is accepted.
 """
 struct UpdatesOutput{UT, OT, MT}
     updates::UT
     outputs::OT
     models::MT
-    t_next::Rational{Int64}
+    t_next::ExactTime
     stop::Bool
 end
 UpdatesOutput(;
     updates = (;),
     outputs = (;),
     models = (;),
-    t_next = 0//1,
+    t_next = KEEP_T_NEXT,
     stop = false,
-) = UpdatesOutput(updates, outputs, models, rationalize(t_next), stop)
+) = UpdatesOutput(updates, outputs, models, exact_time(t_next), stop)
 
 """
 These can be used to decorate the variables in a `ModelDescription`. The decorations become
@@ -245,24 +251,6 @@ end
 # We don't use these internally; they're helpful modeling tools for users.
 
 """
-    is_regular_step_triggering(t, step, offset = 0//1)
-
-Returns true if `t == n * step + offset`, where `n` is an integer. This is useful for
-modeling regularly sampled systems (systems with a constant sample rate). If step == 0, that
-means "always triggering".
-
-```
-is_regular_step_triggering(10.1, 0.05) # true
-is_regular_step_triggering(10.1, 0.20) # false
-is_regular_step_triggering(10.1, 0.0) # true
-is_regular_step_triggering(10.1, 0.20, 0.1) # true
-```
-"""
-function is_regular_step_triggering(t, step, offset = 0//1)
-    return iszero(step) || (mod(rationalize(t - offset), rationalize(step)) == 0//1)
-end
-
-"""
     ContinuousWhiteNoise{T}(; sigma::T)
 
 A type that can be used like a function to draw random numbers for a continuous-time process
@@ -325,7 +313,7 @@ pulled out and all types are fixed as type parameters. This is what's used by th
     discrete_random_variables::WDT
     models::MT
     resources::RT
-    t_next::Rational{Int64}
+    t_next::ExactTime
 end
 
 strip_fluff_from_variable(var) = var
@@ -436,7 +424,7 @@ function create_typed_model_description!(
             for field in fieldnames(typeof(desc.models))
         ),
         resources,
-        t_next = rationalize(desc.t_next),
+        t_next = exact_time(desc.t_next),
     )
 
 end
@@ -454,7 +442,7 @@ end
     discrete_random_variables::WDT
     models::MT
     resources::RT
-    t_next::Rational{Int64}
+    t_next::ExactTime
 end
 function ModelStateDescription{T}(;
     constants = (;),
@@ -464,7 +452,7 @@ function ModelStateDescription{T}(;
     discrete_random_variables = (;),
     models = (;),
     resources = (;),
-    t_next = 0//1,
+    t_next = NO_T_NEXT,
 ) where {T}
     return ModelStateDescription{
         T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
@@ -474,7 +462,7 @@ function ModelStateDescription{T}(;
         constants, continuous_states, discrete_states,
         continuous_random_variables, discrete_random_variables,
         models, resources,
-        rationalize(t_next),
+        exact_time(t_next),
     )
 end
 
@@ -551,7 +539,7 @@ struct UnknownStopReason <: AbstractStopReason end
 The simulation successfully processed its requested final sample.
 """
 struct ReachedEndTime <: AbstractStopReason
-    t_end::Rational{Int64}
+    t_end::ExactTime
 end
 
 """
@@ -566,7 +554,7 @@ end
 The first hook encountered in configured order requested a normal stop.
 """
 struct HookRequestedStop <: AbstractStopReason
-    t::Rational{Int64}
+    t::ExactTime
     hook::Hooks.AbstractHook
 end
 
@@ -848,9 +836,10 @@ function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T
 
 end
 
-# If there's no t_next, keep the last one.
+# Only the dedicated keep instruction preserves the previous request. `NO_T_NEXT` is a
+# replacement value that explicitly cancels a finite event.
 function update_model_t_next(last_t_next, updated_t_next)
-    iszero(updated_t_next) ? last_t_next : updated_t_next # TODO: How do we want to indicate that there is no new t_next?
+    return updated_t_next == KEEP_T_NEXT ? last_t_next : updated_t_next
 end
 
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
@@ -864,15 +853,16 @@ function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
 end
 
 function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
-    t_next_from_this_model = if msd.t_next > t_last
+    t_next_from_this_model = if time_isless(t_last, msd.t_next)
         msd.t_next
     else
-        1//0 # If t_next is in the past, it no longer limits us.
+        NO_T_NEXT # If t_next is in the past, it no longer limits us.
     end
-    return minimum(
-        find_soonest_t_next_from_models(t_last, el) for el in msd.models;
-        init = t_next_from_this_model,
-    )
+    for submodel in msd.models
+        submodel_t_next = find_soonest_t_next_from_models(t_last, submodel)
+        t_next_from_this_model = earlier_time(t_next_from_this_model, submodel_t_next)
+    end
+    return t_next_from_this_model
 end
 
 """
@@ -941,7 +931,7 @@ function step!(
     # time).
     # `searchsortedlast` returns the last requested index whose time is no later than the
     # current official time.
-    k_last_requested_stop = searchsortedlast(t, t_last)
+    k_last_requested_stop = searchsortedlast(t, t_last; lt = time_isless)
     if k_last_requested_stop < firstindex(t)
         t_next_from_user = first(t) # This shouldn't really be possible at this point.
     else
@@ -956,7 +946,7 @@ function step!(
     # Ask all of the models what time they want to stop next, and take the soonest.
     t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
 
-    t_bound = min(t_next_from_user, t_next_from_models)
+    t_bound = earlier_time(t_next_from_user, t_next_from_models)
 
     # Ask the integrator for one accepted numerical step. A failure has no accepted
     # endpoint, so hooks and discrete updates must not run for it.
@@ -1252,7 +1242,7 @@ function simulate(
 )
     # This might be a tuple with (t_start, t_end), but it can also be any collection of
     # monotonic times.
-    t = [rationalize(el) for el in t]
+    t = [exact_time(el) for el in t]
     t_start = first(t)
     t_end = last(t)
 

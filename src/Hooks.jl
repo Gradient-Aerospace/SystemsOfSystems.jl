@@ -9,6 +9,7 @@ See `AbstractHook` for more.
 module Hooks
 
 using ProgressMeter: Progress, update!, finish!
+using ..SimulationTimes: ExactTime, float_duration
 
 """
     AbstractHookOptions
@@ -49,7 +50,7 @@ end
     create_hook(options::AbstractHookOptions, t, model)
 
 Returns a subtype of `AbstractHook` built from the provided `options`, where `t` is an array
-of `Rational{Int64}` corresponding to the set of times passed to `simulate` (i.e.,
+of exact simulation times corresponding to the set of times passed to `simulate` (i.e.,
 `first(t)` is when the sim will start, `last(t)` is when it will end, and anything in
 between is a desired output time for the sim, and `model` is the initial model.
 """
@@ -98,22 +99,23 @@ See `ProgressBarOptions`.
 """
 struct ProgressBar <: AbstractHook
     progress::Progress
-    t_start::Float64
+    t_start::ExactTime
 end
 
 function create_hook(options::ProgressBarOptions, t, model)
     return ProgressBar(
         Progress(
-            Int64(floor(1000 * (last(t) - first(t)))); # Make 1000 update "stages".
+            Int64(floor(1000 * float_duration(first(t), last(t))));
             dt = options.update_interval,
             desc = options.description,
         ),
-        float(first(t)),
+        first(t),
     )
 end
 
 function update_hook!(hook::ProgressBar, t, model)
-    update!(hook.progress, Int64(floor(1000 * (t - hook.t_start))))
+    elapsed = float_duration(hook.t_start, t)
+    update!(hook.progress, Int64(floor(1000 * elapsed)))
     return HookOutputs()
 end
 
@@ -201,14 +203,14 @@ end
 See `ClockSyncOptions`.
 """
 @kwdef struct ClockSync <: AbstractHook
-    t_start::Float64
+    t_start::ExactTime
     initial_time_ns::UInt64
     sleep_margin_ns::UInt64
 end
 
 function create_hook(options::ClockSyncOptions, t, model)
     return ClockSync(;
-        t_start         = float(first(t)),
+        t_start         = first(t),
         initial_time_ns = time_ns(),
         sleep_margin_ns = UInt64(floor(options.sleep_margin * 1e9)),
     )
@@ -217,7 +219,7 @@ end
 function update_hook!(hook::ClockSync, t, model)
 
     # Figure what sim step we're up to.
-    sim_time_ns = UInt64(floor((float(t) - hook.t_start) * 1e9))
+    sim_time_ns = UInt64(floor(float_duration(hook.t_start, t) * 1e9))
 
     # See if we have time (and margin) to go to sleep.
     run_time_ns = time_ns() - hook.initial_time_ns
