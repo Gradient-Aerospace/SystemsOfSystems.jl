@@ -1,5 +1,6 @@
 using Random
-using SystemsOfSystems: SystemsOfSystems, ModelStateDescription, model, copy_model_state_description_except
+using SystemsOfSystems: SystemsOfSystems, ModelStateDescription,
+    copy_model_state_description_except, model
 
 @kwdef struct MyType
     a::Int64
@@ -68,7 +69,7 @@ end
 
 function populate_t_next!(t_next, msd)
     for k in eachindex(t_next)
-        t_next[k] = SystemsOfSystems.find_soonest_t_next(1//1, msd)
+        t_next[k] = SystemsOfSystems.find_soonest_t_next_from_models(1//1, msd)
     end
 end
 
@@ -124,16 +125,16 @@ function my_init()
                     b = 0.,
                 ),
                 discrete_random_variables = (;
-                    c = (t) -> randn(rng),
+                    c = (rng, t) -> randn(rng),
                 ),
                 t_next = 0//1,
             ),
         ),
     )
 end
-ommd = my_init()
-
-msd = prototype
+initialized = SystemsOfSystems._initialize(my_init())
+ommd = initialized.ommd
+msd = initialized.msd
 
 function draw_wd_here(ommd, msd)
     SystemsOfSystems.draw_wd(0//1, ommd, msd)
@@ -156,8 +157,10 @@ draw_wc_here(ommd, msd)
 function update_msd(msd, k)
     uo = SystemsOfSystems.UpdatesOutput(;
         models = (;
-            discrete_states = (;
-                b = float(k),
+            inner = SystemsOfSystems.UpdatesOutput(;
+                updates = (;
+                    b = float(k),
+                ),
             ),
         ),
     )
@@ -219,14 +222,22 @@ updated_msds = Vector{typeof(prototype)}(undef, n)
 propagate2_msds!(updated_msds, msds)
 @time propagate2_msds!(updated_msds, msds)
 
-solver = SystemsOfSystems.Solvers.create_solver(SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1//1), msd)
+problem = SystemsOfSystems.ContinuousProblems.ContinuousProblem(ommd, rates)
+integrator = SystemsOfSystems.Solvers.create_integrator(
+    SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1//1),
+    problem,
+    msd,
+)
+request = SystemsOfSystems.Solvers.StepRequest(0//1, 1//1, msd)
 
-function foo(ommd, solver, msd, rates)
-    solution = SystemsOfSystems.Solvers.solve(ommd, solver, 0//1, 1//1, msd, rates, 100//1)
+function foo(integrator, problem, request)
+    solution = SystemsOfSystems.Solvers.step!(integrator, problem, request)
     return isbits(solution)
 end
 
 println("solve")
-bar = foo(ommd, solver, msd, rates)
-@time bar = foo(ommd, solver, msd, rates)
+bar = foo(integrator, problem, request)
+@time bar = foo(integrator, problem, request)
 @show bar
+
+SystemsOfSystems.close_resources(initialized.manager)

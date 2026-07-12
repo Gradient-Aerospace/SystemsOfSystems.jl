@@ -108,7 +108,9 @@ Describes a model's continuous-time derivatives and outputs.
 * `outputs`: A named tuple of continuous-time outputs (must match the original
   `ModelDescription`).
 * `models`: A named tuple contains the `RatesOutput` for each submodel.
-* `stop`: Set to true to request that the simulation stop after this sample completes.
+* `stop`: Set to true to request that the simulation stop after this accepted sample
+  completes. Stop requests from rejected solver attempts and intermediate Runge-Kutta
+  stages are ignored.
 """
 struct RatesOutput{RT, OT, MT}
     rates::RT
@@ -132,7 +134,7 @@ Describes a model's discrete-time updates and outputs.
   `ModelDescription`).
 * `models`: A named tuple contains the `UpdatesOutput` for each submodel.
 * `t_next`: The next time at which this model is requesting a stop.
-* `stop`: Set to true to request that the simulation stop after this sample completes.
+* `stop`: Set to true to request that the simulation stop after this update is accepted.
 """
 struct UpdatesOutput{UT, OT, MT}
     updates::UT
@@ -521,26 +523,63 @@ end
 # Stop Reasons #
 ################
 
-abstract type AbstractStopReason end
+"""
+The common supertype for every reason a simulation ceased running.
+
+Normal stop requests and failures are deliberately separate categories. A model or hook
+request is part of the modeled lifecycle; a numerical or software failure means that
+lifecycle could not produce another valid sample.
+"""
+abstract type AbstractTerminationReason end
+
+"""
+A normal, successfully processed request to stop a simulation.
+"""
+abstract type AbstractStopReason <: AbstractTerminationReason end
+
+"""
+A condition that prevented the simulation from producing another valid accepted sample.
+"""
+abstract type AbstractFailureReason <: AbstractTerminationReason end
+
+"""
+Internal sentinel indicating that the simulation loop should continue.
+"""
 struct UnknownStopReason <: AbstractStopReason end
+
+"""
+The simulation successfully processed its requested final sample.
+"""
 struct ReachedEndTime <: AbstractStopReason
     t_end::Rational{Int64}
 end
+
+"""
+The first model encountered in deterministic hierarchy order requested a normal stop.
+"""
 struct ModelRequestedStop <: AbstractStopReason
-    model_path::String # What ultimately populates this?
+    model_path::String
     reason::String
 end
+
+"""
+The first hook encountered in configured order requested a normal stop.
+"""
 struct HookRequestedStop <: AbstractStopReason
     t::Rational{Int64}
     hook::Hooks.AbstractHook
 end
-struct EncounteredError <: AbstractStopReason
+
+"""
+User model code or simulation infrastructure raised an unexpected exception.
+"""
+struct EncounteredError <: AbstractFailureReason
     time::Float64
     exception::Exception
     trace::Any
 end
 
-describe(stop::AbstractStopReason) = string(typeof(stop))
+describe(reason::AbstractTerminationReason) = string(typeof(reason))
 describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
 describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
 describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
@@ -551,10 +590,12 @@ describe(stop::EncounteredError) = "The sim experienced an error."
 # SimOptions #
 ##############
 
-# We define this here so Solvers can import the symbol.
+# We define this generic function before loading the continuous-problem adapter. Its concrete
+# hierarchical method remains with the simulation's random-variable machinery below.
 function draw_wc end
 
 include("Logs.jl")
+include("ContinuousProblems.jl")
 include("Solvers.jl")
 
 """
@@ -584,7 +625,7 @@ A type to store the results from simulation, including fields for:
 
 * `model`: The final model constructed in the sim
 * `log`: The log containing the time series for each variable of each model
-* `step`: The reason the sim stopped
+* `stop`: The normal stop or failure reason that ended the simulation
 
 This type acts like a log itself, so for instance these do the same thing:
 
@@ -598,7 +639,7 @@ The `keys`, `values`, and `pairs` functions also pass through to the underlying 
 struct SimHistory
     model::ModelDescription
     log::Logs.AbstractLog
-    stop::AbstractStopReason
+    stop::AbstractTerminationReason
 end
 
 function Base.show(io::IO, mime::MIME"text/plain", history::SimHistory)
@@ -834,13 +875,73 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     )
 end
 
-function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, t_end, t_next_suggested)
+"""
+    find_model_requested_stop(output, model_path = "/")
 
-    # Figure out how big this step can be.
+Return the first model stop request in a deterministic, depth-first traversal of a
+`RatesOutput` or `UpdatesOutput` hierarchy.
+
+The parent model is considered before its children, and children follow their named-tuple
+field order. For now, one stop reason is retained; this traversal makes "first"
+predictable until the public model interface can carry structured reasons and the simulation
+history can represent several simultaneous requests.
+"""
+function find_model_requested_stop(output, model_path = "/")
+
+    if output.stop
+        return ModelRequestedStop(model_path, "The model requested that the simulation stop")
+    end
+
+    for field in fieldnames(typeof(output.models))
+        submodel_path = model_path == "/" ? "/models/$field" : "$model_path/models/$field"
+        stop = find_model_requested_stop(output.models[field], submodel_path)
+        if !isnothing(stop)
+            return stop
+        end
+    end
+
+    return nothing
+
+end
+
+
+# Preserve the first stop reason encountered while allowing the rest of an accepted sample
+# to complete. In particular, hooks and the discrete update still run after an accepted
+# beginning-of-step rates evaluation requests a stop.
+first_stop(current, candidate) = isnothing(current) ? candidate : current
+
+
+"""
+    step!(...)
+
+Process one complete accepted hybrid-system sample.
+
+The integrator first advances continuous state by exactly one accepted numerical step. The
+function then logs its authoritative beginning sample, runs hooks, draws discrete random
+variables, and accepts the discrete update at the rational endpoint. If that is the final
+sample, it evaluates rates directly on the post-update model before returning.
+"""
+function step!(
+    mh,
+    t,
+    ommd,
+    problem,
+    updates_fcn,
+    t_last,
+    msd,
+    integrator,
+    hooks,
+    t_end,
+)
+
+    # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
+    # belong to the runtime integrator; the scheduler owns only exact external boundaries.
 
     # Assume the next stop is the next time a user asked for a stop (which might be the end
     # time).
-    k_last_requested_stop = searchsortedlast(t, t_last) # Returns that last index of t that is <= t_last
+    # `searchsortedlast` returns the last requested index whose time is no later than the
+    # current official time.
+    k_last_requested_stop = searchsortedlast(t, t_last)
     if k_last_requested_stop < firstindex(t)
         t_next_from_user = first(t) # This shouldn't really be possible at this point.
     else
@@ -855,35 +956,31 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     # Ask all of the models what time they want to stop next, and take the soonest.
     t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
 
-    # Get the soonest from what the user asked for, what the integrator suggested, and what
-    # the models requested.
-    t_next = min(t_next_from_user, t_next_suggested, t_next_from_models)
+    t_bound = min(t_next_from_user, t_next_from_models)
 
-    # Perform the continuous-time update from t_last to t_next.
-    # println("Stepping from $(float(t_last)) to $(float(t_next)).")
-
-    # Potentially, we should draw_wc and keep the end step time no matter what.
-
-    # Step the continuous system. Note that this might not step all the way to the preferred
-    # t_next.
-    solver_outputs   = Solvers.solve(ommd, solver, t_last, t_next, msd, rates_fcn, t_end)
-    t_next           = solver_outputs.t_completed
-    msd              = solver_outputs.msd_k
-    stop             = solver_outputs.stop
-    t_next_suggested = solver_outputs.t_next_suggested
-
-    # Log the beginning of that sample now that we have its draws and derivatives.
-    log_continuous_stuff!(t_last, mh, solver_outputs.msd_km1, solver_outputs.rates)
-
-    # If it's time to stop and nothing else has a reason to stop yet, set the stop reason.
-    if isa(stop, UnknownStopReason) && t_last == t_end
-        stop = ReachedEndTime(t_end)
+    # Ask the integrator for one accepted numerical step. A failure has no accepted
+    # endpoint, so hooks and discrete updates must not run for it.
+    result = Solvers.step!(
+        integrator,
+        problem,
+        Solvers.StepRequest(t_last, t_bound, msd),
+    )
+    if result isa Solvers.SolverFailure
+        return (t_last, msd, result.reason)
     end
 
-    # If there's a reason to stop, bail on the rest of this step.
-    if !isa(stop, UnknownStopReason)
-        return (t_next, msd, stop, t_next_suggested)
-    end
+    t_next = result.t_end
+    msd = result.state_at_end
+
+    # The beginning state and rates come from the accepted attempt. Rejected attempts and
+    # intermediate Runge-Kutta stages never reach logging or model stop handling.
+    log_continuous_stuff!(
+        t_last,
+        mh,
+        result.state_at_start,
+        result.rates_at_start,
+    )
+    stop = find_model_requested_stop(result.rates_at_start)
 
     # Update the hooks.
     #
@@ -899,9 +996,7 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
         for hook in hooks
             hook_outputs = Hooks.update_hook!(hook, t_next, m)
             if hook_outputs.stop
-                if isa(stop, UnknownStopReason) # Don't overwrite a pre-existing stop.
-                    stop = HookRequestedStop(t_next, hook)
-                end
+                stop = first_stop(stop, HookRequestedStop(t_next, hook))
             end
         end
     end
@@ -912,31 +1007,52 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
     # Perform the discrete update from t_next^- to t_next^+.
     updates = updates_fcn(t_next, model(msd))
 
+    # A model's first update stop is considered only if an earlier accepted rates evaluation
+    # or hook has not already supplied the reason for this sample to be the last.
+    stop = first_stop(stop, find_model_requested_stop(updates))
+
     # Log the updated values.
-    # Normally, this logs updated discrete states and _prior_ continuous-time states, since
-    # it counts on log_continuous_stuff! to log the continuous-time state on the next
-    # sample. However, if a hook requested a stop, then there won't be a next sample, so
-    # we need to go ahead and log the updated states too.
-    include_updated_continuous_states = !isa(stop, UnknownStopReason)
-    log_discrete_stuff!(t_next, mh, updates, msd, include_updated_continuous_states)
+    # If a discrete update changes continuous state, this records the pre-update side of the
+    # discontinuity. The next accepted rates sample—or the explicit terminal sample below—
+    # records the post-update side together with matching continuous outputs.
+    log_discrete_stuff!(t_next, mh, updates, msd, false)
 
     # Now accept the update.
     msd = update(msd, updates)
 
-    return (t_next, msd, stop, t_next_suggested)
+    # A successfully processed terminal sample always receives one direct post-update rates
+    # evaluation. This replaces the former zero-duration solver step and applies
+    # consistently to model, hook, update, and end-time termination.
+    if !isnothing(stop) || t_next == t_end
+        terminal_rates = ContinuousProblems.evaluate_rates(problem, float(t_next), msd)
+        log_continuous_stuff!(t_next, mh, msd, terminal_rates)
+        stop = first_stop(stop, find_model_requested_stop(terminal_rates))
+        stop = first_stop(stop, t_next == t_end ? ReachedEndTime(t_end) : nothing)
+        return (t_next, msd, stop)
+    end
+
+    return (t_next, msd, UnknownStopReason())
 
 end
 
-function loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+"""
+    loop!(...)
+
+Run accepted hybrid-system samples until a normal stop or failure is reported.
+
+This function is the exception boundary for simulation execution. Numerical failures arrive
+as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
+so resources, hooks, and logs can still be closed by `simulate`.
+"""
+function loop!(mh, t, ommd, problem, updates_fcn, msd, integrator, hooks)
     t_completed = first(t)
     t_end = last(t)
-    t_next_suggested = t_completed + Solvers.get_initial_time_step(solver)
     stop = UnknownStopReason()
     try
         while isa(stop, UnknownStopReason)
-            t_completed, msd, stop, t_next_suggested = step!(
-                mh, t, ommd, rates_fcn, updates_fcn, t_completed, msd,
-                solver, hooks, t_end, t_next_suggested,
+            t_completed, msd, stop = step!(
+                mh, t, ommd, problem, updates_fcn, t_completed, msd,
+                integrator, hooks, t_end,
             )
         end
     catch err
@@ -1162,8 +1278,10 @@ function simulate(
         # Log the initial stuff.
         log_initial_discrete_stuff!(t_start, mh, ommd)
 
-        # Create the solver.
-        solver = Solvers.create_solver(options.solver, msd)
+        # Adapt the hierarchical model to the small mathematical interface consumed by
+        # continuous-time integrators, then create runtime solver state for this simulation.
+        problem = ContinuousProblems.ContinuousProblem(ommd, rates_fcn)
+        integrator = Solvers.create_integrator(options.solver, problem, msd)
 
         # Create the hooks.
         initial_model = model(msd)
@@ -1172,7 +1290,16 @@ function simulate(
         end
 
         # Propagate until we're done.
-        t_end, msd, stop = loop!(mh, t, ommd, rates_fcn, updates_fcn, msd, solver, hooks)
+        t_end, msd, stop = loop!(
+            mh,
+            t,
+            ommd,
+            problem,
+            updates_fcn,
+            msd,
+            integrator,
+            hooks,
+        )
 
         # Create the final model.
         final_model = model(msd)
