@@ -382,7 +382,8 @@ function choose_step_end(t_start::Rational, t_bound::Rational, proposed_dt::Floa
         return nothing
     end
 
-    duration_to_bound = float(t_bound - t_start)
+    t_start_f = float(t_start)
+    duration_to_bound = float(t_bound) - t_start_f
     if !isfinite(proposed_dt) || proposed_dt >= duration_to_bound
         return t_bound
     end
@@ -390,7 +391,7 @@ function choose_step_end(t_start::Rational, t_bound::Rational, proposed_dt::Floa
     # Rationalizing the absolute proposed time avoids multiplying the denominator of an
     # already adaptive rational time by the denominator of a newly rationalized duration.
     # Repeated rational addition can overflow Int64 even when the represented time is small.
-    proposed_time = float(t_start) + proposed_dt
+    proposed_time = t_start_f + proposed_dt
     t_end = min(rationalize(proposed_time), t_bound)
     return t_end > t_start ? t_end : nothing
 
@@ -466,7 +467,7 @@ function evaluate_stages(
 
     state_at_start = prepare_attempt(problem, t_start, t_end, state)
     t_start_f = float(t_start)
-    dt = float(t_end - t_start)
+    dt = float(t_end) - float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(
         method,
