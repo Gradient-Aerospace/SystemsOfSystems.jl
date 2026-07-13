@@ -25,16 +25,15 @@ const SimulationTimes = SystemsOfSystems.SimulationTimes
 
 end
 
-@testset "bounded solver endpoints" begin
+@testset "solver endpoint conversion" begin
 
-    # Solver-selected endpoints originate as floating-point approximations. Their rational
-    # representation should remain close to that value without importing an enormous
-    # denominator into later exact scheduler operations.
+    # Solver-selected endpoints originate as floating-point approximations. Rationalizing
+    # the absolute endpoint gives the exact scheduler one time representation without
+    # claiming that the label is an independently exact event.
     proposed_time = 0.000_012_345_678_901_234_5
     t = SimulationTimes.solver_time(proposed_time)
-    @test denominator(t) <= SimulationTimes.MAX_SOLVER_TIME_DENOMINATOR
-    denominator_limit = Float64(SimulationTimes.MAX_SOLVER_TIME_DENOMINATOR)
-    @test float(t) ≈ proposed_time atol = 2 / denominator_limit^2
+    @test t == rationalize(Int64, proposed_time)
+    @test_throws ArgumentError SimulationTimes.solver_time(Inf)
 
     # Simple decimal clock times remain pleasantly simple even at a large epoch.
     t = SimulationTimes.solver_time(1_000_000_000.1)
@@ -60,6 +59,25 @@ end
 
 end
 
+@testset "overflow-resistant time ordering" begin
+
+    # The scheduler sentinels have the ordinary extended-real ordering. These cases are
+    # handled explicitly because cross-multiplication cannot distinguish values whose
+    # Rational denominator is zero.
+    @test SimulationTimes.time_isless(KEEP_T_NEXT, -1//1)
+    @test SimulationTimes.time_isless(-1//1, NO_T_NEXT)
+    @test SimulationTimes.time_isless(KEEP_T_NEXT, NO_T_NEXT)
+    @test !SimulationTimes.time_isless(NO_T_NEXT, KEEP_T_NEXT)
+    @test !SimulationTimes.time_isless(NO_T_NEXT, NO_T_NEXT)
+
+    # Unrelated large finite denominators use widened cross-products rather than the
+    # potentially overflowing Rational{Int64} comparison implementation.
+    earlier = 146_990_887_513_614 // 146_990_887_513_615
+    later = 1_921_204_408_937 // 1_921_204_408_936
+    @test SimulationTimes.time_isless(earlier, later)
+
+end
+
 @testset "stateless regular schedules" begin
 
     # `next_regular_time` is strictly later than its input because initialization
@@ -73,6 +91,12 @@ end
     @test next_regular_time(0//1, 1//10, 1//30) == 1//30
     @test next_regular_time(1//30, 1//10, 1//30) == 2//15
     @test next_regular_time(1//10, 1//3, 1//7) == 1//7
+
+    # Rational infinities are scheduler instructions, not meaningful components of a
+    # periodic sequence.
+    @test_throws ArgumentError next_regular_time(NO_T_NEXT, 1//10)
+    @test_throws ArgumentError next_regular_time(0//1, NO_T_NEXT)
+    @test_throws ArgumentError is_regular_step_triggering(0//1, 1//10, NO_T_NEXT)
 
 end
 
