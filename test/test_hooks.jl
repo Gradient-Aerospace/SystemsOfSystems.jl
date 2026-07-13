@@ -1,7 +1,7 @@
 module TestHooks
 
-using SystemsOfSystems
 using Test
+using SystemsOfSystems
 
 # We create a hook here to store the time and model position over time, to test that the
 # hook interface is covered. Hooks don't persist after the end of the sim, so we'll use

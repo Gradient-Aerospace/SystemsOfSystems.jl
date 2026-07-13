@@ -1,7 +1,7 @@
 module TestSimTimeout
 
-using SystemsOfSystems
 using Test
+using SystemsOfSystems
 
 @testset "SimTimeout" begin
 

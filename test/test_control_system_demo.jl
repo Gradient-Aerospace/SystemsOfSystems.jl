@@ -1,8 +1,16 @@
-using Random: Xoshiro, randn, rand
+module TestControlSystemDemo
+
+using Test
 using HDF5: h5open, Group
+using Random: Xoshiro, randn, rand
 import Dimensions
+import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription
+    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription,
+    Solvers, Logs, SimOptions, simulate
+
+const out_dir = joinpath(@__DIR__, "out")
+mkpath(out_dir)
 
 #########
 # Plant #
@@ -492,6 +500,7 @@ end
 @testset failfast=false "control system demo with $solver_type solver, $log_type logs" for solver_type in ["rk4", "dp54"], log_type in ["ram", "hdf5"]
 
     dt_rk4 = 0.06 # Deliberately chosen to be inconsistent with the discrete systems' sample rates
+    saved_log_path = joinpath(out_dir, "control_demo_saved_log.h5")
     solver = if solver_type == "dp54"
         Solvers.DormandPrince54Options()
     elseif solver_type == "rk4"
@@ -501,7 +510,7 @@ end
     log = if log_type == "ram"
         Logs.BasicLogOptions()
     elseif log_type == "hdf5"
-        Logs.HDF5LogOptions("$out_dir/control_demo_logs.h5")
+        Logs.HDF5LogOptions(joinpath(out_dir, "control_demo_logs.h5"))
     elseif log_type == "null"
         Logs.NullLogOptions()
     elseif log_type == "none"
@@ -560,8 +569,8 @@ end
     if log_type == "ram"
 
         # Test that we can save a normal log to HDF5.
-        Logs.save_log_to_hdf5("out/control_demo_saved_log.h5", history.log)
-        loaded_log, = Logs.load_hdf5_log("out/control_demo_saved_log.h5")
+        Logs.save_log_to_hdf5(saved_log_path, history.log)
+        loaded_log, = Logs.load_hdf5_log(saved_log_path)
         for model_path in keys(history.log)
             mh = history.log[model_path]
             mh2 = loaded_log[model_path]
@@ -593,8 +602,8 @@ end
 
         # Since we do the BasicLog before the HDF5Log, we can load the HDF5 log we
         # saved and compare it to the result of HDF5Log.
-        f1 = h5open("out/control_demo_logs.h5")
-        f2 = h5open("out/control_demo_saved_log.h5")
+        f1 = h5open(joinpath(out_dir, "control_demo_logs.h5"))
+        f2 = h5open(saved_log_path)
         compare_hdf5_group(f1, f2)
         close(f1)
         close(f2)
@@ -636,3 +645,5 @@ end
     # TODO: Now test with the internal solve/update functions.
 
 end
+
+end # TestControlSystemDemo

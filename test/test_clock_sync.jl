@@ -1,7 +1,7 @@
 module TestClockSync
 
-using SystemsOfSystems
 using Test
+using SystemsOfSystems
 
 @testset "ClockSync" begin
 

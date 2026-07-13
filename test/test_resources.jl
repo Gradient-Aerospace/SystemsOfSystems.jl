@@ -1,7 +1,7 @@
 module TestResources
 
-using SystemsOfSystems
 using Test
+using SystemsOfSystems
 
 # Start fresh by removing the files we'll output if they're already there.
 const out_dir = joinpath(@__DIR__, "out")
