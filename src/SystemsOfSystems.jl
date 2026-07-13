@@ -918,8 +918,9 @@ Process one complete accepted hybrid-system sample.
 
 The integrator first advances continuous state by exactly one accepted numerical step. The
 function then logs its authoritative beginning sample, runs hooks, draws discrete random
-variables, and accepts the discrete update at the rational endpoint. If that is the final
-sample, it evaluates rates directly on the post-update model before returning.
+variables, and accepts the discrete update at the rational endpoint. Returning establishes
+that endpoint as the simulation loop's latest committed time and state. Terminal rate
+sampling occurs afterward in `loop!`, where an exception cannot hide the committed sample.
 """
 function step!(
     mh,
@@ -1020,18 +1021,7 @@ function step!(
     # Now accept the update.
     msd = update(msd, updates)
 
-    # A successfully processed terminal sample always receives one direct post-update rates
-    # evaluation. This replaces the former zero-duration solver step and applies
-    # consistently to model, hook, update, and end-time termination.
-    if !isnothing(stop) || t_next == t_end
-        terminal_rates = ContinuousProblems.evaluate_rates(problem, float(t_next), msd)
-        log_continuous_stuff!(t_next, mh, msd, terminal_rates)
-        stop = first_stop(stop, find_model_requested_stop(terminal_rates))
-        stop = first_stop(stop, t_next == t_end ? ReachedEndTime(t_end) : nothing)
-        return (t_next, msd, stop)
-    end
-
-    return (t_next, msd, UnknownStopReason())
+    return (t_next, msd, isnothing(stop) ? UnknownStopReason() : stop)
 
 end
 
@@ -1049,18 +1039,59 @@ function loop!(mh, t, ommd, problem, updates_fcn, msd, integrator, hooks)
     t_end = last(t)
     stop = UnknownStopReason()
     try
+
         while isa(stop, UnknownStopReason)
+
+            # `step!` returns only after the accepted continuous endpoint and its discrete
+            # update are complete. Assigning its result here is the simulation's commit
+            # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
                 mh, t, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks, t_end,
             )
+
+            # A successfully processed terminal sample receives one direct post-update
+            # rates evaluation. Solver failures did not accept a sample and therefore must
+            # not run this path, even if their reported time happens to equal `t_end`.
+            should_sample_terminal_rates = (
+                stop isa AbstractStopReason &&
+                (t_completed == t_end || !(stop isa UnknownStopReason))
+            )
+            if should_sample_terminal_rates
+
+                # `UnknownStopReason` means that reaching `t_end` initiated termination; it
+                # is an internal loop sentinel, not a reason that should take precedence
+                # over a terminal model request or `ReachedEndTime`.
+                terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                terminal_rates = ContinuousProblems.evaluate_rates(
+                    problem,
+                    float(t_completed),
+                    msd,
+                )
+                log_continuous_stuff!(t_completed, mh, msd, terminal_rates)
+                terminal_stop = first_stop(
+                    terminal_stop,
+                    find_model_requested_stop(terminal_rates),
+                )
+                stop = first_stop(
+                    terminal_stop,
+                    t_completed == t_end ? ReachedEndTime(t_end) : nothing,
+                )
+
+            end
+
         end
+
     catch err
+
         trace = catch_backtrace()
         @error "The simulation encounted an error." exception = (err, trace)
         stop = EncounteredError(float(t_completed), err, stacktrace(trace))
+
     end
+
     return (t_completed, msd, stop)
+
 end
 
 ##############

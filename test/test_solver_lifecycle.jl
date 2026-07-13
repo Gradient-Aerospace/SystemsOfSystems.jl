@@ -44,6 +44,44 @@ using SystemsOfSystems: Solvers
 
 end
 
+@testset "a failed terminal rates sample retains the accepted endpoint" begin
+
+    # The update at t = 1 is already committed when the direct terminal rates evaluation
+    # observes x = 10 and throws. The exception must end the simulation without rolling its
+    # reported time, final model, or close callback back to the preceding accepted sample.
+    close_inputs = Ref{Any}(nothing)
+    history, t_final, model_final = @test_logs (:error,) simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.),
+        ),
+        rates_fcn = (t, model) -> begin
+
+            if t == 1. && model.x == 10.
+                error("The terminal rates sample failed.")
+            end
+
+            return RatesOutput(; rates = (; x = 1.,),)
+
+        end,
+        updates_fcn = (t, model) -> UpdatesOutput(;
+            updates = t == 1 ? (; x = 10.,) : (;),
+        ),
+        close_fcn = (t, model) -> close_inputs[] = (t, model.x),
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    @test t_final == 1
+    @test model_final.x == 10.
+    @test history.stop isa SystemsOfSystems.EncounteredError
+    @test history.stop.time == 1.
+    @test close_inputs[] == (1//1, 10.)
+
+end
+
 @testset "intermediate Runge-Kutta stages cannot stop the simulation" begin
 
     # RK4 evaluates rates at the midpoint of this step twice. Those models are provisional
