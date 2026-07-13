@@ -14,6 +14,7 @@ include("test_hooks.jl")
 include("test_sim_timeout.jl")
 include("test_clock_sync.jl")
 include("test_resources.jl")
+include("test_updating_continuous_states.jl")
 
 # We implement a custom interpolation type just to test that we can.
 struct OffsetLinearInterpolation

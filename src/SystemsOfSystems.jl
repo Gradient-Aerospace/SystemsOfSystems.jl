@@ -126,8 +126,8 @@ RatesOutput(;
 """
 Describes a model's discrete-time updates and outputs.
 
-* `updates`: A named tuple corresponding with the discrete variables, where each field
-  contains the update of that variable.
+* `updates`: A named tuple mapping state name (can be a continuous or discrete state) to the
+   updated value
 * `outputs`: A named tuple of discrete-time outputs (must match the original
   `ModelDescription`).
 * `models`: A named tuple contains the `UpdatesOutput` for each submodel.
@@ -700,14 +700,10 @@ function log_continuous_stuff!(t, mh, msd::ModelStateDescription, ro::RatesOutpu
     end
 end
 
-function log_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
+function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
 
-function log_discrete_stuff!(t, mh::Nothing, md::UpdatesOutput)
-end
-
-# This one is only called during initialization.
-function log_discrete_stuff!(t, mh, md::TypedModelDescription)
+function log_initial_discrete_stuff!(t, mh, md::TypedModelDescription)
     for fn in keys(md.discrete_states)
         push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
     end
@@ -715,30 +711,63 @@ function log_discrete_stuff!(t, mh, md::TypedModelDescription)
         push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
     end
     for fn in keys(md.models)
-        log_discrete_stuff!(t, mh.models[fn], md.models[fn])
+        log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
     end
+end
+
+function log_discrete_stuff!(
+    t, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
+    include_updated_continuous_states::Bool
+)
 end
 
 # This is called right after updating.
-function log_discrete_stuff!(t, mh, uo::UpdatesOutput)
+function log_discrete_stuff!(
+    t, mh, uo::UpdatesOutput, prior::ModelStateDescription,
+    include_updated_continuous_states::Bool
+)
+
+    # This can update either discrete states or continuous states. If it's discrete, go
+    # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
+    # log_continuous_stuff! will take care of logging the updated value at the beginning of
+    # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
+    # a next sample, then `include_updated_continuous_states` should be true, and we'll go
+    # ahead and log the updated continuous-time state too.
     for fn in keys(uo.updates)
-        push!(mh.discrete_states[fn], float(t), uo.updates[fn])
+        if haskey(mh.discrete_states, fn) # Only log the discrete states.
+            push!(mh.discrete_states[fn], float(t), uo.updates[fn])
+        end
+        if haskey(mh.continuous_states, fn)
+            push!(mh.continuous_states[fn], float(t), prior.continuous_states[fn])
+            if include_updated_continuous_states
+                push!(mh.continuous_states[fn], float(t), uo.updates[fn])
+            end
+        end
     end
+
+    # Log whatever outputs they provided this time.
     for fn in keys(uo.outputs)
         push!(mh.discrete_outputs[fn], float(t), uo.outputs[fn])
     end
+
+    # Models don't have to pass through updates for their submodels, but if they did, let's
+    # use them.
     for fn in keys(uo.models)
-        log_discrete_stuff!(t, mh.models[fn], uo.models[fn])
+        log_discrete_stuff!(
+            t, mh.models[fn], uo.models[fn], prior.models[fn],
+            include_updated_continuous_states,
+        )
     end
+
 end
 
-function update_discrete_states(discrete_states::T1, updated_discrete_states::T2) where {T1, T2}
+function update_states(prior_states::T1, updated_states::T2) where {T1, T2}
     return NamedTuple{fieldnames(T1)}(
         map(fieldnames(T1)) do f
             if hasfield(T2, f)
-                updated_discrete_states[f]
+                updated_states[f]
             else
-                discrete_states[f]
+                prior_states[f]
             end
         end
     )
@@ -786,8 +815,8 @@ end
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
     return copy_model_state_description_except(
         msd;
-        # TODO: Are continuous-time states allowed to change here? Seems like we should allow that.
-        discrete_states = update_discrete_states(msd.discrete_states, updates_output.updates),
+        continuous_states = update_states(msd.continuous_states, updates_output.updates),
+        discrete_states = update_states(msd.discrete_states, updates_output.updates),
         models = update_submodels(msd.models, updates_output.models),
         t_next = update_model_t_next(msd.t_next, updates_output.t_next),
     )
@@ -882,10 +911,17 @@ function step!(mh, t, ommd, rates_fcn, updates_fcn, t_last, msd, solver, hooks, 
 
     # Perform the discrete update from t_next^- to t_next^+.
     updates = updates_fcn(t_next, model(msd))
-    msd = update(msd, updates)
 
     # Log the updated values.
-    log_discrete_stuff!(t_next, mh, updates)
+    # Normally, this logs updated discrete states and _prior_ continuous-time states, since
+    # it counts on log_continuous_stuff! to log the continuous-time state on the next
+    # sample. However, if a hook requested a stop, then there won't be a next sample, so
+    # we need to go ahead and log the updated states too.
+    include_updated_continuous_states = !isa(stop, UnknownStopReason)
+    log_discrete_stuff!(t_next, mh, updates, msd, include_updated_continuous_states)
+
+    # Now accept the update.
+    msd = update(msd, updates)
 
     return (t_next, msd, stop, t_next_suggested)
 
@@ -1124,7 +1160,7 @@ function simulate(
         log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
 
         # Log the initial stuff.
-        log_discrete_stuff!(t_start, mh, ommd)
+        log_initial_discrete_stuff!(t_start, mh, ommd)
 
         # Create the solver.
         solver = Solvers.create_solver(options.solver, msd)
