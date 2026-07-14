@@ -76,6 +76,41 @@ end
 
 end
 
+@testset "on-triggering update helper" begin
+
+    schedule = RegularSchedule(; period = 1//10)
+    closure_calls = Ref(0)
+
+    # An unrelated accepted sample produces the ordinary empty update and, importantly,
+    # does not evaluate the model's scheduled-update body.
+    inactive_update = on_triggering(schedule, 1//20) do
+        closure_calls[] += 1
+        return UpdatesOutput(; updates = (; count = 1,))
+    end
+    @test iszero(closure_calls[])
+    @test isempty(inactive_update.updates)
+    @test isempty(inactive_update.outputs)
+    @test isempty(inactive_update.models)
+    @test inactive_update.t_next == KEEP_T_NEXT
+    @test !inactive_update.stop
+
+    # At a schedule occurrence, the helper evaluates the body exactly once and preserves
+    # its complete UpdatesOutput rather than interpreting or rebuilding it.
+    active_update = on_triggering(schedule, 1//10) do
+        closure_calls[] += 1
+        return UpdatesOutput(;
+            updates = (; count = 1,),
+            outputs = (; sampled = true,),
+            stop = true,
+        )
+    end
+    @test closure_calls[] == 1
+    @test active_update.updates == (; count = 1,)
+    @test active_update.outputs == (; sampled = true,)
+    @test active_update.stop
+
+end
+
 @testset "schedules are named model members" begin
 
     clock = RegularSchedule(; period = 1//5)
@@ -166,29 +201,21 @@ end
         ),
         updates_fcn = (t, model) -> begin
 
-            regular_update = if is_triggering(model.regular.clock, t)
+            regular_update = on_triggering(model.regular.clock, t) do
                 push!(regular_triggers, t)
                 UpdatesOutput(; updates = (; count = model.regular.count + 1,),)
-            else
-                UpdatesOutput()
             end
-            repeated_update = if is_triggering(model.repeated.clock, t)
+            repeated_update = on_triggering(model.repeated.clock, t) do
                 push!(repeated_triggers, t)
                 UpdatesOutput(; updates = (; count = model.repeated.count + 1,),)
-            else
-                UpdatesOutput()
             end
-            offset_update = if is_triggering(model.offset.clock, t)
+            offset_update = on_triggering(model.offset.clock, t) do
                 push!(offset_triggers, t)
                 UpdatesOutput(; updates = (; count = model.offset.count + 1,),)
-            else
-                UpdatesOutput()
             end
-            explicit_update = if is_triggering(model.explicit.clock, t)
+            explicit_update = on_triggering(model.explicit.clock, t) do
                 push!(explicit_triggers, t)
                 UpdatesOutput(; updates = (; count = model.explicit.count + 1,),)
-            else
-                UpdatesOutput()
             end
 
             return UpdatesOutput(; models = (;

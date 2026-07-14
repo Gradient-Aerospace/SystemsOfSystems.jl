@@ -1,11 +1,11 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Solvers, Hooks, Logs, Resources
+export initialize, simulate, SimOptions, Schedules, Solvers, Hooks, Logs, Resources
 
 # Model descriptions
 export ModelDescription, VariableDescription, RandomVariableDescription,
-    RatesOutput, UpdatesOutput,
+    RatesOutput, UpdatesOutput, on_triggering,
     OutputFile, Resource
 
 # Utilities
@@ -22,6 +22,9 @@ using Random: Xoshiro
 
 include("SimulationTimes.jl")
 using .SimulationTimes
+
+include("Schedules.jl")
+using .Schedules
 
 include("TimeSeries.jl")
 using .TimeSeriesStuff
@@ -257,6 +260,26 @@ UpdatesOutput(;
     t_next = KEEP_T_NEXT,
     stop = false,
 ) = UpdatesOutput(updates, outputs, models, exact_time(t_next), stop)
+
+"""
+    on_triggering(f, schedule::AbstractSchedule, t)
+
+Run `f` and return its result when `schedule` is triggering at official time `t`; otherwise,
+return an empty `UpdatesOutput` without evaluating `f`.
+
+The function argument comes first so model update code can use Julia's `do` syntax:
+
+```
+function updates_fcn(t, model)
+    on_triggering(model.schedule, t) do
+        return UpdatesOutput(; updates = (; count = model.count + 1,))
+    end
+end
+```
+"""
+@inline function on_triggering(f, schedule::AbstractSchedule, t)
+    return is_triggering(schedule, t) ? f() : UpdatesOutput()
+end
 
 """
 These can be used to decorate the variables in a `ModelDescription`. The decorations become
@@ -975,40 +998,6 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
 end
 
 """
-    find_soonest_time_from_schedules(schedules, t_last)
-
-Return the first declared schedule occurrence strictly later than `t_last`.
-
-Tuple mapping preserves specialization for every concrete schedule type and produces a
-tuple of exact next times. This is intentionally simple for the initial architecture; very
-large tuples may eventually justify a cached scheduler or another runtime index.
-"""
-# Keep detailed diagnostic construction off the successful hot path. Custom schedules are
-# validated on every query because returning the current or a past time would otherwise
-# prevent the simulation loop from making progress.
-Base.@noinline function throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
-    throw(ArgumentError(
-        "$(typeof(schedule)) returned $schedule_time from next_trigger_time at " *
-        "t = $t_last; schedule times must be strictly later than t.",
-    ))
-end
-
-function find_soonest_time_from_schedules(schedules::Tuple, t_last)
-
-    schedule_times = map(schedules) do schedule
-
-        schedule_time = exact_time(next_trigger_time(schedule, t_last))
-        time_isless(t_last, schedule_time) ||
-            throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
-        return schedule_time
-
-    end
-
-    return reduce(earlier_time, schedule_times; init = NO_T_NEXT)
-
-end
-
-"""
     find_model_requested_stop(output, model_path = "/")
 
 Return the first model stop request in a deterministic, depth-first traversal of a
@@ -1093,7 +1082,7 @@ function step!(
 
     # Declarative schedules are global immutable metadata collected during initialization.
     # Their next occurrence is another hard event boundary alongside dynamic model requests.
-    t_next_from_schedules = find_soonest_time_from_schedules(schedules, t_last)
+    t_next_from_schedules = Schedules.find_soonest_time(schedules, t_last)
 
     t_bound = earlier_time(
         t_next_from_user,

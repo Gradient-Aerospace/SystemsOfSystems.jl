@@ -15,11 +15,8 @@ cross-products can overflow even when the final duration is small and representa
 module SimulationTimes
 
 export ExactTime, KEEP_T_NEXT, NO_T_NEXT,
-    AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
-    is_triggering, next_trigger_time,
     exact_time, solver_time,
-    float_duration, earlier_time, time_isless,
-    is_regular_step_triggering, next_regular_time
+    float_duration, earlier_time, time_isless
 
 """
 The concrete representation currently used for every official simulation time.
@@ -44,102 +41,6 @@ Positive rational infinity participates naturally in ordering and minimum operat
 model may also request this value explicitly to cancel a previously scheduled event.
 """
 const NO_T_NEXT = 1//0
-
-###################
-# Model Schedules #
-###################
-
-"""
-    AbstractSchedule
-
-The common supertype for declarative model schedules.
-
-A schedule is immutable initialization metadata describing times at which the simulation
-must produce accepted samples. Custom schedules implement:
-
-* `is_triggering(schedule, t)`, which reports whether official time `t` is an occurrence.
-* `next_trigger_time(schedule, t)`, which returns the first occurrence strictly later than
-  `t`, or `NO_T_NEXT` when the schedule has no later occurrence.
-
-Schedules are deduplicated by value during initialization. Custom schedule types should
-therefore provide consistent value-based `isequal` and `hash` methods when Julia's defaults
-do not already express their desired identity.
-"""
-abstract type AbstractSchedule end
-
-"""
-    is_triggering(schedule::AbstractSchedule, t)
-
-Return whether `schedule` has an occurrence at official simulation time `t`.
-
-Implementations should use exact-time comparisons. The simulation calls every model's
-update function after every accepted step, so models use this predicate to distinguish
-their scheduled samples from unrelated solver, user, or model event times.
-"""
-function is_triggering end
-
-"""
-    next_trigger_time(schedule::AbstractSchedule, t)
-
-Return the first occurrence of `schedule` strictly later than official simulation time `t`.
-
-The strict inequality is part of the interface: initialization establishes the model at
-`t_start` without performing a discrete update there. A finite schedule may return
-`NO_T_NEXT` when it has no remaining occurrences.
-"""
-function next_trigger_time end
-
-"""
-    RegularSchedule(; period)
-    RegularSchedule(period)
-
-A schedule occurring at `n * period` for every nonnegative integer `n`.
-
-`period` is stored as an exact `Rational{Int64}` and must be finite and strictly positive.
-The representation stores no offset, making this common schedule both compact and direct
-to evaluate.
-"""
-struct RegularSchedule <: AbstractSchedule
-    period::ExactTime
-
-    function RegularSchedule(period)
-
-        period = exact_time(period)
-        isfinite(period) || throw(ArgumentError("period must be finite."))
-        period > 0 || throw(ArgumentError("period must be positive."))
-        return new(period)
-
-    end
-end
-
-RegularSchedule(; period) = RegularSchedule(period)
-
-"""
-    OffsetRegularSchedule(; period, offset)
-    OffsetRegularSchedule(period, offset)
-
-A schedule occurring at `offset + n * period` for every nonnegative integer `n`.
-
-The finite `offset` is the first occurrence, not merely a phase extended backward without
-limit. `period` is exact, finite, and strictly positive.
-"""
-struct OffsetRegularSchedule <: AbstractSchedule
-    period::ExactTime
-    offset::ExactTime
-
-    function OffsetRegularSchedule(period, offset)
-
-        period = exact_time(period)
-        offset = exact_time(offset)
-        isfinite(period) || throw(ArgumentError("period must be finite."))
-        isfinite(offset) || throw(ArgumentError("offset must be finite."))
-        period > 0 || throw(ArgumentError("period must be positive."))
-        return new(period, offset)
-
-    end
-end
-
-OffsetRegularSchedule(; period, offset) = OffsetRegularSchedule(period, offset)
 
 """
     exact_time(t)
@@ -250,9 +151,8 @@ end
 """
     wide_time(t)
 
-Widen an official time before exact schedule arithmetic. Calculations involving several
-unrelated denominators can then use Julia's ordinary `Rational` operations without
-overflowing an `Int64` intermediate.
+Widen an official time before compound exact arithmetic. Consumers can then use Julia's
+ordinary `Rational` operations without overflowing an `Int64` intermediate.
 """
 wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
 
@@ -262,8 +162,8 @@ wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
 Return a widened calculation to the official time representation.
 
 This check distinguishes an unrepresentable final time from an avoidable overflow in an
-intermediate calculation. It is the only custom arithmetic boundary needed by the regular
-schedule helpers below.
+intermediate calculation. Consumers should narrow only the final result of a widened
+calculation.
 """
 function narrow_time(value::Rational{Int128})
     numerator(value) >= typemin(Int64) || throw(OverflowError(
@@ -277,83 +177,5 @@ function narrow_time(value::Rational{Int128})
     ))
     return Int64(numerator(value)) // Int64(denominator(value))
 end
-
-"""
-    next_regular_time(t, period, offset = 0//1)
-
-Return the first time in `offset + n * period`, for nonnegative integer `n`, that is
-strictly later than `t`.
-
-This function is intentionally not inclusive: `init_fcn` establishes the model at the
-simulation start time, and SystemsOfSystems does not perform a discrete update at `t_start`.
-The calculation is closed-form and therefore needs no mutable sample index or accumulated
-floating-point clock.
-"""
-function next_regular_time(t, period, offset = 0//1)
-
-    t_exact = exact_time(t)
-    period_exact = exact_time(period)
-    offset_exact = exact_time(offset)
-    isfinite(t_exact) || throw(ArgumentError("t must be finite."))
-    isfinite(period_exact) || throw(ArgumentError("period must be finite."))
-    isfinite(offset_exact) || throw(ArgumentError("offset must be finite."))
-    period_exact > 0 || throw(ArgumentError("period must be positive."))
-
-    if time_isless(t_exact, offset_exact)
-        return offset_exact
-    end
-
-    # Perform the whole calculation with ordinary Rational{Int128} arithmetic, then check
-    # only the final result when returning to the official Rational{Int64} representation.
-    t_wide = wide_time(t_exact)
-    period_wide = wide_time(period_exact)
-    offset_wide = wide_time(offset_exact)
-    sample_index = fld(t_wide - offset_wide, period_wide) + 1
-
-    return narrow_time(offset_wide + sample_index * period_wide)
-
-end
-
-"""
-    is_regular_step_triggering(t, period, offset = 0//1)
-
-Return whether exact time `t` belongs to the periodic sequence `offset + n * period`.
-
-A zero period retains the existing convention of triggering at every accepted sample. For a
-positive period, widened exact arithmetic avoids floating-point tolerances and bounded
-rational intermediate overflow.
-"""
-function is_regular_step_triggering(t, period, offset = 0//1)
-
-    t_exact = exact_time(t)
-    period_exact = exact_time(period)
-    offset_exact = exact_time(offset)
-    isfinite(t_exact) || throw(ArgumentError("t must be finite."))
-    isfinite(period_exact) || throw(ArgumentError("period must be finite."))
-    isfinite(offset_exact) || throw(ArgumentError("offset must be finite."))
-    iszero(period_exact) && return true
-    period_exact > 0 || throw(ArgumentError("period cannot be negative."))
-    time_isless(t_exact, offset_exact) && return false
-
-    elapsed_wide = wide_time(t_exact) - wide_time(offset_exact)
-    period_wide = wide_time(period_exact)
-    return isinteger(elapsed_wide / period_wide)
-
-end
-
-# The public schedule methods share the existing widened exact arithmetic. Keeping the
-# compatibility helpers above as the mathematical implementation avoids two subtly
-# different definitions of a regular clock.
-is_triggering(schedule::RegularSchedule, t) =
-    is_regular_step_triggering(t, schedule.period)
-
-is_triggering(schedule::OffsetRegularSchedule, t) =
-    is_regular_step_triggering(t, schedule.period, schedule.offset)
-
-next_trigger_time(schedule::RegularSchedule, t) =
-    next_regular_time(t, schedule.period)
-
-next_trigger_time(schedule::OffsetRegularSchedule, t) =
-    next_regular_time(t, schedule.period, schedule.offset)
 
 end # SimulationTimes
