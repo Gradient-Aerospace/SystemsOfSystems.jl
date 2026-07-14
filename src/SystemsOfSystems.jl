@@ -13,6 +13,8 @@ export Dimension, TimeSeries,
     BranchingSeed, branch,
     AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
+    AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
+    is_triggering, next_trigger_time,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, next_regular_time
 
@@ -53,6 +55,9 @@ elements of the model, including:
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
+* `schedules`: A named tuple of declarative `AbstractSchedule` values. Each named schedule
+  is exposed on the constructed model like a constant, while also telling the simulation
+  which exact times must become accepted samples.
 * `models`: A named tuple containing the ModelDescription of each submodel.
 * `resources`: A named tuple containing a `Resources.AbstractResource`, for opening files
   or creating connections that need to be closed when the simulation is over.
@@ -80,6 +85,7 @@ struct ModelDescription
     discrete_outputs
     continuous_random_variables
     discrete_random_variables
+    schedules
     models
     resources
     t_next
@@ -93,6 +99,7 @@ ModelDescription(;
     discrete_outputs = (;),
     continuous_random_variables = (;),
     discrete_random_variables = (;),
+    schedules = (;),
     models = (;),
     resources = (;),
     t_next = NO_T_NEXT,
@@ -101,9 +108,103 @@ ModelDescription(;
     continuous_states, discrete_states,
     continuous_outputs, discrete_outputs,
     continuous_random_variables, discrete_random_variables,
-    models, resources,
+    schedules, models, resources,
     exact_time(t_next),
 )
+
+"""
+    validate_model_schedules(description, model_path = "/")
+
+Validate every declared schedule before simulation resources are opened.
+
+Schedules must implement `AbstractSchedule`, and their names must not collide with another
+member exposed on the same constructed model. Detecting those mistakes during initialization
+produces a focused error instead of relying on named-tuple or model-constructor behavior.
+"""
+function validate_model_schedules(description::ModelDescription, model_path = "/")
+
+    schedule_names = fieldnames(typeof(description.schedules))
+    other_model_member_names = (
+        fieldnames(typeof(description.constants))...,
+        fieldnames(typeof(description.continuous_states))...,
+        fieldnames(typeof(description.discrete_states))...,
+        fieldnames(typeof(description.continuous_random_variables))...,
+        fieldnames(typeof(description.discrete_random_variables))...,
+        fieldnames(typeof(description.models))...,
+        fieldnames(typeof(description.resources))...,
+    )
+
+    for name in schedule_names
+
+        schedule = description.schedules[name]
+        if !(schedule isa AbstractSchedule)
+            schedule_path = model_path == "/" ? "/schedules/$name" :
+                "$model_path/schedules/$name"
+            throw(ArgumentError(
+                "Schedule $schedule_path must be an AbstractSchedule, not " *
+                "$(typeof(schedule)).",
+            ))
+        end
+
+        if name in other_model_member_names
+            schedule_path = model_path == "/" ? "/schedules/$name" :
+                "$model_path/schedules/$name"
+            throw(ArgumentError(
+                "Schedule $schedule_path conflicts with another model member named $name.",
+            ))
+        end
+
+    end
+
+    for name in fieldnames(typeof(description.models))
+        submodel_path = model_path == "/" ? "/models/$name" : "$model_path/models/$name"
+        validate_model_schedules(description.models[name], submodel_path)
+    end
+
+    return nothing
+
+end
+
+
+"""
+    collect_schedules!(schedules, description)
+
+Append every schedule in `description` and its submodels to an initialization-time working
+vector. The abstract element type is acceptable here because this collection is discarded
+after initialization; the runtime scheduler receives a concrete tuple.
+"""
+function collect_schedules!(
+    schedules::Vector{AbstractSchedule},
+    description::ModelDescription,
+)
+
+    append!(schedules, description.schedules)
+    for submodel in description.models
+        collect_schedules!(schedules, submodel)
+    end
+
+    return nothing
+
+end
+
+
+"""
+    collect_unique_schedules(description)
+
+Return one tuple containing the distinct schedules declared throughout a model hierarchy.
+
+Collection and deduplication occur once during initialization. The simulation loop receives
+the resulting concrete tuple, allowing dispatch to specialize for built-in and user-defined
+schedule types without storing a `Vector{AbstractSchedule}` in the runtime scheduler.
+"""
+function collect_unique_schedules(description::ModelDescription)
+
+    schedules = AbstractSchedule[]
+    collect_schedules!(schedules, description)
+    unique!(schedules)
+    return Tuple(schedules)
+
+end
 
 """
 Describes a model's continuous-time derivatives and outputs.
@@ -302,7 +403,7 @@ end
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 """
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, MT, RT}
+@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
     constants::CT
     continuous_states::XCT
@@ -311,6 +412,7 @@ pulled out and all types are fixed as type parameters. This is what's used by th
     discrete_outputs::YDT
     continuous_random_variables::WCT
     discrete_random_variables::WDT
+    schedules::ST
     models::MT
     resources::RT
     t_next::ExactTime
@@ -415,6 +517,7 @@ function create_typed_model_description!(
         discrete_random_variables = strip_fluff_from_random_variable_set(
             desc.discrete_random_variables, seed,
         ),
+        schedules = desc.schedules,
         models = NamedTuple(
             field => create_typed_model_description!(
                 manager,
@@ -434,12 +537,13 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, MT, RT}
+@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
     continuous_random_variables::WCT
     discrete_random_variables::WDT
+    schedules::ST
     models::MT
     resources::RT
     t_next::ExactTime
@@ -450,6 +554,7 @@ function ModelStateDescription{T}(;
     discrete_states = (;),
     continuous_random_variables = (;),
     discrete_random_variables = (;),
+    schedules = (;),
     models = (;),
     resources = (;),
     t_next = NO_T_NEXT,
@@ -457,11 +562,11 @@ function ModelStateDescription{T}(;
     return ModelStateDescription{
         T, typeof(constants), typeof(continuous_states), typeof(discrete_states),
         typeof(continuous_random_variables), typeof(discrete_random_variables),
-        typeof(models), typeof(resources),
+        typeof(schedules), typeof(models), typeof(resources),
     }(
         constants, continuous_states, discrete_states,
         continuous_random_variables, discrete_random_variables,
-        models, resources,
+        schedules, models, resources,
         exact_time(t_next),
     )
 end
@@ -470,6 +575,7 @@ end
 function model(desc::ModelStateDescription{Nothing})
     return (;
         desc.constants...,
+        desc.schedules...,
         desc.continuous_states...,
         desc.continuous_random_variables...,
         desc.discrete_states...,
@@ -483,6 +589,7 @@ end
 function model(desc::ModelStateDescription{T}) where {T}
     return T(;
         desc.constants...,
+        desc.schedules...,
         desc.continuous_states...,
         desc.continuous_random_variables...,
         desc.discrete_states...,
@@ -500,6 +607,7 @@ function copy_model_state_description_except(md::T; kwargs...) where {T <: Model
         md.discrete_states,
         md.continuous_random_variables,
         md.discrete_random_variables,
+        md.schedules,
         md.models,
         md.resources,
         md.t_next,
@@ -691,6 +799,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
             ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
         ),
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
+        ommd.schedules,
         models = NamedTuple(
             mn => create_model_state(t, ommd.models[mn])
             for mn in keys(ommd.models)
@@ -866,6 +975,40 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
 end
 
 """
+    find_soonest_time_from_schedules(schedules, t_last)
+
+Return the first declared schedule occurrence strictly later than `t_last`.
+
+Tuple mapping preserves specialization for every concrete schedule type and produces a
+tuple of exact next times. This is intentionally simple for the initial architecture; very
+large tuples may eventually justify a cached scheduler or another runtime index.
+"""
+# Keep detailed diagnostic construction off the successful hot path. Custom schedules are
+# validated on every query because returning the current or a past time would otherwise
+# prevent the simulation loop from making progress.
+Base.@noinline function throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
+    throw(ArgumentError(
+        "$(typeof(schedule)) returned $schedule_time from next_trigger_time at " *
+        "t = $t_last; schedule times must be strictly later than t.",
+    ))
+end
+
+function find_soonest_time_from_schedules(schedules::Tuple, t_last)
+
+    schedule_times = map(schedules) do schedule
+
+        schedule_time = exact_time(next_trigger_time(schedule, t_last))
+        time_isless(t_last, schedule_time) ||
+            throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
+        return schedule_time
+
+    end
+
+    return reduce(earlier_time, schedule_times; init = NO_T_NEXT)
+
+end
+
+"""
     find_model_requested_stop(output, model_path = "/")
 
 Return the first model stop request in a deterministic, depth-first traversal of a
@@ -915,6 +1058,7 @@ sampling occurs afterward in `loop!`, where an exception cannot hide the committ
 function step!(
     mh,
     t,
+    schedules,
     ommd,
     problem,
     updates_fcn,
@@ -947,7 +1091,14 @@ function step!(
     # Ask all of the models what time they want to stop next, and take the soonest.
     t_next_from_models = find_soonest_t_next_from_models(t_last, msd)
 
-    t_bound = earlier_time(t_next_from_user, t_next_from_models)
+    # Declarative schedules are global immutable metadata collected during initialization.
+    # Their next occurrence is another hard event boundary alongside dynamic model requests.
+    t_next_from_schedules = find_soonest_time_from_schedules(schedules, t_last)
+
+    t_bound = earlier_time(
+        t_next_from_user,
+        earlier_time(t_next_from_models, t_next_from_schedules),
+    )
 
     # Ask the integrator for one accepted numerical step. A failure has no accepted
     # endpoint, so hooks and discrete updates must not run for it.
@@ -1024,7 +1175,7 @@ This function is the exception boundary for simulation execution. Numerical fail
 as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
 so resources, hooks, and logs can still be closed by `simulate`.
 """
-function loop!(mh, t, ommd, problem, updates_fcn, msd, integrator, hooks)
+function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, hooks)
     t_completed = first(t)
     t_end = last(t)
     stop = UnknownStopReason()
@@ -1036,7 +1187,7 @@ function loop!(mh, t, ommd, problem, updates_fcn, msd, integrator, hooks)
             # update are complete. Assigning its result here is the simulation's commit
             # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
-                mh, t, ommd, problem, updates_fcn, t_completed, msd,
+                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks, t_end,
             )
 
@@ -1121,6 +1272,12 @@ function _initialize(
     outdir = nothing,
 )
 
+    # Schedules are immutable declarations, so validate and collect them before opening any
+    # model resources. The concrete, deduplicated tuple becomes simulation-level scheduler
+    # metadata, while each named declaration also remains available on its model form.
+    validate_model_schedules(model_description)
+    schedules = collect_unique_schedules(model_description)
+
     # We'll keep track of resources we create along the way so that we can close them.
     manager = ResourceManager()
 
@@ -1135,7 +1292,7 @@ function _initialize(
         # which we can construct the model form.
         msd = create_model_state(t_start, ommd)
 
-        return (; model_description, ommd, msd, manager)
+        return (; model_description, ommd, msd, schedules, manager)
 
     catch err
 
@@ -1282,7 +1439,7 @@ function simulate(
 
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
-    model_description, ommd, msd, manager = _initialize(
+    (; model_description, ommd, msd, schedules, manager) = _initialize(
         model_prototype;
         init_fcn, t_start, seed, options.outdir,
     )
@@ -1314,6 +1471,7 @@ function simulate(
         t_end, msd, stop = loop!(
             mh,
             t,
+            schedules,
             ommd,
             problem,
             updates_fcn,
