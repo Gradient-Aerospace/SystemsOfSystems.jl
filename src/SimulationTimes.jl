@@ -16,8 +16,7 @@ module SimulationTimes
 
 export ExactTime, KEEP_T_NEXT, NO_T_NEXT,
     exact_time, solver_time,
-    float_duration, earlier_time, time_isless,
-    is_regular_step_triggering, next_regular_time
+    float_duration, earlier_time, time_isless
 
 """
 The concrete representation currently used for every official simulation time.
@@ -94,7 +93,6 @@ function time_isless(a::ExactTime, b::ExactTime)
 
 end
 
-
 """
     earlier_time(a, b)
 
@@ -134,7 +132,6 @@ function float_duration(t_start::ExactTime, t_end::ExactTime)
 
 end
 
-
 """
     solver_time(t)
 
@@ -151,13 +148,11 @@ function solver_time(t::Float64)
     return exact_time(t)
 end
 
-
 """
     wide_time(t)
 
-Widen an official time before exact schedule arithmetic. Calculations involving several
-unrelated denominators can then use Julia's ordinary `Rational` operations without
-overflowing an `Int64` intermediate.
+Widen an official time before compound exact arithmetic. Consumers can then use Julia's
+ordinary `Rational` operations without overflowing an `Int64` intermediate.
 """
 wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
 
@@ -167,8 +162,8 @@ wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
 Return a widened calculation to the official time representation.
 
 This check distinguishes an unrepresentable final time from an avoidable overflow in an
-intermediate calculation. It is the only custom arithmetic boundary needed by the regular
-schedule helpers below.
+intermediate calculation. Consumers should narrow only the final result of a widened
+calculation.
 """
 function narrow_time(value::Rational{Int128})
     numerator(value) >= typemin(Int64) || throw(OverflowError(
@@ -181,71 +176,6 @@ function narrow_time(value::Rational{Int128})
         "The exact time denominator is above the Rational{Int64} range.",
     ))
     return Int64(numerator(value)) // Int64(denominator(value))
-end
-
-
-"""
-    next_regular_time(t, period, offset = 0//1)
-
-Return the first time in `offset + n * period`, for nonnegative integer `n`, that is
-strictly later than `t`.
-
-This function is intentionally not inclusive: `init_fcn` establishes the model at the
-simulation start time, and SystemsOfSystems does not perform a discrete update at `t_start`.
-The calculation is closed-form and therefore needs no mutable sample index or accumulated
-floating-point clock.
-"""
-function next_regular_time(t, period, offset = 0//1)
-
-    t_exact = exact_time(t)
-    period_exact = exact_time(period)
-    offset_exact = exact_time(offset)
-    isfinite(t_exact) || throw(ArgumentError("t must be finite."))
-    isfinite(period_exact) || throw(ArgumentError("period must be finite."))
-    isfinite(offset_exact) || throw(ArgumentError("offset must be finite."))
-    period_exact > 0 || throw(ArgumentError("period must be positive."))
-
-    if time_isless(t_exact, offset_exact)
-        return offset_exact
-    end
-
-    # Perform the whole calculation with ordinary Rational{Int128} arithmetic, then check
-    # only the final result when returning to the official Rational{Int64} representation.
-    t_wide = wide_time(t_exact)
-    period_wide = wide_time(period_exact)
-    offset_wide = wide_time(offset_exact)
-    sample_index = fld(t_wide - offset_wide, period_wide) + 1
-
-    return narrow_time(offset_wide + sample_index * period_wide)
-
-end
-
-
-"""
-    is_regular_step_triggering(t, period, offset = 0//1)
-
-Return whether exact time `t` belongs to the periodic sequence `offset + n * period`.
-
-A zero period retains the existing convention of triggering at every accepted sample. For a
-positive period, widened exact arithmetic avoids floating-point tolerances and bounded
-rational intermediate overflow.
-"""
-function is_regular_step_triggering(t, period, offset = 0//1)
-
-    t_exact = exact_time(t)
-    period_exact = exact_time(period)
-    offset_exact = exact_time(offset)
-    isfinite(t_exact) || throw(ArgumentError("t must be finite."))
-    isfinite(period_exact) || throw(ArgumentError("period must be finite."))
-    isfinite(offset_exact) || throw(ArgumentError("offset must be finite."))
-    iszero(period_exact) && return true
-    period_exact > 0 || throw(ArgumentError("period cannot be negative."))
-    time_isless(t_exact, offset_exact) && return false
-
-    elapsed_wide = wide_time(t_exact) - wide_time(offset_exact)
-    period_wide = wide_time(period_exact)
-    return isinteger(elapsed_wide / period_wide)
-
 end
 
 end # SimulationTimes
