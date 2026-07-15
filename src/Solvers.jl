@@ -1,218 +1,305 @@
 """
-TODO
+The `Solvers` module contains continuous-time integration algorithms and their step-size
+controllers.
+
+The simulation loop and numerical solver deliberately meet at a narrow boundary: one call
+to `step!` attempts and returns exactly one accepted numerical step without crossing a
+rational time bound. Every accepted step remains visible to the simulation loop, which then
+logs the sample, runs hooks, draws discrete random variables, and performs discrete updates.
+
+Numerical methods in this module do not know how SystemsOfSystems stores model state. They
+use the operations supplied by `ContinuousProblems` to prepare an attempt, evaluate rates,
+form linear combinations of derivatives, and measure normalized error. This separation
+makes a Butcher tableau a description of mathematics rather than a second implementation of
+the simulation engine.
 """
 module Solvers
 
-using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
-    AbstractStopReason, UnknownStopReason,
-    model, draw_wc, copy_model_state_description_except
-import SystemsOfSystems
+using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
+    prepare_attempt, propagate
+using ..SystemsOfSystems: AbstractFailureReason, ModelStateDescription
+import ..SystemsOfSystems
 
-##################
-# AbstractSolver #
-##################
-
-abstract type AbstractSolverOptions end
-abstract type AbstractSolver end
-
-# This is what the "solve" method is expected to output.
-@kwdef struct SolverOutputs{T1 <: ModelStateDescription, T2 <: RatesOutput}
-    t_completed::Rational{Int64}
-    msd_km1::T1
-    msd_k::T1
-    rates::T2
-    stop::AbstractStopReason
-    t_next_suggested::Rational{Int64}
-end
-
-# Adaptive solvers will need to say when solving just isn't working.
-struct SolverFailedToConverge <: AbstractStopReason
-    time::Float64
-end
-SystemsOfSystems.describe(stop::SolverFailedToConverge) = "The solver failed to converge at time $(float(stop.time))."
-
-###########
-# Helpers #
-###########
-
-# These propagate for a single derivative.
-
-function propagate_variable(x::T, dt, x_dot::T) where {T}
-    return (x + dt * x_dot)::T # Just to be clear, this shouldn't change the type.
-end
-
-function propagate_set(x::T1, dt, x_dot::T2) where {T1, T2}
-    return NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if hasfield(typeof(x_dot), f)
-                propagate_variable(x[f], dt, x_dot[f])
-            else
-                x[f]
-            end
-        end
-    )
-end
-
-function propagate_models(submodels::NamedTuple, dt, rates_output::NamedTuple)
-
-    # A user's RatesOutput's model entry could contain the models in any order. Here, we
-    # build a named tuple that matches the order of the original set of submodels. Plus, if
-    # an entry is missing, we fill it in with a blank RatesOutput(). This lets us simply
-    # `map` below.
-    complete_rates_output = NamedTuple{fieldnames(typeof(submodels))}(
-        map(fieldnames(typeof(submodels))) do f
-            if hasfield(typeof(rates_output), f)
-                rates_output[f]
-            else
-                RatesOutput()
-            end
-        end
-    )
-
-    # Now this is a simple map and doesn't allocate.
-    return map((sm, ro) -> propagate(sm, dt, ro), submodels, complete_rates_output)
-
-end
-
-function propagate(msd::ModelStateDescription, dt, rates_output::RatesOutput)
-    return copy_model_state_description_except(
-        msd;
-        continuous_states = propagate_set(msd.continuous_states, dt, rates_output.rates),
-        models = propagate_models(msd.models, dt, rates_output.models),
-    )
-end
-
-# These propagate for a set of derivatives.
-
-function propagate_variable(x::T, gains, x_dot::NTuple{N, T}) where {T, N}
-    # return (x .+ sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
-    return (x + sum(gains .* x_dot))::T # Just to be clear, this shouldn't change the type.
-end
-
-function propagate_set(x::T1, gains, x_dot::Tuple) where {T1}
-    return NamedTuple{fieldnames(T1)}(
-        map(fieldnames(T1)) do f
-            if hasfield(typeof(first(x_dot)), f) # TODO: Check this for efficiency.
-                propagate_variable(x[f], gains, getfield.(x_dot, f))
-            else
-                x[f] # Allow fields to not be updated (empty rates output).
-            end
-        end
-    )
-end
-
-# `submodels` is a named tuple of ModelStateDescriptions.
-# `gains` is a tuple of gains.
-# `rates_output` is a tuple (one for each gain) of named tuples holding the RatesOutput
-# of each of the submodels (for submodels that have such an output).
-function propagate_models(submodels::NamedTuple, gains::Tuple, rates_outputs::Tuple)
-    complete_rates_outputs = map(rates_outputs) do ro
-        NamedTuple{fieldnames(typeof(submodels))}(
-            map(fieldnames(typeof(submodels))) do f
-                if hasfield(typeof(ro), f) # If we have derivatives for this state...
-                    getfield(ro, f) # Get it for all of them.
-                else
-                    RatesOutput()
-                end
-            end
-        )
-    end
-    return map(
-        (sm, ro...) -> propagate(sm, gains, ro),
-        submodels, complete_rates_outputs...
-    )
-end
-
-function propagate(msd::ModelStateDescription{T}, gains::Tuple, rates_outputs::Tuple) where {T}
-    return copy_model_state_description_except(
-        msd;
-        continuous_states = propagate_set(msd.continuous_states, gains, getfield.(rates_outputs, :rates)),
-        models = propagate_models(msd.models, gains, getfield.(rates_outputs, :models)),
-    )
-end
-
-###############
-# RungeKutta4 #
-###############
+############################
+# Solver Boundary and Types #
+############################
 
 """
-TODO
+The common supertype for immutable, user-facing solver configuration.
+
+Options may be reused across simulations. Runtime state such as the next adaptive step size
+belongs to an `AbstractIntegrator` created from the options for one simulation.
+"""
+abstract type AbstractSolverOptions end
+
+"""
+The common supertype for a runtime continuous-time integrator.
+
+An integrator may retain controller history and numerical caches. It is owned by one
+simulation and receives the potentially discontinuously updated model state on every call to
+`step!`.
+"""
+abstract type AbstractIntegrator end
+
+# Keep the old abstract name available while downstream code transitions to the clearer
+# distinction between reusable solver options and a per-simulation integrator.
+const AbstractSolver = AbstractIntegrator
+
+"""
+    StepRequest(t_start, t_bound, state)
+
+Request one accepted continuous-time step beginning at the official rational time
+`t_start`. The integrator may choose any rational endpoint no later than `t_bound`.
+
+`t_bound` is selected by the simulation scheduler from user-requested times,
+model-requested times, and the overall end time. It is a hard boundary: no numerical stage
+may cause the accepted state to be labeled with a time beyond it.
+"""
+struct StepRequest{T <: Rational, S <: ModelStateDescription}
+    t_start::T
+    t_bound::T
+    state::S
+end
+
+"""
+    AcceptedStep
+
+The result of exactly one accepted numerical step.
+
+`state_at_start` includes the continuous random draws belonging to the accepted interval,
+and `rates_at_start` is the authoritative rates evaluation for that accepted sample. The
+simulation loop logs those values and considers their model stop requests. Intermediate
+stage outputs and stop requests never cross this boundary.
+
+`next_dt` is a floating-point controller suggestion. It is deliberately a duration rather
+than an absolute time; the scheduler converts it into an official rational endpoint for the
+next attempt.
+"""
+struct AcceptedStep{
+    T <: Rational,
+    S <: ModelStateDescription,
+    R,
+}
+    t_end::T
+    state_at_start::S
+    rates_at_start::R
+    state_at_end::S
+    next_dt::Float64
+end
+
+"""
+    SolverFailure(time, reason)
+
+Report that no acceptable numerical step could be produced from `time`.
+
+A solver failure is not a model stop request. Keeping it as a distinct result prevents the
+normal accepted-step path from carrying an abstract stop field and makes it impossible for
+the simulation loop to run hooks or updates for a step that was never accepted.
+"""
+struct SolverFailure{T <: Rational, R <: AbstractFailureReason}
+    time::T
+    reason::R
+end
+
+"""
+The adaptive solver exhausted its allowed rejected attempts without satisfying tolerance.
+"""
+struct SolverFailedToConverge <: AbstractFailureReason
+    time::Float64
+end
+
+function SystemsOfSystems.describe(failure::SolverFailedToConverge)
+    return "The solver failed to converge at time $(failure.time)."
+end
+
+"""
+The proposed floating-point step was too small to produce a later official rational time.
+
+Reporting this explicitly is preferable to repeatedly accepting a zero-duration step, which
+would leave the simulation loop unable to make progress.
+"""
+struct SolverStepSizeUnderflow <: AbstractFailureReason
+    time::Float64
+    proposed_dt::Float64
+end
+
+function SystemsOfSystems.describe(failure::SolverStepSizeUnderflow)
+    return "The proposed solver step of $(failure.proposed_dt) did not advance time at " *
+        "$(failure.time)."
+end
+
+####################
+# Butcher Tableaus #
+####################
+
+"""
+    ExplicitRungeKuttaTableau(a, b, c; embedded_b, order, embedded_order)
+
+An explicit Runge-Kutta method expressed as a Butcher tableau.
+
+The first stage is always evaluated at the beginning state, so `a` and `c` describe stages
+two through `N`. `a[i]` therefore contains exactly `i` weights, while `c[i]` gives the time
+fraction for that stage. `b` contains all `N` weights used to form the primary solution.
+`embedded_b` is either `nothing` or another `N`-tuple used to estimate local error.
+
+Tuple sizes are part of the concrete tableau type. This lets the recursive stage evaluator
+specialize each stage without growing a tuple inside a runtime loop. A future public
+constructor for arbitrary tableaus can validate and convert user data into this same static
+representation during integrator initialization.
+"""
+struct ExplicitRungeKuttaTableau{A, B, C, EB}
+    a::A
+    b::B
+    c::C
+    embedded_b::EB
+    order::Int
+    embedded_order::Int
+end
+
+function ExplicitRungeKuttaTableau(
+    a::Tuple,
+    b::Tuple,
+    c::Tuple;
+    embedded_b = nothing,
+    order,
+    embedded_order = 0,
+)
+
+    # Validate the structural relationships once. Numerical stepping can then assume the
+    # tableau is coherent and devote its inner loop entirely to stage evaluation.
+    n_stages = length(b)
+    length(a) == n_stages - 1 || throw(ArgumentError(
+        "An explicit $n_stages-stage tableau requires $(n_stages - 1) rows in a.",
+    ))
+    length(c) == n_stages - 1 || throw(ArgumentError(
+        "An explicit $n_stages-stage tableau requires $(n_stages - 1) entries in c.",
+    ))
+    for index in eachindex(a)
+        length(a[index]) == index || throw(ArgumentError(
+            "Row $index of a must contain $index coefficients.",
+        ))
+    end
+    if !isnothing(embedded_b)
+        length(embedded_b) == n_stages || throw(ArgumentError(
+            "The embedded weights must contain $n_stages coefficients.",
+        ))
+        embedded_order > 0 || throw(ArgumentError(
+            "An embedded tableau must provide a positive embedded_order.",
+        ))
+    end
+
+    return ExplicitRungeKuttaTableau(
+        a,
+        b,
+        c,
+        embedded_b,
+        Int(order),
+        Int(embedded_order),
+    )
+
+end
+
+# The built-in methods are immutable constants. Their tuple shapes and coefficient types are
+# visible to the compiler wherever the corresponding integrator is specialized.
+
+const RUNGE_KUTTA_4_TABLEAU = ExplicitRungeKuttaTableau(
+    (
+        (1/2,),
+        (0., 1/2),
+        (0., 0., 1.),
+    ),
+    (1/6, 1/3, 1/3, 1/6),
+    (1/2, 1/2, 1.);
+    order = 4,
+)
+
+const DORMAND_PRINCE_54_TABLEAU = ExplicitRungeKuttaTableau(
+    (
+        (1/5,),
+        (3/40, 9/40),
+        (44/45, -56/15, 32/9),
+        (19372/6561, -25360/2187, 64448/6561, -212/729),
+        (9017/3168, -355/33, 46732/5247, 49/176, -5103/18656),
+        (35/384, 0., 500/1113, 125/192, -2187/6784, 11/84),
+    ),
+    (35/384, 0., 500/1113, 125/192, -2187/6784, 11/84, 0.),
+    (1/5, 3/10, 4/5, 8/9, 1., 1.);
+    embedded_b = (
+        5179/57600,
+        0.,
+        7571/16695,
+        393/640,
+        -92097/339200,
+        187/2100,
+        1/40,
+    ),
+    order = 5,
+    embedded_order = 4,
+)
+
+#########################
+# Step-size Controllers #
+#########################
+
+"""
+Use the same floating-point step duration after every accepted step.
+"""
+struct FixedStepController
+    dt::Float64
+end
+
+"""
+Control an embedded Runge-Kutta method using a scalar normalized local-error estimate.
+
+The controller is mutable because `next_dt` is runtime history belonging to one simulation.
+The remaining fields define policy: maximum duration, absolute and relative tolerances,
+safety factor, and the number of rejected attempts allowed for one accepted step.
+"""
+mutable struct EmbeddedAdaptiveController
+    next_dt::Float64
+    max_dt::Float64
+    absolute_tolerance::Float64
+    relative_tolerance::Float64
+    safety_factor::Float64
+    max_rejections::Int
+end
+
+"""
+A runtime explicit Runge-Kutta integrator composed from a tableau and a controller.
+
+The same numerical kernel serves fixed and adaptive methods. Their behavior differs only in
+how the controller chooses an endpoint and whether the tableau supplies embedded weights.
+"""
+struct RungeKuttaIntegrator{M, C} <: AbstractIntegrator
+    method::M
+    controller::C
+end
+
+#######################
+# User-facing Options #
+#######################
+
+"""
+    RungeKutta4Options(; dt)
+
+Configure the classical fourth-order Runge-Kutta method with fixed official step spacing
+`dt`. Scheduled user and model times remain hard bounds and may shorten an individual step.
 """
 struct RungeKutta4Options <: AbstractSolverOptions
     dt::Rational{Int64}
 end
-RungeKutta4Options(; dt, ) = RungeKutta4Options(rationalize(dt))
-struct RungeKutta4 <: AbstractSolver
-    options::RungeKutta4Options
+
+function RungeKutta4Options(; dt)
+    rational_dt = rationalize(dt)
+    rational_dt > 0 || throw(ArgumentError("dt must be positive."))
+    return RungeKutta4Options(rational_dt)
 end
-create_solver(options::RungeKutta4Options, msd::ModelStateDescription) = RungeKutta4(options)
-
-get_initial_time_step(solver::RungeKutta4) = solver.options.dt
-
-# TODO: It seems like there's a lot about `solve` that could be abstracted and simplified.
-function solve(ommd, solver::RungeKutta4, t_last, t_next, msd_km1, rates_fcn, t_end)
-
-    t_last_f = float(t_last)
-    t_next_f = float(t_next)
-
-    # Make the draws for the continuous-time function.
-    if t_last == t_next
-        msd_km1_with_draws = msd_km1 # Just hold the last draws.
-    else
-        msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
-    end
-
-    # The first derivative is different because it's an output. The rest are ephemeral.
-    k1 = rates_fcn(t_last_f, model(msd_km1_with_draws))
-
-    # If there's no actual work to do here, skip the calculations.
-    if t_last == t_next
-
-        msd_k = msd_km1_with_draws
-
-    else
-
-        dt    = t_next_f - t_last_f
-        msd2  = propagate(msd_km1_with_draws, dt/2, k1)
-        k2    = rates_fcn(t_last_f + dt/2, model(msd2))
-        msd3  = propagate(msd_km1_with_draws, dt/2, k2)
-        k3    = rates_fcn(t_last_f + dt/2, model(msd3))
-        msd4  = propagate(msd_km1_with_draws, dt, k3)
-        k4    = rates_fcn(t_last_f + dt, model(msd4))
-
-        # This seems more efficient:
-        # propagate(
-        #     msd_km1_with_draws,
-        #     (dt/6, dt/3, dt/3, dt/6),
-        #     (k1, k2, k3, k4),
-        # )
-
-        # But this doesn't allocate and is actually slightly faster.
-        msd_k = msd_km1_with_draws
-        msd_k = propagate(msd_k, dt/6, k1)
-        msd_k = propagate(msd_k, dt/3, k2)
-        msd_k = propagate(msd_k, dt/3, k3)
-        msd_k = propagate(msd_k, dt/6, k4)
-
-    end
-
-    return SolverOutputs(;
-        t_completed = t_next, # This should already be a rational.
-        msd_km1 = msd_km1_with_draws,
-        msd_k,
-        rates = k1,
-        stop = UnknownStopReason(),
-        t_next_suggested = t_next + solver.options.dt, # Already rational
-    )
-
-end
-
-###################
-# DormandPrince54 #
-###################
 
 """
-TODO
+    DormandPrince54Options(; initial_dt, max_dt, abs_tol, rel_tol)
+
+Configure the embedded Dormand-Prince 5(4) method. The fifth-order solution advances the
+model, while the fourth-order solution estimates local error for adaptive step control.
 """
 struct DormandPrince54Options <: AbstractSolverOptions
     initial_dt::Rational{Int64}
@@ -220,179 +307,320 @@ struct DormandPrince54Options <: AbstractSolverOptions
     abs_tol::Float64
     rel_tol::Float64
 end
-DormandPrince54Options(;
+
+function DormandPrince54Options(;
     initial_dt = 1//1,
     max_dt = 1//0,
-    abs_tol = 1e-3, # TODO: Figure out what's most common for these.
+    abs_tol = 1e-3,
     rel_tol = 1e-5,
-) = DormandPrince54Options(
-    rationalize(initial_dt),
-    rationalize(max_dt),
-    abs_tol,
-    rel_tol,
 )
-struct DormandPrince54 <: AbstractSolver
-    options::DormandPrince54Options
-    # TODO: Tables and types
+
+    rational_initial_dt = rationalize(initial_dt)
+    rational_max_dt = rationalize(max_dt)
+    rational_initial_dt > 0 || throw(ArgumentError("initial_dt must be positive."))
+    rational_max_dt > 0 || throw(ArgumentError("max_dt must be positive."))
+    abs_tol > 0 || throw(ArgumentError("abs_tol must be positive."))
+    rel_tol >= 0 || throw(ArgumentError("rel_tol cannot be negative."))
+
+    return DormandPrince54Options(
+        rational_initial_dt,
+        rational_max_dt,
+        abs_tol,
+        rel_tol,
+    )
 end
-create_solver(options::DormandPrince54Options, msd::ModelStateDescription) = DormandPrince54(options)
 
-get_initial_time_step(solver::DormandPrince54) = min(solver.options.initial_dt, solver.options.max_dt)
+"""
+    create_integrator(options, problem, initial_state)
 
-# This returns how much of the allowable error tolerance was "used" by this intergration
-# step, reporting only the worst case (largest fraction of tolerance used).
-function get_max_normalized_error(solver, msd1, msd2, max_so_far)
-    if !isempty(msd1.continuous_states)
-        max_here = maximum( # max from each variable
-            maximum( # max over each element of the variable
-                # For each element, we'll use the more permissive of the absolute and
-                # relative tolerances. If the relative tolerance is super small (or maybe
-                # actually zero if x is 0), then we'll normalize by the absolute tolerance.
-                # If the relatively tolerance is big (because x is big), then we'll
-                # normalize by the relative tolerance.
-                if solver.options.abs_tol > abs(x) * solver.options.rel_tol # abs_tol yields largest step
-                    abs(dx) / solver.options.abs_tol
-                else
-                    abs(dx/x) / solver.options.rel_tol # Clearly, there is no divide-by-zero here.
-                end
-                for (x, dx) in zip(x1, (x1 - x2))
-            )
-            for (x1, x2) in zip(msd1.continuous_states, msd2.continuous_states)
+Create runtime solver state for one simulation. `problem` and `initial_state` are accepted
+by the interface even when a particular method does not yet require initialization caches.
+"""
+function create_integrator(
+    options::RungeKutta4Options,
+    problem::ContinuousProblem,
+    initial_state::ModelStateDescription,
+)
+    return RungeKuttaIntegrator(
+        RUNGE_KUTTA_4_TABLEAU,
+        FixedStepController(float(options.dt)),
+    )
+end
+
+function create_integrator(
+    options::DormandPrince54Options,
+    problem::ContinuousProblem,
+    initial_state::ModelStateDescription,
+)
+    return RungeKuttaIntegrator(
+        DORMAND_PRINCE_54_TABLEAU,
+        EmbeddedAdaptiveController(
+            min(float(options.initial_dt), float(options.max_dt)),
+            float(options.max_dt),
+            options.abs_tol,
+            options.rel_tol,
+            0.8,
+            20,
+        ),
+    )
+end
+
+#############################
+# Explicit Runge-Kutta Core #
+#############################
+
+"""
+Convert a controller's floating-point duration into the endpoint of an official attempt.
+
+The returned endpoint is rational and never crosses `t_bound`. The actual floating-point
+duration used by every numerical stage is subsequently computed from the difference between
+the official endpoints, ensuring the integrated state and its labeled time agree.
+"""
+function choose_step_end(t_start::Rational, t_bound::Rational, proposed_dt::Float64)
+
+    if !(proposed_dt > 0.)
+        return nothing
+    end
+
+    t_start_f = float(t_start)
+    duration_to_bound = float(t_bound) - t_start_f
+    if !isfinite(proposed_dt) || proposed_dt >= duration_to_bound
+        return t_bound
+    end
+
+    # Rationalizing the absolute proposed time avoids multiplying the denominator of an
+    # already adaptive rational time by the denominator of a newly rationalized duration.
+    # Repeated rational addition can overflow Int64 even when the represented time is small.
+    proposed_time = t_start_f + proposed_dt
+    t_end = min(rationalize(proposed_time), t_bound)
+    return t_end > t_start ? t_end : nothing
+
+end
+
+# `evaluate_remaining_stages` uses value recursion rather than a runtime loop. Each
+# recursive call has a different, statically known tuple of rates, so Julia can specialize
+# propagation without the type instability caused by repeatedly assigning
+# `(stages..., new_stage)` to one local variable in the original DP54 implementation.
+
+@inline function evaluate_remaining_stages(
+    method,
+    problem,
+    t_start_f,
+    dt,
+    state_at_start,
+    stages,
+    ::Val{N},
+    ::Val{N},
+) where {N}
+    return stages
+end
+
+@inline function evaluate_remaining_stages(
+    method,
+    problem,
+    t_start_f,
+    dt,
+    state_at_start,
+    stages,
+    ::Val{I},
+    ::Val{N},
+) where {I, N}
+
+    gains = map(coefficient -> dt * coefficient, method.a[I])
+    stage_state = propagate(state_at_start, gains, stages)
+    stage_time = t_start_f + dt * method.c[I]
+    stage_rates = evaluate_rates(problem, stage_time, stage_state)
+
+    return evaluate_remaining_stages(
+        method,
+        problem,
+        t_start_f,
+        dt,
+        state_at_start,
+        (stages..., stage_rates),
+        Val(I + 1),
+        Val(N),
+    )
+
+end
+
+function stage_count(
+    method::ExplicitRungeKuttaTableau{A, B, C, EB},
+) where {A, B, C, EB}
+    return Val(fieldcount(C) + 1)
+end
+
+"""
+Evaluate every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`.
+
+The beginning state is prepared exactly once for this attempt. If an adaptive controller
+rejects the result, its next attempt calls this function again and obtains new continuous
+random draws according to the current random-process policy.
+"""
+function evaluate_stages(
+    method::ExplicitRungeKuttaTableau,
+    problem::ContinuousProblem,
+    t_start::Rational,
+    t_end::Rational,
+    state::ModelStateDescription,
+)
+
+    state_at_start = prepare_attempt(problem, t_start, t_end, state)
+    t_start_f = float(t_start)
+    dt = float(t_end) - float(t_start)
+    rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
+    stages = evaluate_remaining_stages(
+        method,
+        problem,
+        t_start_f,
+        dt,
+        state_at_start,
+        (rates_at_start,),
+        Val(1),
+        stage_count(method),
+    )
+
+    return (; state_at_start, rates_at_start, stages, dt)
+
+end
+
+function solution_state(state_at_start, dt, weights, stages)
+    gains = map(coefficient -> dt * coefficient, weights)
+    return propagate(state_at_start, gains, stages)
+end
+
+"""
+    step!(integrator, problem, request)
+
+Attempt and return exactly one accepted numerical step without crossing `request.t_bound`.
+The fixed and adaptive overloads below form the complete simulation-facing solver protocol.
+"""
+function step!(
+    integrator::RungeKuttaIntegrator{M, C},
+    problem::ContinuousProblem,
+    request::StepRequest,
+) where {M, C <: FixedStepController}
+
+    t_end = choose_step_end(
+        request.t_start,
+        request.t_bound,
+        integrator.controller.dt,
+    )
+    if isnothing(t_end)
+        failure = SolverStepSizeUnderflow(
+            float(request.t_start),
+            integrator.controller.dt,
         )
-        max_so_far = max(max_so_far, max_here)
+        return SolverFailure(request.t_start, failure)
     end
-    for (m1, m2) in zip(msd1.models, msd2.models)
-        max_so_far = get_max_normalized_error(solver, m1, m2, max_so_far)
-    end
-    return max_so_far
-end
 
-function solve(ommd, solver::DormandPrince54, t_last, t_next, msd_km1, rates_fcn, t_end)
-
-    t_last_f = float(t_last)
-    t_next_f = float(t_next)
-
-    table = (   # Butcher tableau (Dormand-Prince 5(4) by default)
-        (1/5, 1/5),                 # c_2, a_2,1
-        (3/10, 3/40, 9/40),         # c_3, a_3,1 a_3,2
-        (4/5, 44/45, -56/15, 32/9), # etc.
-        (8/9, 19372/6561, -25360/2187, 64448/6561, -212/729),
-        (1., 9017/3168, -355/33, 46732/5247, 49/176, -5103/18656),
-        (1., 35/384, 0., 500/1113, 125/192, -2187/6784, 11/84),
-        (35/384, 0., 500/1113, 125/192, -2187/6784, 11/84, 0.), # The first-same-as-last property is useless here due to the discrete update.
-        (5179/57600, 0., 7571/16695, 393/640, -92097/339200, 187/2100, 1/40),
+    attempt = evaluate_stages(
+        integrator.method,
+        problem,
+        request.t_start,
+        t_end,
+        request.state,
+    )
+    state_at_end = solution_state(
+        attempt.state_at_start,
+        attempt.dt,
+        integrator.method.b,
+        attempt.stages,
     )
 
-    # These will all get updated in the loop.
-    stop = UnknownStopReason()
-    msd_km1_with_draws = msd_km1
-    msd_k = msd_km1
-    k1 = nothing
-    t_completed = t_last
-    t_next_suggested = t_next + solver.options.max_dt
-
-    # Make sure we don't take too many steps.
-    n_allowable_failed_steps = 20
-    n_failed_steps = 0
-
-    while true
-
-        # println("continuous_step! from $(float(t_last)) to $(float(t_next))")
-
-        dt = t_next_f - t_last_f
-
-        # Make the draws for the continuous-time function.
-        if t_last == t_next
-            msd_km1_with_draws = msd_km1 # Just hold the last draws.
-        else
-            msd_km1_with_draws = draw_wc(t_last_f, t_next_f, ommd, msd_km1)
-        end
-
-        # We do the first step whether we're stopping on this sample or not.
-        msd1 = msd_km1_with_draws
-        k1 = rates_fcn(t_last_f, model(msd1))
-
-        # See if it's time to stop.
-        if t_last == t_end
-
-            msd_k = msd_km1_with_draws
-            break
-
-        else
-
-            # TODO: This is inefficient. See what we can redo here.
-            ks = (k1,)
-            for i in 1:length(table) - 2
-                ci = table[i][1]
-                as = table[i][2:end]
-                msdi = propagate(msd_km1_with_draws, dt .* as, ks)
-                ki = rates_fcn(t_last_f + dt * ci, model(msdi))
-                ks = (ks..., ki) # TODO: This is a particularly silly pattern.
-            end
-
-            # Assemble the derivatives into the update.
-            bs = table[end-1]
-            b_hats = table[end]
-            msd_k = propagate(msd_km1_with_draws, dt .* bs, ks)
-            msd_k_hat = propagate(msd_km1_with_draws, dt .* b_hats, ks)
-
-            # Figure out the error between the two different solutions. Here, we'll use the
-            # "normalized" error, where the error is normalized by its tolerance, which may
-            # be either an absolute or relative tolerance.
-            max_normalized_error = get_max_normalized_error(solver, msd_k, msd_k_hat, 0.)
-
-            # Choose the next time step.
-            p = 4 # Get this from the same place as the table.
-            σ = 0.8 # Safety factor
-            dt_suggested = σ * dt * max_normalized_error^(-1/(p+1))
-            # dt_suggested = min(2 * dt, dt_suggested) # Never grow the step by more than this factor.
-            # dt_suggested = max(dt / 3, dt_suggested) # Never shrink the step by more than this factor.
-
-            # If no error was above its tolerance...
-            if max_normalized_error < 1.
-
-                # If the suggested step size is less than the maximum, use it. Otherwise,
-                # stick with the maximum.
-                t_completed = t_next
-                if dt_suggested < solver.options.max_dt
-                    t_next_suggested = rationalize(t_next_f + dt_suggested)
-                else
-                    t_next_suggested = t_next + solver.options.max_dt
-                end
-                # println("That step worked. t_next_suggested = $(float(t_next_suggested)).")
-                break
-
-            else
-
-                # println("Stepping from $(float(t_last)) to $(float(t_next)) produced too much error.")
-                # @show max_normalized_error
-                t_next_f = t_last_f + min(dt_suggested, float(solver.options.max_dt))
-                t_next = rationalize(t_next_f)
-                # println("Trying again with t_next = $(float(t_next)).")
-                n_failed_steps += 1
-                if n_failed_steps == n_allowable_failed_steps
-                    stop = SolverFailedToConverge(t_last)
-                    msd_k = msd_km1
-                    break
-                end
-
-            end
-
-        end
-
-    end
-
-    # Reported how much of the intended step we completed, the updated model state
-    # description, and the suggested next step's end time.
-    return SolverOutputs(;
-        t_completed = t_completed,
-        msd_km1 = msd_km1_with_draws,
-        msd_k = msd_k,
-        rates = k1,
-        stop = stop,
-        t_next_suggested = t_next_suggested,
+    return AcceptedStep(
+        t_end,
+        attempt.state_at_start,
+        attempt.rates_at_start,
+        state_at_end,
+        integrator.controller.dt,
     )
 
 end
 
+function suggested_dt(controller, dt, error, embedded_order)
+    if iszero(error)
+        return controller.max_dt
+    end
+    return min(
+        controller.safety_factor * dt * error^(-1 / (embedded_order + 1)),
+        controller.max_dt,
+    )
 end
+
+function step!(
+    integrator::RungeKuttaIntegrator{M, C},
+    problem::ContinuousProblem,
+    request::StepRequest,
+) where {M, C <: EmbeddedAdaptiveController}
+
+    controller = integrator.controller
+    proposed_dt = min(controller.next_dt, controller.max_dt)
+
+    for rejection_count in 0:controller.max_rejections
+
+        t_end = choose_step_end(request.t_start, request.t_bound, proposed_dt)
+        if isnothing(t_end)
+            failure = SolverStepSizeUnderflow(float(request.t_start), proposed_dt)
+            return SolverFailure(request.t_start, failure)
+        end
+
+        attempt = evaluate_stages(
+            integrator.method,
+            problem,
+            request.t_start,
+            t_end,
+            request.state,
+        )
+        state_at_end = solution_state(
+            attempt.state_at_start,
+            attempt.dt,
+            integrator.method.b,
+            attempt.stages,
+        )
+        embedded_state = solution_state(
+            attempt.state_at_start,
+            attempt.dt,
+            integrator.method.embedded_b,
+            attempt.stages,
+        )
+        error = normalized_error(
+            problem,
+            state_at_end,
+            embedded_state,
+            controller.absolute_tolerance,
+            controller.relative_tolerance,
+        )
+        next_dt = suggested_dt(
+            controller,
+            attempt.dt,
+            error,
+            integrator.method.embedded_order,
+        )
+
+        if error < 1.
+            controller.next_dt = next_dt
+            return AcceptedStep(
+                t_end,
+                attempt.state_at_start,
+                attempt.rates_at_start,
+                state_at_end,
+                next_dt,
+            )
+        end
+
+        proposed_dt = next_dt
+        if rejection_count == controller.max_rejections
+            failure = SolverFailedToConverge(float(request.t_start))
+            return SolverFailure(request.t_start, failure)
+        end
+
+    end
+
+    # The loop above always accepts a step or returns a concrete failure. This final error
+    # is an assertion about the implementation rather than a numerical failure mode.
+    error("The adaptive step loop completed without an accepted step or failure.")
+
+end
+
+end # Solvers
