@@ -17,6 +17,7 @@ module Solvers
 
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
     prepare_attempt, propagate
+using ..SimulationTimes: ExactTime, exact_time, float_duration, solver_time, time_isless
 using ..SystemsOfSystems: AbstractFailureReason, ModelStateDescription
 import ..SystemsOfSystems
 
@@ -286,11 +287,11 @@ Configure the classical fourth-order Runge-Kutta method with fixed official step
 `dt`. Scheduled user and model times remain hard bounds and may shorten an individual step.
 """
 struct RungeKutta4Options <: AbstractSolverOptions
-    dt::Rational{Int64}
+    dt::ExactTime
 end
 
 function RungeKutta4Options(; dt)
-    rational_dt = rationalize(dt)
+    rational_dt = exact_time(dt)
     rational_dt > 0 || throw(ArgumentError("dt must be positive."))
     return RungeKutta4Options(rational_dt)
 end
@@ -302,8 +303,8 @@ Configure the embedded Dormand-Prince 5(4) method. The fifth-order solution adva
 model, while the fourth-order solution estimates local error for adaptive step control.
 """
 struct DormandPrince54Options <: AbstractSolverOptions
-    initial_dt::Rational{Int64}
-    max_dt::Rational{Int64}
+    initial_dt::ExactTime
+    max_dt::ExactTime
     abs_tol::Float64
     rel_tol::Float64
 end
@@ -315,8 +316,8 @@ function DormandPrince54Options(;
     rel_tol = 1e-5,
 )
 
-    rational_initial_dt = rationalize(initial_dt)
-    rational_max_dt = rationalize(max_dt)
+    rational_initial_dt = exact_time(initial_dt)
+    rational_max_dt = exact_time(max_dt)
     rational_initial_dt > 0 || throw(ArgumentError("initial_dt must be positive."))
     rational_max_dt > 0 || throw(ArgumentError("max_dt must be positive."))
     abs_tol > 0 || throw(ArgumentError("abs_tol must be positive."))
@@ -370,30 +371,44 @@ end
 #############################
 
 """
-Convert a controller's floating-point duration into the endpoint of an official attempt.
+Convert a controller's floating-point duration into one official numerical interval.
 
-The returned endpoint is rational and never crosses `t_bound`. The actual floating-point
-duration used by every numerical stage is subsequently computed from the difference between
-the official endpoints, ensuring the integrated state and its labeled time agree.
+The returned endpoint is rational and never crosses `t_bound`. A hard-bound interval derives
+its numerical duration from the exact rational event times. A soft solver-selected interval
+uses the difference between its floating-point endpoint labels, preserving the behavior of
+the floating-point adaptive controller rather than treating an approximate rational label as
+an exact numerical duration.
 """
-function choose_step_end(t_start::Rational, t_bound::Rational, proposed_dt::Float64)
+function choose_step_interval(t_start::Rational, t_bound::Rational, proposed_dt::Float64)
 
     if !(proposed_dt > 0.)
         return nothing
     end
 
     t_start_f = float(t_start)
-    duration_to_bound = float(t_bound) - t_start_f
+    duration_to_bound = float_duration(t_start, t_bound)
     if !isfinite(proposed_dt) || proposed_dt >= duration_to_bound
-        return t_bound
+        return (; t_end = t_bound, dt = duration_to_bound)
     end
 
-    # Rationalizing the absolute proposed time avoids multiplying the denominator of an
-    # already adaptive rational time by the denominator of a newly rationalized duration.
-    # Repeated rational addition can overflow Int64 even when the represented time is small.
+    # Canonicalizing the absolute proposed time avoids both accumulated floating-point time
+    # and repeated rational addition. `solver_time` bounds the denominator complexity of
+    # this approximate soft endpoint; exact hard event times never use that conversion.
     proposed_time = t_start_f + proposed_dt
-    t_end = min(rationalize(proposed_time), t_bound)
-    return t_end > t_start ? t_end : nothing
+    t_end = solver_time(proposed_time)
+    if time_isless(t_bound, t_end)
+        return (; t_end = t_bound, dt = duration_to_bound)
+    end
+    if !time_isless(t_start, t_end)
+        return nothing
+    end
+
+    # A soft endpoint is an approximate label for a floating-point numerical instant. Its
+    # exact rational difference can subtly change an adaptive method's accepted duration,
+    # especially during a stiff transient. Difference the numerical labels for soft steps;
+    # exact hard-bound intervals use `float_duration` above.
+    dt = float(t_end) - t_start_f
+    return dt > 0. ? (; t_end, dt) : nothing
 
 end
 
@@ -462,12 +477,12 @@ function evaluate_stages(
     problem::ContinuousProblem,
     t_start::Rational,
     t_end::Rational,
+    dt::Float64,
     state::ModelStateDescription,
 )
 
-    state_at_start = prepare_attempt(problem, t_start, t_end, state)
+    state_at_start = prepare_attempt(problem, t_start, t_end, dt, state)
     t_start_f = float(t_start)
-    dt = float(t_end) - float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(
         method,
@@ -501,12 +516,12 @@ function step!(
     request::StepRequest,
 ) where {M, C <: FixedStepController}
 
-    t_end = choose_step_end(
+    interval = choose_step_interval(
         request.t_start,
         request.t_bound,
         integrator.controller.dt,
     )
-    if isnothing(t_end)
+    if isnothing(interval)
         failure = SolverStepSizeUnderflow(
             float(request.t_start),
             integrator.controller.dt,
@@ -518,7 +533,8 @@ function step!(
         integrator.method,
         problem,
         request.t_start,
-        t_end,
+        interval.t_end,
+        interval.dt,
         request.state,
     )
     state_at_end = solution_state(
@@ -529,7 +545,7 @@ function step!(
     )
 
     return AcceptedStep(
-        t_end,
+        interval.t_end,
         attempt.state_at_start,
         attempt.rates_at_start,
         state_at_end,
@@ -559,8 +575,8 @@ function step!(
 
     for rejection_count in 0:controller.max_rejections
 
-        t_end = choose_step_end(request.t_start, request.t_bound, proposed_dt)
-        if isnothing(t_end)
+        interval = choose_step_interval(request.t_start, request.t_bound, proposed_dt)
+        if isnothing(interval)
             failure = SolverStepSizeUnderflow(float(request.t_start), proposed_dt)
             return SolverFailure(request.t_start, failure)
         end
@@ -569,7 +585,8 @@ function step!(
             integrator.method,
             problem,
             request.t_start,
-            t_end,
+            interval.t_end,
+            interval.dt,
             request.state,
         )
         state_at_end = solution_state(
@@ -601,7 +618,7 @@ function step!(
         if error < 1.
             controller.next_dt = next_dt
             return AcceptedStep(
-                t_end,
+                interval.t_end,
                 attempt.state_at_start,
                 attempt.rates_at_start,
                 state_at_end,

@@ -3,6 +3,7 @@ module RunTests
 # Start with core utilities and basic simulation behavior. The later tests exercise
 # additional simulation features and options that build on that behavior.
 include("test_step_triggering.jl")
+include("test_simulation_times.jl")
 include("test_time_series.jl")
 include("test_basic_simulations.jl")
 include("test_solver_options.jl")
