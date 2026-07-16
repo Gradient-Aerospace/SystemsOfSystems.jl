@@ -18,7 +18,7 @@ export Dimension, TimeSeries,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, next_regular_time
 
-using Random: Xoshiro
+using Random: Xoshiro, randn
 
 include("SimulationTimes.jl")
 using .SimulationTimes
@@ -783,9 +783,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # closed, and it's reasonable to ask for that directly.
 # Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
 
-############
-# The Loop #
-############
+#########
+# Steps #
+#########
 
 # Functions for drawing from the sets of random variables
 function draw_crvs(crvs, t_last, t_next)
@@ -1032,7 +1032,6 @@ end
 # beginning-of-step rates evaluation requests a stop.
 first_stop(current, candidate) = isnothing(current) ? candidate : current
 
-
 """
     step!(...)
 
@@ -1044,19 +1043,7 @@ variables, and accepts the discrete update at the rational endpoint. Returning e
 that endpoint as the simulation loop's latest committed time and state. Terminal rate
 sampling occurs afterward in `loop!`, where an exception cannot hide the committed sample.
 """
-function step!(
-    mh,
-    t,
-    schedules,
-    ommd,
-    problem,
-    updates_fcn,
-    t_last,
-    msd,
-    integrator,
-    hooks,
-    t_end,
-)
+function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integrator, hooks)
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
     # belong to the runtime integrator; the scheduler owns only exact external boundaries.
@@ -1155,80 +1142,9 @@ function step!(
 
 end
 
-"""
-    loop!(...)
-
-Run accepted hybrid-system samples until a normal stop or failure is reported.
-
-This function is the exception boundary for simulation execution. Numerical failures arrive
-as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
-so resources, hooks, and logs can still be closed by `simulate`.
-"""
-function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, hooks)
-
-    t_completed = first(t)
-    t_end = last(t)
-    stop = UnknownStopReason()
-
-    try
-
-        while isa(stop, UnknownStopReason)
-
-            # `step!` returns only after the accepted continuous endpoint and its discrete
-            # update are complete. Assigning its result here is the simulation's commit
-            # point: later failures must retain this time and state.
-            t_completed, msd, stop = step!(
-                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
-                integrator, hooks, t_end,
-            )
-
-            # A successfully processed terminal sample receives one direct post-update
-            # rates evaluation. Solver failures did not accept a sample and therefore must
-            # not run this path, even if their reported time happens to equal `t_end`.
-            should_sample_terminal_rates = (
-                stop isa AbstractStopReason &&
-                (t_completed == t_end || !(stop isa UnknownStopReason))
-            )
-            if should_sample_terminal_rates
-
-                # `UnknownStopReason` means that reaching `t_end` initiated termination; it
-                # is an internal loop sentinel, not a reason that should take precedence
-                # over a terminal model request or `ReachedEndTime`.
-                terminal_stop = stop isa UnknownStopReason ? nothing : stop
-                terminal_rates = ContinuousProblems.evaluate_rates(
-                    problem,
-                    float(t_completed),
-                    msd,
-                )
-                log_continuous_stuff!(t_completed, mh, msd, terminal_rates)
-                terminal_stop = first_stop(
-                    terminal_stop,
-                    find_model_requested_stop(terminal_rates),
-                )
-                stop = first_stop(
-                    terminal_stop,
-                    t_completed == t_end ? ReachedEndTime(t_end) : nothing,
-                )
-
-            end
-
-        end
-
-    catch err
-
-        trace = catch_backtrace()
-        @error "The simulation encounted an error." exception = (err, trace)
-        stop = EncounteredError(float(t_completed), err, stacktrace(trace))
-
-    end
-
-    return (t_completed, msd, stop)
-
-end
-
-##############
-# initialize #
-##############
+########################
+# Model Initialization #
+########################
 
 get_branching_seed(seed::BranchingSeed) = seed
 get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
@@ -1298,6 +1214,265 @@ function _initialize(
 end
 
 """
+    Base.close(desc::ModelDescription, m)
+
+Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
+the model.
+"""
+function Base.close(desc::ModelDescription, m)
+
+    # Let the submodels close their resources, in the reverse order in which we opened them.
+    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
+        Base.close(desc.models[mn], getproperty(m, mn))
+    end
+
+    # Close this model's resources, again in reverse order.
+    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
+        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
+    end
+
+    return nothing
+
+end
+
+################
+# Simulatation #
+################
+
+# A container for the user's inputs, making it easier to pass all this stuff around internal
+# simulation functions. See the `simulate` interface for more details.
+@kwdef struct SimInputs
+    model_prototype::Any = nothing
+    t::Any
+    init_fcn::Any
+    rates_fcn::Any = (args...) -> RatesOutput()
+    updates_fcn::Any = (args...) -> UpdatesOutput()
+    close_fcn::Any = (t, model) -> nothing
+    seed::Union{Integer, BranchingSeed} = 0
+    options::SimOptions = SimOptions()
+end
+
+# A container for the key outputs from simulation
+@kwdef struct SimOutputs
+    history::Any
+    t_final::ExactTime
+    final_model::Any
+end
+
+# A container for all of the artifacts used inside the loop
+@kwdef struct SimRuntime{A, B, C, D, E, F, G}
+    model_description::ModelDescription
+    ommd::A # Could be TypedModelDescription{...}, but no point in listing the parameters.
+    t::Vector{ExactTime}
+    schedules::G # Tuple of AbstractSchedules
+    msd::B # Could be ModelStateDescription{...}, but no point in listing the parameters.
+    log::C # Could be any AbstractLog
+    mh::D # Could be Union{Nothing, ModelHistory}
+    problem::E
+    integrator::F
+    hooks::Vector{Hooks.AbstractHook}
+    manager::ResourceManager
+    initial_model::Any
+end
+
+# A container for what the loop provides back to the simulation function.
+@kwdef struct LoopOutputs
+    t_completed::ExactTime
+    msd::ModelStateDescription
+    stop::Any
+end
+
+function close_hooks(hooks, t_end, final_model)
+    for hook in Iterators.reverse(hooks)
+        try
+            Hooks.close_hook!(hook, t_end, final_model)
+        catch err
+            trace = catch_backtrace()
+            @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+        end
+    end
+end
+
+# Build all of the things necessary for the loop and subsequen tear-down.
+function make_runtime(inputs::SimInputs)
+
+    # This might be a tuple with (t_start, t_end), but it can also be any collection of
+    # monotonic times.
+    t = [exact_time(el) for el in inputs.t]
+    t_start = first(t)
+
+    # The user can provide an integer or BranchingSeed, but we want the latter.
+    seed = get_branching_seed(inputs.seed)
+
+    # Pull out the full model description from the initialization function, as well as the
+    # typed model description, and finally the model state description.
+    (; model_description, ommd, msd, schedules, manager) = _initialize(
+        inputs.model_prototype;
+        inputs.init_fcn, t_start, seed, inputs.options.outdir,
+    )
+
+    # Now that resources are open, we need to make absolutely sure we close them.
+    try
+
+        # Use those descriptions to set up the time histories.
+        log, mh = Logs.create_log(inputs.options.log, model_description, inputs.options.time_dimension)
+
+        # Log the initial stuff.
+        log_initial_discrete_stuff!(t_start, mh, ommd)
+
+        # Adapt the hierarchical model to the small mathematical interface consumed by
+        # continuous-time integrators, then create runtime solver state for this simulation.
+        problem = ContinuousProblems.ContinuousProblem(ommd, inputs.rates_fcn)
+        integrator = Solvers.create_integrator(inputs.options.solver, problem, msd)
+
+        # Create the hooks one at a time. If any throws, close the already-opened hooks and
+        # then rethrow.
+        initial_model = model(msd)
+        hooks = Hooks.AbstractHook[]
+        try
+            for hook_options in inputs.options.hooks
+                push!(hooks, Hooks.create_hook(hook_options, t, initial_model))
+            end
+        catch err
+            close_hooks(hooks, t_start, initial_model)
+            rethrow(err)
+        end
+
+        # This is a pretty big payload for a single function. Would this be better as a type
+        # or at least broken into smaller chunks?
+        return SimRuntime(;
+            model_description, ommd,
+            t, schedules,
+            msd,
+            log, mh,
+            problem, integrator,
+            hooks, manager,
+            initial_model,
+        )
+
+    catch err
+
+        # Close any open resources.
+        close_resources(manager)
+        rethrow(err)
+
+    end
+
+end
+
+"""
+    loop!(...)
+
+Run accepted hybrid-system samples until a normal stop or failure is reported.
+
+This function is the exception boundary for simulation execution. Numerical failures arrive
+as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
+so resources, hooks, and logs can still be closed by `simulate`.
+"""
+function loop!(inputs, runtime)
+
+    # Pull these out here so we aren't constantly pulling them in the loop.
+    mh = runtime.mh
+    t = runtime.t
+    schedules = runtime.schedules
+    ommd = runtime.ommd
+    problem = runtime.problem
+    updates_fcn = inputs.updates_fcn
+    integrator = runtime.integrator
+    hooks = runtime.hooks
+    t_end = last(runtime.t)
+
+    # These are updated by the loop.
+    t_completed = first(runtime.t)
+    msd = runtime.msd
+    stop = UnknownStopReason()
+
+    # No matter what happens, this function returns all of the progress it's made.
+    try
+
+        while isa(stop, UnknownStopReason)
+
+            # `step!` returns only after the accepted continuous endpoint and its discrete
+            # update are complete. Assigning its result here is the simulation's commit
+            # point: later failures must retain this time and state.
+            t_completed, msd, stop = step!(
+                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd, integrator, hooks
+            )
+
+            # A successfully processed terminal sample receives one direct post-update
+            # rates evaluation. Solver failures did not accept a sample and therefore must
+            # not run this path, even if their reported time happens to equal `t_end`.
+            should_sample_terminal_rates = (
+                stop isa AbstractStopReason &&
+                (t_completed == t_end || !(stop isa UnknownStopReason))
+            )
+            if should_sample_terminal_rates
+
+                # `UnknownStopReason` means that reaching `t_end` initiated termination; it
+                # is an internal loop sentinel, not a reason that should take precedence
+                # over a terminal model request or `ReachedEndTime`.
+                terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                terminal_rates = ContinuousProblems.evaluate_rates(
+                    problem,
+                    float(t_completed),
+                    msd,
+                )
+                log_continuous_stuff!(t_completed, mh, msd, terminal_rates)
+                terminal_stop = first_stop(
+                    terminal_stop,
+                    find_model_requested_stop(terminal_rates),
+                )
+                stop = first_stop(
+                    terminal_stop,
+                    t_completed == t_end ? ReachedEndTime(t_end) : nothing,
+                )
+
+            end
+
+        end
+
+    catch err
+
+        trace = catch_backtrace()
+        @error "The simulation encounted an error." exception = (err, trace)
+        stop = EncounteredError(float(t_completed), err, stacktrace(trace))
+
+    end
+
+    return LoopOutputs(; t_completed, msd, stop)
+
+end
+
+function tear_down(inputs::SimInputs, runtime::SimRuntime, loop_outputs::LoopOutputs)
+    final_model = nothing
+    try
+        final_model = model(loop_outputs.msd)
+        inputs.close_fcn(loop_outputs.t_completed, final_model)
+        return SimOutputs(;
+            history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
+            t_final = loop_outputs.t_completed,
+            final_model,
+        )
+    finally
+        close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
+        close_resources(runtime.manager)
+    end
+end
+
+# By breaking the simulation down into these three phases, it's much easier to make
+# harnesses to test timing and allocations for the loop alone.
+function _simulate(inputs::SimInputs)
+    runtime = make_runtime(inputs)
+    loop_outputs = loop!(inputs, runtime)
+    results = tear_down(inputs, runtime, loop_outputs)
+    return (results.history, results.t_final, results.final_model)
+end
+
+#############
+# Interface #
+#############
+
+"""
     initialize(user_data; init_fcn, seed = 0, t_start = 0)
 
 This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
@@ -1364,123 +1539,6 @@ function initialize(f::Function, model_prototype_or_description; kwargs...)
 end
 
 """
-    Base.close(desc::ModelDescription, m)
-
-Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
-the model.
-"""
-function Base.close(desc::ModelDescription, m)
-
-    # Let the submodels close their resources, in the reverse order in which we opened them.
-    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
-        Base.close(desc.models[mn], getproperty(m, mn))
-    end
-
-    # Close this model's resources, again in reverse order.
-    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
-        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
-    end
-
-    return nothing
-
-end
-
-############
-# simulate #
-############
-
-function close_hooks(hooks, t_end, final_model)
-    for hook in hooks
-        try
-            Hooks.close_hook!(hook, t_end, final_model)
-        catch err
-            trace = catch_backtrace()
-            @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
-        end
-    end
-end
-
-function set_up(model_prototype;t, init_fcn, rates_fcn, seed, options::SimOptions)
-
-    # This might be a tuple with (t_start, t_end), but it can also be any collection of
-    # monotonic times.
-    t = [exact_time(el) for el in t]
-    t_start = first(t)
-
-    # The user can provide an integer or BranchingSeed, but we want the latter.
-    seed = get_branching_seed(seed)
-
-    # Pull out the full model description from the initialization function, as well as the
-    # typed model description, and finally the model state description.
-    (; model_description, ommd, msd, schedules, manager) = _initialize(
-        model_prototype;
-        init_fcn, t_start, seed, options.outdir,
-    )
-
-    # Now that resources are open, we need to make absolutely sure we close them.
-    try
-
-        # Use those descriptions to set up the time histories.
-        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
-
-        # Log the initial stuff.
-        log_initial_discrete_stuff!(t_start, mh, ommd)
-
-        # Adapt the hierarchical model to the small mathematical interface consumed by
-        # continuous-time integrators, then create runtime solver state for this simulation.
-        problem = ContinuousProblems.ContinuousProblem(ommd, rates_fcn)
-        integrator = Solvers.create_integrator(options.solver, problem, msd)
-
-        # Create the hooks one at a time. If any throws, close the already-opened hooks and
-        # then rethrow.
-        initial_model = model(msd)
-        hooks = Hooks.AbstractHook[]
-        try
-            for hook_options in options.hooks
-                push!(hooks, Hooks.create_hook(hook_options, t, initial_model))
-            end
-        catch err
-            close_hooks(hooks, t_start, initial_model)
-            rethrow(err)
-        end
-
-        # This is a pretty big payload for a single function. Would this be better as a type
-        # or at least broken into smaller chunks?
-        return (;
-            model_description,
-            t, ommd, msd, schedules,
-            log, mh,
-            problem, integrator,
-            hooks, manager,
-            initial_model,
-        )
-
-    catch err
-
-        # Close any open resources.
-        close_resources(manager)
-        rethrow(err)
-
-    end
-
-end
-
-function tear_down(close_fcn, t_end, msd, model_description, log, stop)
-
-    # Create the final model.
-    final_model = model(msd)
-
-    # Close out the models.
-    close_fcn(t_end, final_model)
-
-    # Wrap up all of the history into a single object.
-    history = SimHistory(model_description, log, stop)
-
-    return (; history, final_model)
-
-end
-
-"""
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
 
 Runs a simulation, returning the time history, end time, and final model.
@@ -1500,64 +1558,8 @@ Runs a simulation, returning the time history, end time, and final model.
   `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
 """
-function simulate(
-    model_prototype;
-    t, # Any collection; sim starts at first(t) and goes to last(t) and breaks at everything in between.
-    init_fcn, # Turns the prototype into a model description, which can be turned into a model
-    rates_fcn = (args...) -> RatesOutput(),
-    updates_fcn = (args...) -> UpdatesOutput(),
-    close_fcn = (t, model) -> nothing,
-    seed = 0,
-    options::SimOptions = SimOptions(),
-)
-
-    # Do everything we need prior to starting the loop.
-    (;
-        model_description,
-        t, ommd, msd, schedules,
-        log, mh,
-        problem, integrator,
-        hooks, manager,
-        initial_model,
-    ) = set_up(
-        model_prototype;
-        t, init_fcn, rates_fcn, seed, options,
-    )
-
-    # Let the loop update these with the final values. We need these for closing the hooks.
-    t_end = first(t)
-    final_model = initial_model
-
-    try
-
-        # Propagate until we're done.
-        t_end, msd, stop = loop!(
-            mh,
-            t,
-            schedules,
-            ommd,
-            problem,
-            updates_fcn,
-            msd,
-            integrator,
-            hooks,
-        )
-
-        # Boil that down to just the outputs.
-        (; history, final_model) = tear_down(
-            close_fcn, t_end, msd, model_description, log, stop,
-        )
-        return (history, t_end, final_model)
-
-    finally
-
-        # No matter why we're done here (error or normal completion), we want to close any
-        # open hooks/resources.
-        close_hooks(hooks, t_end, final_model)
-        close_resources(manager)
-
-    end
-
+function simulate(model_prototype; kwargs...)
+    return _simulate(SimInputs(; model_prototype, kwargs...))
 end
 
 end # module SystemsOfSystems

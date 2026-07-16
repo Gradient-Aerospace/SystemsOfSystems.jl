@@ -553,81 +553,39 @@ end
 # Speed and Allocations #
 #########################
 
+function make_inputs(system_specs, solver, log, t_end)
+    return SystemsOfSystems.SimInputs(;
+        model_prototype = system_specs,
+        t = (0, t_end),
+        init_fcn = init,
+        rates_fcn = rates,
+        updates_fcn = updates,
+        close_fcn = (t, model) -> nothing,
+        seed = 0,
+        options = SimOptions(;
+            solver,
+            log,
+            time_dimension = "Time" => "s",
+        ),
+    )
+end
+
 function run_simulation(system_specs, solver, log, t_end)
 
-    model_prototype = system_specs
-    t = (0, 1)
-    init_fcn = init
-    rates_fcn = rates
-    updates_fcn = updates
-    close_fcn = (t, model) -> nothing
-    seed = 0
-    options = SimOptions(;
-        solver,
-        log,
-        time_dimension = "Time" => "s",
-    )
-
-    # Run through everything just to force compilation.
-    (;
-        model_description,
-        t, ommd, msd, schedules,
-        log, mh,
-        problem, integrator,
-        hooks, manager,
-        initial_model,
-    ) = SystemsOfSystems.set_up(
-        model_prototype;
-        t, init_fcn, rates_fcn, seed, options,
-    )
-    t_completed, msd, stop = SystemsOfSystems.loop!(
-        mh,
-        t,
-        schedules,
-        ommd,
-        problem,
-        updates_fcn,
-        msd,
-        integrator,
-        hooks,
-    )
-    (; history, final_model) = SystemsOfSystems.tear_down(
-        close_fcn, t_completed, msd, model_description, log, stop,
-    )
+    inputs = make_inputs(system_specs, solver, log, 1)
+    runtime = SystemsOfSystems.make_runtime(inputs)
+    loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
+    result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
 
     # Make sure garbage collection does pop up unpredictably while timing.
     GC.gc()
 
-    # Now do it again, but record runtime this time.
-    t = (0, t_end)
-    (;
-        model_description,
-        t, ommd, msd, schedules,
-        log, mh,
-        problem, integrator,
-        hooks, manager,
-        initial_model,
-    ) = SystemsOfSystems.set_up(
-        model_prototype;
-        t, init_fcn, rates_fcn, seed, options,
-    )
-    @time t_completed, msd, stop = SystemsOfSystems.loop!(
-        mh,
-        t,
-        schedules,
-        ommd,
-        problem,
-        updates_fcn,
-        msd,
-        integrator,
-        hooks,
-    )
-    (; history, final_model) = SystemsOfSystems.tear_down(
-        close_fcn, t_completed, msd, model_description, log, stop,
-    )
+    inputs = make_inputs(system_specs, solver, log, t_end)
+    runtime = SystemsOfSystems.make_runtime(inputs)
+    @time loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
+    result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
 
-    return (history, t_completed, final_model)
-
+    return (result.history, result.t_final, result.final_model)
 
 end
 
