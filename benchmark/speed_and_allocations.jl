@@ -574,14 +574,13 @@ function run_simulation(system_specs, solver, log, t_end)
 
     inputs = make_inputs(system_specs, solver, log, 1)
     runtime = SystemsOfSystems.make_runtime(inputs)
+    GC.gc()
     loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
     result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
 
-    # Make sure garbage collection does pop up unpredictably while timing.
-    GC.gc()
-
     inputs = make_inputs(system_specs, solver, log, t_end)
     runtime = SystemsOfSystems.make_runtime(inputs)
+    GC.gc()
     @time loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
     result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
 
