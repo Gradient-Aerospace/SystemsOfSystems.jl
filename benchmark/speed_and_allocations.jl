@@ -554,18 +554,81 @@ end
 #########################
 
 function run_simulation(system_specs, solver, log, t_end)
-    return simulate(
-        system_specs;
-        init_fcn = init,
-        rates_fcn = rates,
-        updates_fcn = updates,
-        t = (0, t_end),
-        options = SimOptions(;
-            solver,
-            log,
-            time_dimension = "Time" => "s",
-        ),
+
+    model_prototype = system_specs
+    t = (0, 1)
+    init_fcn = init
+    rates_fcn = rates
+    updates_fcn = updates
+    close_fcn = (t, model) -> nothing
+    seed = 0
+    options = SimOptions(;
+        solver,
+        log,
+        time_dimension = "Time" => "s",
     )
+
+    # Run through everything just to force compilation.
+    (;
+        model_description,
+        t, ommd, msd, schedules,
+        log, mh,
+        problem, integrator,
+        hooks, manager,
+        initial_model,
+    ) = SystemsOfSystems.set_up(
+        model_prototype;
+        t, init_fcn, rates_fcn, seed, options,
+    )
+    t_completed, msd, stop = SystemsOfSystems.loop!(
+        mh,
+        t,
+        schedules,
+        ommd,
+        problem,
+        updates_fcn,
+        msd,
+        integrator,
+        hooks,
+    )
+    (; history, final_model) = SystemsOfSystems.tear_down(
+        close_fcn, t_completed, msd, model_description, log, stop,
+    )
+
+    # Make sure garbage collection does pop up unpredictably while timing.
+    GC.gc()
+
+    # Now do it again, but record runtime this time.
+    t = (0, t_end)
+    (;
+        model_description,
+        t, ommd, msd, schedules,
+        log, mh,
+        problem, integrator,
+        hooks, manager,
+        initial_model,
+    ) = SystemsOfSystems.set_up(
+        model_prototype;
+        t, init_fcn, rates_fcn, seed, options,
+    )
+    @time t_completed, msd, stop = SystemsOfSystems.loop!(
+        mh,
+        t,
+        schedules,
+        ommd,
+        problem,
+        updates_fcn,
+        msd,
+        integrator,
+        hooks,
+    )
+    (; history, final_model) = SystemsOfSystems.tear_down(
+        close_fcn, t_completed, msd, model_description, log, stop,
+    )
+
+    return (history, t_completed, final_model)
+
+
 end
 
 for solver_type in ["rk4", "dp54"]
@@ -632,15 +695,8 @@ for solver_type in ["rk4", "dp54"]
             e = make_closed_loop_system(randn(rng), randn(rng)),
         )
 
-        # Compile the sim by running a short one.
-        simout = run_simulation(system_specs, solver, log, 1)
-
-        # Make sure garbage collection does pop up unpredictably while timing.
-        GC.gc()
-
-        # Now we shouldn't need to compile anything while running.
         println("solver = $solver_type, log = $log_type")
-        @time simout = run_simulation(system_specs, solver, log, 200)
+        simout = run_simulation(system_specs, solver, log, 100)
 
     end
 

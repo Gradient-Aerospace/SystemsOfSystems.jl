@@ -1165,9 +1165,11 @@ as ordinary solver results; unexpected Julia exceptions are captured as `Encount
 so resources, hooks, and logs can still be closed by `simulate`.
 """
 function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, hooks)
+
     t_completed = first(t)
     t_end = last(t)
     stop = UnknownStopReason()
+
     try
 
         while isa(stop, UnknownStopReason)
@@ -1387,6 +1389,97 @@ end
 # simulate #
 ############
 
+function close_hooks(hooks, t_end, final_model)
+    for hook in hooks
+        try
+            Hooks.close_hook!(hook, t_end, final_model)
+        catch err
+            trace = catch_backtrace()
+            @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+        end
+    end
+end
+
+function set_up(model_prototype;t, init_fcn, rates_fcn, seed, options::SimOptions)
+
+    # This might be a tuple with (t_start, t_end), but it can also be any collection of
+    # monotonic times.
+    t = [exact_time(el) for el in t]
+    t_start = first(t)
+
+    # The user can provide an integer or BranchingSeed, but we want the latter.
+    seed = get_branching_seed(seed)
+
+    # Pull out the full model description from the initialization function, as well as the
+    # typed model description, and finally the model state description.
+    (; model_description, ommd, msd, schedules, manager) = _initialize(
+        model_prototype;
+        init_fcn, t_start, seed, options.outdir,
+    )
+
+    # Now that resources are open, we need to make absolutely sure we close them.
+    try
+
+        # Use those descriptions to set up the time histories.
+        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
+
+        # Log the initial stuff.
+        log_initial_discrete_stuff!(t_start, mh, ommd)
+
+        # Adapt the hierarchical model to the small mathematical interface consumed by
+        # continuous-time integrators, then create runtime solver state for this simulation.
+        problem = ContinuousProblems.ContinuousProblem(ommd, rates_fcn)
+        integrator = Solvers.create_integrator(options.solver, problem, msd)
+
+        # Create the hooks one at a time. If any throws, close the already-opened hooks and
+        # then rethrow.
+        initial_model = model(msd)
+        hooks = Hooks.AbstractHook[]
+        try
+            for hook_options in options.hooks
+                push!(hooks, Hooks.create_hook(hook_options, t, initial_model))
+            end
+        catch err
+            close_hooks(hooks, t_start, initial_model)
+            rethrow(err)
+        end
+
+        # This is a pretty big payload for a single function. Would this be better as a type
+        # or at least broken into smaller chunks?
+        return (;
+            model_description,
+            t, ommd, msd, schedules,
+            log, mh,
+            problem, integrator,
+            hooks, manager,
+            initial_model,
+        )
+
+    catch err
+
+        # Close any open resources.
+        close_resources(manager)
+        rethrow(err)
+
+    end
+
+end
+
+function tear_down(close_fcn, t_end, msd, model_description, log, stop)
+
+    # Create the final model.
+    final_model = model(msd)
+
+    # Close out the models.
+    close_fcn(t_end, final_model)
+
+    # Wrap up all of the history into a single object.
+    history = SimHistory(model_description, log, stop)
+
+    return (; history, final_model)
+
+end
+
 """
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
 
@@ -1417,44 +1510,25 @@ function simulate(
     seed = 0,
     options::SimOptions = SimOptions(),
 )
-    # This might be a tuple with (t_start, t_end), but it can also be any collection of
-    # monotonic times.
-    t = [exact_time(el) for el in t]
-    t_start = first(t)
-    t_end = last(t)
 
-    # The user can provide an integer or BranchingSeed, but we want the latter.
-    seed = get_branching_seed(seed)
-
-    # Pull out the full model description from the initialization function, as well as the
-    # typed model description, and finally the model state description.
-    (; model_description, ommd, msd, schedules, manager) = _initialize(
+    # Do everything we need prior to starting the loop.
+    (;
+        model_description,
+        t, ommd, msd, schedules,
+        log, mh,
+        problem, integrator,
+        hooks, manager,
+        initial_model,
+    ) = set_up(
         model_prototype;
-        init_fcn, t_start, seed, options.outdir,
+        t, init_fcn, rates_fcn, seed, options,
     )
 
-    # Outputs from the try block
-    history = nothing
-    final_model = nothing
+    # Let the loop update these with the final values. We need these for closing the hooks.
+    t_end = first(t)
+    final_model = initial_model
 
     try
-
-        # Use those descriptions to set up the time histories.
-        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
-
-        # Log the initial stuff.
-        log_initial_discrete_stuff!(t_start, mh, ommd)
-
-        # Adapt the hierarchical model to the small mathematical interface consumed by
-        # continuous-time integrators, then create runtime solver state for this simulation.
-        problem = ContinuousProblems.ContinuousProblem(ommd, rates_fcn)
-        integrator = Solvers.create_integrator(options.solver, problem, msd)
-
-        # Create the hooks.
-        initial_model = model(msd)
-        hooks = map(options.hooks) do hook_options
-            return Hooks.create_hook(hook_options, t, initial_model)
-        end
 
         # Propagate until we're done.
         t_end, msd, stop = loop!(
@@ -1469,33 +1543,20 @@ function simulate(
             hooks,
         )
 
-        # Create the final model.
-        final_model = model(msd)
-
-        # Close out the models.
-        close_fcn(t_end, final_model)
-
-        # Wrap up all of the history into a single object.
-        history = SimHistory(model_description, log, stop)
-
-        # Close the hooks.
-        for hook in hooks
-            try
-                Hooks.close_hook!(hook, t_end, final_model)
-            catch err
-                trace = catch_backtrace()
-                @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
-            end
-        end
+        # Boil that down to just the outputs.
+        (; history, final_model) = tear_down(
+            close_fcn, t_end, msd, model_description, log, stop,
+        )
+        return (history, t_end, final_model)
 
     finally
 
-        # Close any open resources.
+        # No matter why we're done here (error or normal completion), we want to close any
+        # open hooks/resources.
+        close_hooks(hooks, t_end, final_model)
         close_resources(manager)
 
     end
-
-    return (history, t_end, final_model)
 
 end
 
