@@ -1241,22 +1241,22 @@ end
 
 # A container for the user's inputs, making it easier to pass all this stuff around internal
 # simulation functions. See the `simulate` interface for more details.
-@kwdef struct SimInputs
+@kwdef struct SimInputs{A, B}
     model_prototype::Any = nothing
     t::Any
     init_fcn::Any
-    rates_fcn::Any = (args...) -> RatesOutput()
-    updates_fcn::Any = (args...) -> UpdatesOutput()
+    rates_fcn::A = (args...) -> RatesOutput()
+    updates_fcn::B = (args...) -> UpdatesOutput()
     close_fcn::Any = (t, model) -> nothing
     seed::Union{Integer, BranchingSeed} = 0
     options::SimOptions = SimOptions()
 end
 
 # A container for the key outputs from simulation
-@kwdef struct SimOutputs
-    history::Any
+@kwdef struct SimOutputs{A, B}
+    history::A
     t_final::ExactTime
-    final_model::Any
+    final_model::B
 end
 
 # A container for all of the artifacts used inside the loop
