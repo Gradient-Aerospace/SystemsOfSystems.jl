@@ -1001,7 +1001,7 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
 end
 
 """
-    find_model_requested_stop(output, model_path = "/")
+    find_model_requested_stop(output)
 
 Return the first model stop request in a deterministic, depth-first traversal of a
 `RatesOutput` or `UpdatesOutput` hierarchy.
@@ -1011,24 +1011,37 @@ field order. For now, one stop reason is retained; this traversal makes "first"
 predictable until the public model interface can carry structured reasons and the simulation
 history can represent several simultaneous requests.
 """
-function find_model_requested_stop(output, model_path = "/")
+function find_model_requested_stop(output)
 
     if output.stop
-        return ModelRequestedStop(model_path, "The model requested that the simulation stop")
+        return ModelRequestedStop("/", "The model requested that the simulation stop")
     end
 
+    # TODO: This loop allocates, and that seems unnecessary.
     for field in fieldnames(typeof(output.models))
-        submodel_path = model_path == "/" ? "/models/$field" : "$model_path/models/$field"
-        stop = find_model_requested_stop(output.models[field], submodel_path)
+
+        stop = find_model_requested_stop(output.models[field])
         if !isnothing(stop)
-            return stop
+
+            # We build the model_path in reverse. This prevents the need for us to build a
+            # model path for every model, when we only care about the model path once, when
+            # we stop.
+            if stop isa ModelRequestedStop
+                return ModelRequestedStop(
+                    "/models/$field" * (@view stop.model_path[2:end]),
+                    stop.reason,
+                )
+            else
+                return stop
+            end
+
         end
+
     end
 
     return nothing
 
 end
-
 
 # Preserve the first stop reason encountered while allowing the rest of an accepted sample
 # to complete. In particular, hooks and the discrete update still run after an accepted
