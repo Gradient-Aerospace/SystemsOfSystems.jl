@@ -990,10 +990,13 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     else
         NO_T_NEXT # If t_next is in the past, it no longer limits us.
     end
-    for submodel in msd.models
-        submodel_t_next = find_soonest_t_next_from_models(t_last, submodel)
-        t_next_from_this_model = earlier_time(t_next_from_this_model, submodel_t_next)
+    t_next_from_all_submodels = map(msd.models) do submodel
+        find_soonest_t_next_from_models(t_last, submodel)
     end
+    t_next_from_this_model = reduce(
+        earlier_time, t_next_from_all_submodels;
+        init = t_next_from_this_model,
+    )
     return t_next_from_this_model
 end
 
