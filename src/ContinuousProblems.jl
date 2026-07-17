@@ -310,21 +310,20 @@ function normalized_error(
     absolute_tolerance,
     relative_tolerance,
 )
-    errors = map(fieldnames(typeof(state.continuous_states))) do field
+    errors = map(state.continuous_states, embedded_state.continuous_states) do xc1, xc2
         normalized_variable_error(
-            state.continuous_states[field],
-            embedded_state.continuous_states[field],
-            absolute_tolerance,
-            relative_tolerance,
+            xc1, xc2, absolute_tolerance, relative_tolerance,
         )
     end
     max_error = maximum(errors; init = 0.)
-    errors = map(fieldnames(typeof(state.models))) do field
+    errors = map(
+        description.models, state.models, embedded_state.models,
+    ) do subdescription, substate, embedded_substate
         normalized_error(
             policy,
-            description.models[field],
-            state.models[field],
-            embedded_state.models[field],
+            subdescription,
+            substate,
+            embedded_substate,
             absolute_tolerance,
             relative_tolerance,
         )
