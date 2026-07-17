@@ -198,18 +198,62 @@ function complete_model_rates(
     end
 end
 
-function propagate_models(
+# The following seems to be allocation-free for propagate itself. It's much more complex
+# though, so we may or may not want to keep it.
+
+@inline propagate_model_values(
+    ::Tuple{},
+    gains::Tuple,
+    complete_rates::Tuple,
+) = ()
+
+@inline function propagate_model_values(
+    submodels::Tuple,
+    gains::Tuple,
+    complete_rates::Tuple,
+)
+    value = propagate(
+        first(submodels),
+        gains,
+        map(first, complete_rates),
+    )
+    remaining_values = propagate_model_values(
+        Base.tail(submodels),
+        gains,
+        map(Base.tail, complete_rates),
+    )
+    return (value, remaining_values...)
+end
+
+@inline function propagate_models(
     submodels::NamedTuple,
     gains::Tuple,
     model_rates_at_stages::Tuple,
 )
     complete_rates = complete_model_rates(submodels, model_rates_at_stages)
-    return NamedTuple{fieldnames(typeof(submodels))}(
-        map(fieldnames(typeof(submodels))) do f
-            propagate(submodels[f], gains, map(r -> getproperty(r, f), complete_rates))
-        end
+    names = fieldnames(typeof(submodels))
+    values = propagate_model_values(
+        Tuple(submodels),
+        gains,
+        map(Tuple, complete_rates),
     )
+    return NamedTuple{names}(values)
 end
+
+# We keep this original implementation since it's so much clearer than the above:
+
+# function propagate_models(
+#     submodels::NamedTuple,
+#     gains::Tuple,
+#     model_rates_at_stages::Tuple,
+# )
+#     complete_rates = complete_model_rates(submodels, model_rates_at_stages)
+#     return NamedTuple{fieldnames(typeof(submodels))}(
+#         map(fieldnames(typeof(submodels))) do f
+#             propagate(submodels[f], gains, map(r -> getproperty(r, f), complete_rates))
+#         end
+#     )
+# end
 
 """
     propagate(state, gains, rates_at_stages)
