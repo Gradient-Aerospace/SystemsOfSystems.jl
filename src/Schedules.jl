@@ -10,6 +10,8 @@ users add schedule types without coupling them to the rest of the simulation eng
 """
 module Schedules
 
+import Dimensions
+
 using ..SimulationTimes: ExactTime, NO_T_NEXT,
     exact_time, earlier_time, narrow_time, time_isless, wide_time
 
@@ -68,19 +70,20 @@ The representation stores no offset, making this common schedule both compact an
 to evaluate.
 """
 struct RegularSchedule <: AbstractSchedule
+
     period::ExactTime
 
     function RegularSchedule(period)
-
         period = exact_time(period)
         isfinite(period) || throw(ArgumentError("period must be finite."))
         period > 0 || throw(ArgumentError("period must be positive."))
         return new(period)
-
     end
-end
 
+end
 RegularSchedule(; period) = RegularSchedule(period)
+
+Dimensions.dimstyle(::Type{RegularSchedule}) = Dimensions.StructDimensionStyle()
 
 """
     OffsetRegularSchedule(; period, offset)
@@ -92,22 +95,23 @@ The finite `offset` is the first occurrence, not merely a phase extended backwar
 limit. `period` is exact, finite, and strictly positive.
 """
 struct OffsetRegularSchedule <: AbstractSchedule
+
     period::ExactTime
     offset::ExactTime
 
     function OffsetRegularSchedule(period, offset)
-
         period = exact_time(period)
         offset = exact_time(offset)
         isfinite(period) || throw(ArgumentError("period must be finite."))
         isfinite(offset) || throw(ArgumentError("offset must be finite."))
         period > 0 || throw(ArgumentError("period must be positive."))
         return new(period, offset)
-
     end
-end
 
+end
 OffsetRegularSchedule(; period, offset) = OffsetRegularSchedule(period, offset)
+
+Dimensions.dimstyle(::Type{OffsetRegularSchedule}) = Dimensions.StructDimensionStyle()
 
 """
     next_regular_time(t, period, offset = 0//1)

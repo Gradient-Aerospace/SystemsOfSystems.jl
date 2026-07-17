@@ -139,7 +139,7 @@ function validate_model_schedules(description::ModelDescription, model_path = "/
 
     for name in schedule_names
 
-        schedule = description.schedules[name]
+        schedule = strip_fluff_from_variable(description.schedules[name])
         if !(schedule isa AbstractSchedule)
             schedule_path = model_path == "/" ? "/schedules/$name" :
                 "$model_path/schedules/$name"
@@ -180,14 +180,11 @@ function collect_schedules!(
     schedules::Vector{AbstractSchedule},
     description::ModelDescription,
 )
-
-    append!(schedules, description.schedules)
+    append!(schedules, map(strip_fluff_from_variable, description.schedules))
     for submodel in description.models
         collect_schedules!(schedules, submodel)
     end
-
     return nothing
-
 end
 
 
@@ -201,12 +198,10 @@ the resulting concrete tuple, allowing dispatch to specialize for built-in and u
 schedule types without storing a `Vector{AbstractSchedule}` in the runtime scheduler.
 """
 function collect_unique_schedules(description::ModelDescription)
-
     schedules = AbstractSchedule[]
     collect_schedules!(schedules, description)
     unique!(schedules)
     return Tuple(schedules)
-
 end
 
 """
@@ -540,7 +535,7 @@ function create_typed_model_description!(
         discrete_random_variables = strip_fluff_from_random_variable_set(
             desc.discrete_random_variables, seed,
         ),
-        schedules = desc.schedules,
+        schedules = map(strip_fluff_from_variable, desc.schedules),
         models = NamedTuple(
             field => create_typed_model_description!(
                 manager,
