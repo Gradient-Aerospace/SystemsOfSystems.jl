@@ -310,20 +310,17 @@ function normalized_error(
     absolute_tolerance,
     relative_tolerance,
 )
-    max_error = 0.
-
-    for field in fieldnames(typeof(state.continuous_states))
-        error = normalized_variable_error(
+    errors = map(fieldnames(typeof(state.continuous_states))) do field
+        normalized_variable_error(
             state.continuous_states[field],
             embedded_state.continuous_states[field],
             absolute_tolerance,
             relative_tolerance,
         )
-        max_error = max(max_error, error)
     end
-
-    for field in fieldnames(typeof(state.models))
-        error = normalized_error(
+    max_error = maximum(errors; init = 0.)
+    errors = map(fieldnames(typeof(state.models))) do field
+        normalized_error(
             policy,
             description.models[field],
             state.models[field],
@@ -331,9 +328,8 @@ function normalized_error(
             absolute_tolerance,
             relative_tolerance,
         )
-        max_error = max(max_error, error)
     end
-
+    max_error = maximum(errors; init = max_error)
     return max_error
 end
 
