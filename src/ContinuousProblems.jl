@@ -204,10 +204,10 @@ function propagate_models(
     model_rates_at_stages::Tuple,
 )
     complete_rates = complete_model_rates(submodels, model_rates_at_stages)
-    return map(
-        (submodel, rates...) -> propagate(submodel, gains, rates),
-        submodels,
-        complete_rates...,
+    return NamedTuple{fieldnames(typeof(submodels))}(
+        map(fieldnames(typeof(submodels))) do f
+            propagate(submodels[f], gains, map(r -> getproperty(r, f), complete_rates))
+        end
     )
 end
 
