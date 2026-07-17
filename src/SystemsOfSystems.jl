@@ -799,16 +799,15 @@ function draw_drvs(drvs, t)
     end
 end
 
-function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
             ommd.continuous_random_variables, t_last, t_next,
         ),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
-            end
-        ),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+        end,
     )
 end
 
@@ -832,14 +831,13 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
     )
 end
 
-function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wd(t, ommd_submodel, msd_submodel)
-            end
-        ),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wd(t, ommd_submodel, msd_submodel)
+        end,
     )
 end
 
