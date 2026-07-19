@@ -349,7 +349,7 @@ function init(t, specs::ActuatorSpecs, seed)
         type = Actuator,
         constants = (;
             time_constant = VariableDescription(
-                0.1;
+                specs.time_constant;
                 title = "First-Order Actuator Response Time Constant",
                 dimensions = ["tau" => "s"]
             ),
