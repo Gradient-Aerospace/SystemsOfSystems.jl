@@ -577,12 +577,14 @@ function run_simulation(system_specs, solver, log, t_end)
     GC.gc()
     loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
     result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
+    @assert result.history.stop isa ReachedEndTime
 
     inputs = make_inputs(system_specs, solver, log, t_end)
     runtime = SystemsOfSystems.make_runtime(inputs)
     GC.gc()
     @time loop_outputs = SystemsOfSystems.loop!(inputs, runtime)
     result = SystemsOfSystems.tear_down(inputs, runtime, loop_outputs)
+    @assert result.history.stop isa ReachedEndTime
 
     return (result.history, result.t_final, result.final_model)
 
