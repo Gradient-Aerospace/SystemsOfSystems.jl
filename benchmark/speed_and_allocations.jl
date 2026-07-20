@@ -42,7 +42,8 @@ function init(t, specs::PlantSpecs, seed)
     return ModelDescription(;
         type = Plant, # This is what tells it to build a Plant with this stuff.
         constants = (; # Constants we'll need while running
-            mass = VariableDescription( # We can describe each variable in extra detail for plots and human output.
+            # We can describe each variable in extra detail for plots and human output.
+            mass = VariableDescription(
                 specs.mass;
                 title = "Mass",
                 dimensions = ["mass" => "kg",],

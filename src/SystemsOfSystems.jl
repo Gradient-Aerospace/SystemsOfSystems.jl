@@ -1194,7 +1194,7 @@ function create_artifacts_from_user_data(
 end
 
 # Once we have the model description, this sets up the typed model description, model state,
-# and various, schedules, and resource manager.
+# schedules, and resource manager.
 function create_artifacts_from_model_description(
     model_description::ModelDescription;
     t_start = 0//1,
@@ -1325,8 +1325,6 @@ function make_runtime(inputs)
             rethrow(err)
         end
 
-        # This is a pretty big payload for a single function. Would this be better as a type
-        # or at least broken into smaller chunks?
         return (;
             inputs.updates_fcn, inputs.close_fcn,
             model_description, ommd,
@@ -1511,7 +1509,7 @@ function initialize(
     kwargs...
 )
     model_description = init_fcn(t_start, user_data, get_branching_seed(seed))
-    return initialize(f, model_description; seed, t_start, kwargs...)
+    return initialize(f, model_description; seed, t_start, model_path, kwargs...)
 end
 
 """
