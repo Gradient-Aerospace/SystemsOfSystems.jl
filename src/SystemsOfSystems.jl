@@ -1307,7 +1307,6 @@ function make_runtime(inputs)
             log, mh,
             problem, integrator,
             hooks, manager,
-            initial_model,
         )
 
     catch err
