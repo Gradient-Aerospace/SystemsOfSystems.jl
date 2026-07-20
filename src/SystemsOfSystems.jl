@@ -1025,8 +1025,9 @@ function find_model_requested_stop(output)
             # model path for every model, when we only care about the model path once, when
             # we stop.
             if stop isa ModelRequestedStop
+                child_path = stop.model_path == "/" ? "" : stop.model_path
                 return ModelRequestedStop(
-                    "/models/$field" * (@view stop.model_path[2:end]),
+                    "/models/$field$child_path",
                     stop.reason,
                 )
             else
