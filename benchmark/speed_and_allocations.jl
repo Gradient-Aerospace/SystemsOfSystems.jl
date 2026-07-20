@@ -570,24 +570,29 @@ function make_inputs(system_specs, solver, log, t_end)
     )
 end
 
-function run_simulation(system_specs, solver, log, t_end)
-
+function run_for_warmup(system_specs, solver, log)
     inputs = make_inputs(system_specs, solver, log, 1)
     runtime = SystemsOfSystems.make_runtime(inputs)
     GC.gc()
     loop_outputs = SystemsOfSystems.loop!(runtime)
     result = SystemsOfSystems.tear_down(runtime, loop_outputs)
     @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
+    return (result.history, result.t_final, result.final_model)
+end
 
+function run_for_timing(system_specs, solver, log, t_end)
     inputs = make_inputs(system_specs, solver, log, t_end)
     runtime = SystemsOfSystems.make_runtime(inputs)
     GC.gc()
     @time loop_outputs = SystemsOfSystems.loop!(runtime)
     result = SystemsOfSystems.tear_down(runtime, loop_outputs)
     @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
-
     return (result.history, result.t_final, result.final_model)
+end
 
+function warm_up_then_time(system_specs, solver, log, t_end)
+    run_for_warmup(system_specs, solver, log)
+    run_for_timing(system_specs, solver, log, t_end)
 end
 
 for solver_type in ["rk4", "dp54"]
@@ -655,7 +660,7 @@ for solver_type in ["rk4", "dp54"]
         )
 
         println("solver = $solver_type, log = $log_type")
-        simout = run_simulation(system_specs, solver, log, 100)
+        simout = warm_up_then_time(system_specs, solver, log, 100)
 
     end
 
