@@ -1300,6 +1300,7 @@ function make_runtime(inputs)
         # This is a pretty big payload for a single function. Would this be better as a type
         # or at least broken into smaller chunks?
         return (;
+            inputs.updates_fcn, inputs.close_fcn,
             model_description, ommd,
             t, schedules,
             msd,
@@ -1328,7 +1329,7 @@ This function is the exception boundary for simulation execution. Numerical fail
 as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
 so resources, hooks, and logs can still be closed by `simulate`.
 """
-function loop!(inputs, runtime)
+function loop!(runtime)
 
     # Pull these out here so we aren't constantly pulling them in the loop.
     mh = runtime.mh
@@ -1336,7 +1337,7 @@ function loop!(inputs, runtime)
     schedules = runtime.schedules
     ommd = runtime.ommd
     problem = runtime.problem
-    updates_fcn = inputs.updates_fcn
+    updates_fcn = runtime.updates_fcn
     integrator = runtime.integrator
     hooks = runtime.hooks
     t_end = last(runtime.t)
@@ -1403,11 +1404,11 @@ function loop!(inputs, runtime)
 end
 
 # Produces the final model, closes the open resources, and wraps up the results.
-function tear_down(inputs, runtime, loop_outputs)
+function tear_down(runtime, loop_outputs)
     final_model = nothing
     try
         final_model = model(loop_outputs.msd)
-        inputs.close_fcn(loop_outputs.t_completed, final_model)
+        runtime.close_fcn(loop_outputs.t_completed, final_model)
         return (;
             history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
             t_final = loop_outputs.t_completed,
@@ -1529,8 +1530,8 @@ function simulate(
 )
     inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
     runtime = make_runtime(inputs)
-    loop_outputs = loop!(inputs, runtime)
-    results = tear_down(inputs, runtime, loop_outputs)
+    loop_outputs = loop!(runtime)
+    results = tear_down(runtime, loop_outputs)
     return (results.history, results.t_final, results.final_model)
 end
 
