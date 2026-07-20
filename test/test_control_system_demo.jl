@@ -612,8 +612,9 @@ end
 
     # Also, test for type stability. First, get the pieces we'll need from an internal
     # function.
-    (; msd, ) = SystemsOfSystems.create_artifacts_from_user_data(
-        system_specs; init_fcn = init,
+    context = SystemsOfSystems.initialization_context()
+    (; msd, ) = SystemsOfSystems.create_initialization_artifacts(
+        init, system_specs, context,
     )
 
     # See that we can convert the model description to a model with a known type.

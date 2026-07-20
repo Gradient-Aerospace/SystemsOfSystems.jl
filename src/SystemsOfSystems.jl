@@ -1170,37 +1170,29 @@ end
 get_branching_seed(seed::BranchingSeed) = seed
 get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
 
-# This takes in the user data and runs the initialization function to get the model
-# description. It then sets up the typed model description and model state.
-function create_artifacts_from_user_data(
-    user_data;
-    init_fcn,
+# Collect and normalize the settings shared by every initialization interface.
+function initialization_context(;
     t_start = 0//1,
     model_path = "",
     seed = BranchingSeed(0, model_path),
     outdir = nothing,
 )
+    return (; t_start, model_path, seed = get_branching_seed(seed), outdir)
+end
 
-    # Run the initialization to get the description of the model given the user_data.
-    seed = get_branching_seed(seed)
-    model_description = init_fcn(t_start, user_data, seed)
+# Run the user's initialization function before constructing the simulation artifacts.
+function create_initialization_artifacts(init_fcn, user_data, context)
 
-    # We can now get the typed model description and model state description.
-    return create_artifacts_from_model_description(
-        model_description;
-        t_start, model_path, seed, outdir,
-    )
+    model_description = init_fcn(context.t_start, user_data, context.seed)
+    return create_initialization_artifacts(model_description, context)
 
 end
 
-# Once we have the model description, this sets up the typed model description, model state,
-# schedules, and resource manager.
-function create_artifacts_from_model_description(
-    model_description::ModelDescription;
-    t_start = 0//1,
-    model_path = "",
-    seed = BranchingSeed(0, model_path),
-    outdir = nothing,
+# Construct the typed model description, model state, schedules, and resource manager from
+# a model description and normalized initialization context.
+function create_initialization_artifacts(
+    model_description::ModelDescription,
+    context,
 )
 
     # Schedules are immutable declarations, so validate and collect them before opening any
@@ -1216,24 +1208,27 @@ function create_artifacts_from_model_description(
 
         # We should be done with VariableDescriptions, etc., at this point. Now, we can
         # strip all of those out to obtain the simplified TypedModelDescription.
-        seed = get_branching_seed(seed)
         ommd = create_typed_model_description!(
-            manager, model_description, seed, outdir, model_path,
+            manager,
+            model_description,
+            context.seed,
+            context.outdir,
+            context.model_path,
         )
 
         # We can now fill in the draws to have a complete "model state description", from
         # which we can construct the model form.
-        msd = create_model_state(t_start, ommd)
+        msd = create_model_state(context.t_start, ommd)
 
         return (; model_description, ommd, msd, schedules, manager)
 
-    catch err
+    catch
 
         # Make sure we close anything we opened along the way.
         close_resources(manager)
 
         # Now return to the regular error.
-        rethrow(err)
+        rethrow()
 
     end
 
@@ -1286,15 +1281,19 @@ function make_runtime(inputs)
     t = [exact_time(el) for el in inputs.t]
     t_start = first(t)
 
-    # The user can provide an integer or BranchingSeed, but we want the latter.
-    seed = get_branching_seed(inputs.seed)
-
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
-    (; model_description, ommd, msd, schedules, manager) = create_artifacts_from_user_data(
-        inputs.user_data;
-        inputs.init_fcn, t_start, seed, inputs.options.outdir,
+    context = initialization_context(;
+        t_start,
+        seed = inputs.seed,
+        outdir = inputs.options.outdir,
     )
+    artifacts = create_initialization_artifacts(
+        inputs.init_fcn,
+        inputs.user_data,
+        context,
+    )
+    (; model_description, ommd, msd, schedules, manager) = artifacts
 
     # Now that resources are open, we need to make absolutely sure we close them.
     try
@@ -1461,8 +1460,9 @@ If the `model_description` contains any resources (open files, connections), cal
 using the `do` form: `initialize(user_data) do model ... end`.
 """
 function initialize(user_data; init_fcn, kwargs...)
-    msd = create_artifacts_from_user_data(user_data; init_fcn, kwargs...).msd
-    return model(msd)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(init_fcn, user_data, context)
+    return model(artifacts.msd)
 end
 
 """
@@ -1476,8 +1476,18 @@ If the `model_description` contains any resources (open files, connections), cal
 using the `do` form: `initialize(model_description) do model ... end`.
 """
 function initialize(model_description::ModelDescription; kwargs...)
-    msd = create_artifacts_from_model_description(model_description; kwargs...).msd
-    return model(msd)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(model_description, context)
+    return model(artifacts.msd)
+end
+
+# Run a function with an initialized model and close its resources afterward.
+function use_initialized_model(f, artifacts)
+    try
+        return f(model(artifacts.msd))
+    finally
+        close_resources(artifacts.manager)
+    end
 end
 
 """
@@ -1500,16 +1510,10 @@ Optional keyword arguments:
 * `seed`: An integer or `BranchingSeed`
 * `t_start`: The time to use for initialization
 """
-function initialize(
-    f::Function, user_data;
-    init_fcn,
-    t_start = 0//1,
-    model_path = "",
-    seed = BranchingSeed(0, model_path),
-    kwargs...
-)
-    model_description = init_fcn(t_start, user_data, get_branching_seed(seed))
-    return initialize(f, model_description; seed, t_start, model_path, kwargs...)
+function initialize(f::Function, user_data; init_fcn, kwargs...)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(init_fcn, user_data, context)
+    return use_initialized_model(f, artifacts)
 end
 
 """
@@ -1533,21 +1537,9 @@ Optional keyword arguments:
 * `t_start`: The time to use for initialization
 """
 function initialize(f::Function, model_description::ModelDescription; kwargs...)
-
-    # Initialize everything. If there's an error during this process, all resources that
-    # were opened along the way will be closed, and then the error will be re-thrown, so if
-    # this function completes, all of the resources (and everything else) went well.
-    (; model_description, ommd, msd, manager) = create_artifacts_from_model_description(
-        model_description; kwargs...
-    )
-
-    # Now try to run the function, returning whatever it returns.
-    try
-        f(model(msd))
-    finally
-        close_resources(manager)
-    end
-
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(model_description, context)
+    return use_initialized_model(f, artifacts)
 end
 
 """
