@@ -9,7 +9,7 @@ import Dimensions
 import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
     is_regular_step_triggering, DiscreteWhiteNoise, RandomVariableDescription,
-    Solvers, Logs, SimOptions, simulate, ContinuousWhiteNoise
+    Solvers, Logs, SimOptions, ContinuousWhiteNoise
 
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
@@ -42,7 +42,8 @@ function init(t, specs::PlantSpecs, seed)
     return ModelDescription(;
         type = Plant, # This is what tells it to build a Plant with this stuff.
         constants = (; # Constants we'll need while running
-            mass = VariableDescription( # We can describe each variable in extra detail for plots and human output.
+            # We can describe each variable in extra detail for plots and human output.
+            mass = VariableDescription(
                 specs.mass;
                 title = "Mass",
                 dimensions = ["mass" => "kg",],
@@ -553,19 +554,46 @@ end
 # Speed and Allocations #
 #########################
 
-function run_simulation(system_specs, solver, log, t_end)
-    return simulate(
-        system_specs;
+function make_inputs(system_specs, solver, log, t_end)
+    return (;
+        user_data = system_specs,
+        t = (0, t_end),
         init_fcn = init,
         rates_fcn = rates,
         updates_fcn = updates,
-        t = (0, t_end),
+        close_fcn = (t, model) -> nothing,
+        seed = 0,
         options = SimOptions(;
             solver,
             log,
             time_dimension = "Time" => "s",
         ),
     )
+end
+
+function run_for_warmup(system_specs, solver, log)
+    inputs = make_inputs(system_specs, solver, log, 1)
+    runtime = SystemsOfSystems.make_runtime(inputs)
+    GC.gc()
+    loop_outputs = SystemsOfSystems.loop!(runtime)
+    result = SystemsOfSystems.tear_down(runtime, loop_outputs)
+    @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
+    return (result.history, result.t_final, result.final_model)
+end
+
+function run_for_timing(system_specs, solver, log, t_end)
+    inputs = make_inputs(system_specs, solver, log, t_end)
+    runtime = SystemsOfSystems.make_runtime(inputs)
+    GC.gc()
+    @time loop_outputs = SystemsOfSystems.loop!(runtime)
+    result = SystemsOfSystems.tear_down(runtime, loop_outputs)
+    @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
+    return (result.history, result.t_final, result.final_model)
+end
+
+function warm_up_then_time(system_specs, solver, log, t_end)
+    run_for_warmup(system_specs, solver, log)
+    run_for_timing(system_specs, solver, log, t_end)
 end
 
 for solver_type in ["rk4", "dp54"]
@@ -632,18 +660,11 @@ for solver_type in ["rk4", "dp54"]
             e = make_closed_loop_system(randn(rng), randn(rng)),
         )
 
-        # Compile the sim by running a short one.
-        simout = run_simulation(system_specs, solver, log, 1)
-
-        # Make sure garbage collection does pop up unpredictably while timing.
-        GC.gc()
-
-        # Now we shouldn't need to compile anything while running.
         println("solver = $solver_type, log = $log_type")
-        @time simout = run_simulation(system_specs, solver, log, 200)
+        simout = warm_up_then_time(system_specs, solver, log, 100)
 
     end
 
 end
 
-end # TestSpeedAndAllocations
+end # BenchmarkSpeedAndAllocations
