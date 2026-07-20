@@ -323,7 +323,11 @@ struct VariableDescription{T}
     # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
 end
 VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
-function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
+function VariableDescription{T}(
+    value;
+    title, dimensions,
+    groups = missing, interpolator = missing
+) where {T}
     return VariableDescription{T}(
         value, title, Dimension[dimensions...], groups, interpolator,
     )
@@ -482,7 +486,11 @@ end
     descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
     payloads::Vector{Any} = Any[]
 end
-function add_resource!(manager::ResourceManager, description::Resources.AbstractResource, payload)
+function add_resource!(
+    manager::ResourceManager,
+    description::Resources.AbstractResource,
+    payload,
+)
     push!(manager.descriptions, description)
     push!(manager.payloads, payload)
     return nothing
@@ -492,7 +500,10 @@ function try_to_close_resource(resource, payload)
             Resources.close_resource(resource, payload)
         catch err
             trace = catch_backtrace()
-            @error "Failed to close resource = $resource. Continuing..." exception = (err, trace)
+            @error(
+                "Failed to close resource = $resource. Continuing...",
+                exception = (err, trace),
+            )
         end
 end
 function close_resources(manager::ResourceManager)
@@ -623,7 +634,10 @@ function model(desc::ModelStateDescription{T}) where {T}
 end
 
 # This has no allocations for bits types.
-function copy_model_state_description_except(md::T; kwargs...) where {T <: ModelStateDescription}
+function copy_model_state_description_except(
+    md::T;
+    kwargs...
+) where {T <: ModelStateDescription}
     return T(;
         md.constants,
         md.continuous_states,
@@ -698,19 +712,26 @@ struct EncounteredError <: AbstractFailureReason
     trace::Any
 end
 
-describe(reason::AbstractTerminationReason) = string(typeof(reason))
-describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
-describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
-describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
-describe(stop::HookRequestedStop) = "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
-describe(stop::EncounteredError) = "The sim experienced an error."
+describe(reason::AbstractTerminationReason) =
+    string(typeof(reason))
+describe(stop::UnknownStopReason) =
+    "The sim stopped for an unknown reason."
+describe(stop::ReachedEndTime) =
+    "The sim reached the specified end time of $(float(stop.t_end))."
+describe(stop::ModelRequestedStop) =
+    "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
+describe(stop::HookRequestedStop) =
+    "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
+describe(stop::EncounteredError) =
+    "The sim experienced an error."
 
 ##############
 # SimOptions #
 ##############
 
-# We define this generic function before loading the continuous-problem adapter. Its concrete
-# hierarchical method remains with the simulation's random-variable machinery below.
+# We define this generic function before loading the continuous-problem adapter. Its
+# concrete hierarchical method remains with the simulation's random-variable machinery,
+# below.
 function draw_wc end
 
 include("Logs.jl")
@@ -1151,7 +1172,7 @@ get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
 
 # This takes in the user data and runs the initialization function to get the model
 # description. It then sets up the typed model description and model state.
-function _initialize(
+function create_artifacts_from_user_data(
     user_data;
     init_fcn,
     t_start = 0//1,
@@ -1165,13 +1186,16 @@ function _initialize(
     model_description = init_fcn(t_start, user_data, seed)
 
     # We can now get the typed model description and model state description.
-    return _initialize(model_description; t_start, model_path, seed, outdir)
+    return create_artifacts_from_model_description(
+        model_description;
+        t_start, model_path, seed, outdir,
+    )
 
 end
 
-# Once we have the model description, this sets up the typed model description and model
-# state.
-function _initialize(
+# Once we have the model description, this sets up the typed model description, model state,
+# and various, schedules, and resource manager.
+function create_artifacts_from_model_description(
     model_description::ModelDescription;
     t_start = 0//1,
     model_path = "",
@@ -1193,7 +1217,9 @@ function _initialize(
         # We should be done with VariableDescriptions, etc., at this point. Now, we can
         # strip all of those out to obtain the simplified TypedModelDescription.
         seed = get_branching_seed(seed)
-        ommd = create_typed_model_description!(manager, model_description, seed, outdir, model_path)
+        ommd = create_typed_model_description!(
+            manager, model_description, seed, outdir, model_path,
+        )
 
         # We can now fill in the draws to have a complete "model state description", from
         # which we can construct the model form.
@@ -1235,9 +1261,9 @@ function Base.close(desc::ModelDescription, m)
 
 end
 
-################
-# Simulatation #
-################
+##############
+# Simulation #
+##############
 
 # Hooks may open resources, so we want to make sure we can always call the close function
 # for them.
@@ -1265,7 +1291,7 @@ function make_runtime(inputs)
 
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
-    (; model_description, ommd, msd, schedules, manager) = _initialize(
+    (; model_description, ommd, msd, schedules, manager) = create_artifacts_from_user_data(
         inputs.user_data;
         inputs.init_fcn, t_start, seed, inputs.options.outdir,
     )
@@ -1274,7 +1300,9 @@ function make_runtime(inputs)
     try
 
         # Use those descriptions to set up the time histories.
-        log, mh = Logs.create_log(inputs.options.log, model_description, inputs.options.time_dimension)
+        log, mh = Logs.create_log(
+            inputs.options.log, model_description, inputs.options.time_dimension,
+        )
 
         # Log the initial stuff.
         log_initial_discrete_stuff!(t_start, mh, ommd)
@@ -1355,7 +1383,8 @@ function loop!(runtime)
             # update are complete. Assigning its result here is the simulation's commit
             # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
-                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd, integrator, hooks
+                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
+                integrator, hooks
             )
 
             # A successfully processed terminal sample receives one direct post-update
@@ -1433,28 +1462,30 @@ If the `model_description` contains any resources (open files, connections), cal
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
 using the `do` form: `initialize(user_data) do model ... end`.
 """
-function initialize(user_data; kwargs...)
-    return model(_initialize(user_data; kwargs...).msd)
+function initialize(user_data; init_fcn, kwargs...)
+    msd = create_artifacts_from_user_data(user_data; init_fcn, kwargs...).msd
+    return model(msd)
 end
 
 """
-    initialize(model_description; seed = BranchingSeed(0, ""), t_start = 0)
+    initialize(model_description; seed = 0, t_start = 0)
 
-Creates the initial model form from the given `ModelDescription`, `seed`, and and start
-time, `t_start`.
+Creates the initial model form from the given `ModelDescription`, `seed`, and start time,
+`t_start`.
 
 If the `model_description` contains any resources (open files, connections), call
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
 using the `do` form: `initialize(model_description) do model ... end`.
 """
 function initialize(model_description::ModelDescription; kwargs...)
-    return model(_initialize(model_description; kwargs...).msd)
+    msd = create_artifacts_from_model_description(model_description; kwargs...).msd
+    return model(msd)
 end
 
 """
-    initialize(f, user_data_or_model_description; kwargs...)
+    initialize(f, user_data; init_fcn, kwargs...)
 
-This form of `initialize` allows the `do` pattern:
+This form of `initialize` allows the `do` pattern, like so:
 
 ```
 initialize(user_data; init_fcn = ..., kwargs...) do m
@@ -1462,6 +1493,31 @@ initialize(user_data; init_fcn = ..., kwargs...) do m
     ...
 end
 ```
+
+This is useful when a model opens a resource, like a file. When the `do` block is finished,
+this function will automatically close all opened resources, even if there was an error.
+
+Optional keyword arguments:
+
+* `seed`: An integer or `BranchingSeed`
+* `t_start`: The time to use for initialization
+"""
+function initialize(
+    f::Function, user_data;
+    init_fcn,
+    t_start = 0//1,
+    model_path = "",
+    seed = BranchingSeed(0, model_path),
+    kwargs...
+)
+    model_description = init_fcn(t_start, user_data, get_branching_seed(seed))
+    return initialize(f, model_description; seed, t_start, kwargs...)
+end
+
+"""
+    initialize(f, model_description::ModelDescription; kwargs...)
+
+This form of `initialize` allows the `do` pattern:
 
 ```
 initialize(model_description; kwargs...) do m
@@ -1478,14 +1534,13 @@ Optional keyword arguments:
 * `seed`: An integer or `BranchingSeed`
 * `t_start`: The time to use for initialization
 """
-function initialize(f::Function, user_data_or_model_description; kwargs...)
+function initialize(f::Function, model_description::ModelDescription; kwargs...)
 
     # Initialize everything. If there's an error during this process, all resources that
     # were opened along the way will be closed, and then the error will be re-thrown, so if
     # this function completes, all of the resources (and everything else) went well.
-    (; model_description, ommd, msd, manager) = _initialize(
-        user_data_or_model_description;
-        kwargs...
+    (; model_description, ommd, msd, manager) = create_artifacts_from_model_description(
+        model_description; kwargs...
     )
 
     # Now try to run the function, returning whatever it returns.

@@ -154,7 +154,7 @@ end
         ),
     )
 
-    initialized = SystemsOfSystems._initialize(description)
+    initialized = SystemsOfSystems.create_artifacts_from_model_description(description)
 
     # Repeated value-equal clocks become one global scheduler entry, while every model
     # retains its own named declaration for local triggering logic.

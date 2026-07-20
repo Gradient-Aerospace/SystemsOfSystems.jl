@@ -9,7 +9,7 @@ import Dimensions
 import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
     is_regular_step_triggering, DiscreteWhiteNoise, RandomVariableDescription,
-    Solvers, Logs, SimOptions, simulate, ContinuousWhiteNoise
+    Solvers, Logs, SimOptions, ContinuousWhiteNoise
 
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
@@ -661,4 +661,4 @@ for solver_type in ["rk4", "dp54"]
 
 end
 
-end # TestSpeedAndAllocations
+end # BenchmarkSpeedAndAllocations
