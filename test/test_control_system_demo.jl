@@ -2,6 +2,7 @@ module TestControlSystemDemo
 
 using Test
 using HDF5: h5open, Group
+using HDF5Vectors
 using Random: Xoshiro, randn
 import Dimensions
 import SystemsOfSystems
@@ -9,7 +10,7 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
     RatesOutput, UpdatesOutput,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     RegularSchedule, is_triggering, on_triggering,
-    Solvers, Logs, SimOptions, simulate
+    Logs, SimOptions, Solvers, TimeSeries, simulate
 
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
@@ -540,7 +541,7 @@ end
             initial_velocity = 0.,
         ),
         sensor = SensorSpecs(
-            dt = 0.1,
+            schedule = RegularSchedule(0.1),
             sigma_noise = 0.,
             sigma_bias = 0.,
         ),
@@ -548,7 +549,7 @@ end
             constant_position = 1.,
         ),
         controller = PDControllerSpecs(
-            dt = 0.1,
+            schedule = RegularSchedule(0.1),
             p = 8.,
             d = 4.,
             initial_position = 0.,
@@ -575,8 +576,9 @@ end
         ),
     )
 
+    dt_sensor = system_specs.sensor.schedule.period
     @test t == 10
-    @test history["/sensor"]["measurement"].time == collect(0. : system_specs.sensor.dt : t)
+    @test history["/sensor"]["measurement"].time == collect(0. : dt_sensor : t)
     @test history["/sensor"]["measurement"].data[end].t == t
 
     Logs.close_log(history.log)
