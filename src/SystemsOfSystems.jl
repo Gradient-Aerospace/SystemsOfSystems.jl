@@ -1149,10 +1149,10 @@ end
 get_branching_seed(seed::BranchingSeed) = seed
 get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
 
-# This takes in a model prototype (the user data) and runs the initialization function to
-# get the model description. It then sets up the typed model description and model state.
+# This takes in the user data and runs the initialization function to get the model
+# description. It then sets up the typed model description and model state.
 function _initialize(
-    model_prototype;
+    user_data;
     init_fcn,
     t_start = 0//1,
     model_path = "",
@@ -1160,9 +1160,9 @@ function _initialize(
     outdir = nothing,
 )
 
-    # Run the initialization to get the description of the model given the prototype.
+    # Run the initialization to get the description of the model given the user_data.
     seed = get_branching_seed(seed)
-    model_description = init_fcn(t_start, model_prototype, seed)
+    model_description = init_fcn(t_start, user_data, seed)
 
     # We can now get the typed model description and model state description.
     return _initialize(model_description; t_start, model_path, seed, outdir)
@@ -1242,7 +1242,7 @@ end
 # A container for the user's inputs, making it easier to pass all this stuff around internal
 # simulation functions. See the `simulate` interface for more details.
 @kwdef struct SimInputs{A, B}
-    model_prototype::Any = nothing
+    user_data::Any = nothing
     t::Any
     init_fcn::Any
     rates_fcn::A = (args...) -> RatesOutput()
@@ -1275,13 +1275,15 @@ end
     initial_model::Any
 end
 
-# A container for what the loop provides back to the simulation function.
+# A container for what the loop provides back to the `simulate` function
 @kwdef struct LoopOutputs
     t_completed::ExactTime
     msd::ModelStateDescription
     stop::Any
 end
 
+# Hooks may open resources, so we want to make sure we can always call the close function
+# for them.
 function close_hooks(hooks, t_end, final_model)
     for hook in Iterators.reverse(hooks)
         try
@@ -1293,7 +1295,7 @@ function close_hooks(hooks, t_end, final_model)
     end
 end
 
-# Build all of the things necessary for the loop and subsequen tear-down.
+# Build all of the things necessary for the loop and subsequent tear-down.
 function make_runtime(inputs::SimInputs)
 
     # This might be a tuple with (t_start, t_end), but it can also be any collection of
@@ -1307,7 +1309,7 @@ function make_runtime(inputs::SimInputs)
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
     (; model_description, ommd, msd, schedules, manager) = _initialize(
-        inputs.model_prototype;
+        inputs.user_data;
         inputs.init_fcn, t_start, seed, inputs.options.outdir,
     )
 
@@ -1443,6 +1445,8 @@ function loop!(inputs, runtime)
 
 end
 
+# Produces the final model, closes the open resources, and wraps up the results in a
+# SimOutputs.
 function tear_down(inputs::SimInputs, runtime::SimRuntime, loop_outputs::LoopOutputs)
     final_model = nothing
     try
@@ -1475,57 +1479,65 @@ end
 """
     initialize(user_data; init_fcn, seed = 0, t_start = 0)
 
-This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
-optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
-it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
+Creates the initial model form from the given `user_data`, `init_fcn`, `seed`, and start
+time, `t_start`. See `simulate` for a definition of these inputs.
 
 If the `model_description` contains any resources (open files, connections), call
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
-using the `do` form: `initialize(model_prototype) do model ... end`.
+using the `do` form: `initialize(user_data) do model ... end`.
 """
-function initialize(model_prototype; kwargs...)
-    return model(_initialize(model_prototype; kwargs...).msd)
+function initialize(user_data; kwargs...)
+    return model(_initialize(user_data; kwargs...).msd)
 end
 
 """
     initialize(model_description; seed = BranchingSeed(0, ""), t_start = 0)
 
-This is useful for debugging model initialization. Given a `ModelDescription` (such as would
-be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
-The `seed` is used for random variables that do not provide their own
-`RandomVariableDescription` seed.
+Creates the initial model form from the given `ModelDescription`, `seed`, and and start
+time, `t_start`.
 
 If the `model_description` contains any resources (open files, connections), call
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
-using the `do` form: `initialize(model_prototype) do model ... end`.
+using the `do` form: `initialize(model_description) do model ... end`.
 """
 function initialize(model_description::ModelDescription; kwargs...)
     return model(_initialize(model_description; kwargs...).msd)
 end
 
 """
-    initialize(f, model_prototype_or_description; kwargs...)
+    initialize(f, user_data_or_model_description; kwargs...)
 
 This form of `initialize` allows the `do` pattern:
 
 ```
-initialize(model_description; kwargs...) do m
+initialize(user_data; init_fcn = ..., kwargs...) do m
+    # Do something with model m.
     ...
 end
 ```
 
-This is useful when a model opens a file. When the `do` block is finished, this function
-will automatically close all opened resources, even if there was an error.
+```
+initialize(model_description; kwargs...) do m
+    # Do something with model m.
+    ...
+end
+```
 
-All additional `args` and `kwargs` are the same as for the other initialization functions.
+This is useful when a model opens a resource, like a file. When the `do` block is finished,
+this function will automatically close all opened resources, even if there was an error.
+
+Optional keyword arguments:
+
+* `seed`: An integer or `BranchingSeed`
+* `t_start`: The time to use for initialization
 """
-function initialize(f::Function, model_prototype_or_description; kwargs...)
+function initialize(f::Function, user_data_or_model_description; kwargs...)
 
     # Initialize everything. If there's an error during this process, all resources that
     # were opened along the way will be closed, and then the error will be re-thrown, so if
     # this function completes, all of the resources (and everything else) went well.
     (; model_description, ommd, msd, manager) = _initialize(
-        model_prototype_or_description;
+        user_data_or_model_description;
         kwargs...
     )
 
@@ -1544,7 +1556,7 @@ end
 Runs a simulation, returning the time history, end time, and final model.
 
 * `user_data`: Can be anything used by the `init_fcn`
-* `t`: A collection of monotonic times; the sim will step to exactly each given time, plus
+* `t`: A collection of monotonic times. The sim will step to exactly each given time, plus
   as many other steps are required by the solver and models. At the very least, this must
   contain a start time and end time.
 * `init_fcn`: Will be called with `(t_start, user_data, seed)`, where `t_start` is the first
@@ -1558,8 +1570,8 @@ Runs a simulation, returning the time history, end time, and final model.
   `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
 """
-function simulate(model_prototype; kwargs...)
-    return _simulate(SimInputs(; model_prototype, kwargs...))
+function simulate(user_data; kwargs...)
+    return _simulate(SimInputs(; user_data, kwargs...))
 end
 
 end # module SystemsOfSystems

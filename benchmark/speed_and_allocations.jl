@@ -555,7 +555,7 @@ end
 
 function make_inputs(system_specs, solver, log, t_end)
     return SystemsOfSystems.SimInputs(;
-        model_prototype = system_specs,
+        user_data = system_specs,
         t = (0, t_end),
         init_fcn = init,
         rates_fcn = rates,
