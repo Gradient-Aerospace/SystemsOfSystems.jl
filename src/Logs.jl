@@ -332,7 +332,7 @@ end
 Loads a log from an HDF5 file.
 """
 function load_hdf5_log(filename)
-    error("Please import the HDF5 package to use HDF5 log functionality like `load_hdf5_log`.")
+    error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_hdf5_log`.")
 end
 
 """
@@ -341,11 +341,11 @@ end
 Saves a log to an HDF5 file in the same format used by the HDF5Log.
 """
 function save_log_to_hdf5(filename, log)
-    error("Please import the HDF5 package to use HDF5 log functionality like `save_log_to_hdf5`.")
+    error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_log_to_hdf5`.")
 end
 
 function save_time_series_to_hdf5(args...; kwargs...)
-    error("Please import the HDF5 package to use HDF5 log functionality like `save_time_series_to_hdf5`.")
+    error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_time_series_to_hdf5`.")
 end
 
 end
