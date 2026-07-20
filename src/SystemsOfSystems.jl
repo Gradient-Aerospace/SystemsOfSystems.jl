@@ -1239,49 +1239,6 @@ end
 # Simulatation #
 ################
 
-# A container for the user's inputs, making it easier to pass all this stuff around internal
-# simulation functions. See the `simulate` interface for more details.
-@kwdef struct SimInputs{A, B}
-    user_data::Any = nothing
-    t::Any
-    init_fcn::Any
-    rates_fcn::A = (args...) -> RatesOutput()
-    updates_fcn::B = (args...) -> UpdatesOutput()
-    close_fcn::Any = (t, model) -> nothing
-    seed::Union{Integer, BranchingSeed} = 0
-    options::SimOptions = SimOptions()
-end
-
-# A container for the key outputs from simulation
-@kwdef struct SimOutputs{A, B}
-    history::A
-    t_final::ExactTime
-    final_model::B
-end
-
-# A container for all of the artifacts used inside the loop
-@kwdef struct SimRuntime{A, B, C, D, E, F, G}
-    model_description::ModelDescription
-    ommd::A # Could be TypedModelDescription{...}, but no point in listing the parameters.
-    t::Vector{ExactTime}
-    schedules::G # Tuple of AbstractSchedules
-    msd::B # Could be ModelStateDescription{...}, but no point in listing the parameters.
-    log::C # Could be any AbstractLog
-    mh::D # Could be Union{Nothing, ModelHistory}
-    problem::E
-    integrator::F
-    hooks::Vector{Hooks.AbstractHook}
-    manager::ResourceManager
-    initial_model::Any
-end
-
-# A container for what the loop provides back to the `simulate` function
-@kwdef struct LoopOutputs
-    t_completed::ExactTime
-    msd::ModelStateDescription
-    stop::Any
-end
-
 # Hooks may open resources, so we want to make sure we can always call the close function
 # for them.
 function close_hooks(hooks, t_end, final_model)
@@ -1296,7 +1253,7 @@ function close_hooks(hooks, t_end, final_model)
 end
 
 # Build all of the things necessary for the loop and subsequent tear-down.
-function make_runtime(inputs::SimInputs)
+function make_runtime(inputs)
 
     # This might be a tuple with (t_start, t_end), but it can also be any collection of
     # monotonic times.
@@ -1342,7 +1299,7 @@ function make_runtime(inputs::SimInputs)
 
         # This is a pretty big payload for a single function. Would this be better as a type
         # or at least broken into smaller chunks?
-        return SimRuntime(;
+        return (;
             model_description, ommd,
             t, schedules,
             msd,
@@ -1441,18 +1398,17 @@ function loop!(inputs, runtime)
 
     end
 
-    return LoopOutputs(; t_completed, msd, stop)
+    return (; t_completed, msd, stop)
 
 end
 
-# Produces the final model, closes the open resources, and wraps up the results in a
-# SimOutputs.
-function tear_down(inputs::SimInputs, runtime::SimRuntime, loop_outputs::LoopOutputs)
+# Produces the final model, closes the open resources, and wraps up the results.
+function tear_down(inputs, runtime, loop_outputs)
     final_model = nothing
     try
         final_model = model(loop_outputs.msd)
         inputs.close_fcn(loop_outputs.t_completed, final_model)
-        return SimOutputs(;
+        return (;
             history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
             t_final = loop_outputs.t_completed,
             final_model,
@@ -1461,15 +1417,6 @@ function tear_down(inputs::SimInputs, runtime::SimRuntime, loop_outputs::LoopOut
         close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
         close_resources(runtime.manager)
     end
-end
-
-# By breaking the simulation down into these three phases, it's much easier to make
-# harnesses to test timing and allocations for the loop alone.
-function _simulate(inputs::SimInputs)
-    runtime = make_runtime(inputs)
-    loop_outputs = loop!(inputs, runtime)
-    results = tear_down(inputs, runtime, loop_outputs)
-    return (results.history, results.t_final, results.final_model)
 end
 
 #############
@@ -1570,8 +1517,21 @@ Runs a simulation, returning the time history, end time, and final model.
   `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
 """
-function simulate(user_data; kwargs...)
-    return _simulate(SimInputs(; user_data, kwargs...))
+function simulate(
+    user_data;
+    t,
+    init_fcn,
+    rates_fcn = (args...) -> RatesOutput(),
+    updates_fcn = (args...) -> UpdatesOutput(),
+    close_fcn = (t, model) -> nothing,
+    seed::Union{Integer, BranchingSeed} = 0,
+    options::SimOptions = SimOptions(),
+)
+    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    runtime = make_runtime(inputs)
+    loop_outputs = loop!(inputs, runtime)
+    results = tear_down(inputs, runtime, loop_outputs)
+    return (results.history, results.t_final, results.final_model)
 end
 
 end # module SystemsOfSystems
