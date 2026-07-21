@@ -18,7 +18,7 @@ This stores the time history of a single model, including its discrete and conti
 and outputs, as well as constants, the "path" to this model, and the model histories for its
 sub-models.
 """
-@kwdef mutable struct ModelHistory{ # This is muutable only to put it on the heap.
+@kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
     XCT <: NamedTuple,
     XDT <: NamedTuple,

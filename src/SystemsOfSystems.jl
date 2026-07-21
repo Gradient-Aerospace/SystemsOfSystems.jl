@@ -425,7 +425,7 @@ end
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 
-This is muutable only to put it on the heap.
+This is mutable only to put it on the heap.
 """
 @kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
