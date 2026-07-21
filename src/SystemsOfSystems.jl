@@ -898,13 +898,13 @@ function log_initial_discrete_stuff!(
     mh::Logs.ModelHistory,
     md::TypedModelDescription,
 )
-    for fn in fieldnames(fieldtype(typeof(mh), :discrete_states))
+    for fn in keys(mh.discrete_states)
         push!(mh.discrete_states[fn], float(t), md.discrete_states[fn]) # <- must be in MD
     end
-    for fn in fieldnames(fieldtype(typeof(mh), :discrete_outputs))
+    for fn in keys(mh.discrete_outputs)
         push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
     end
-    for fn in fieldnames(fieldtype(typeof(mh), :models))
+    for fn in keys(mh.models)
         log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
     end
 end
