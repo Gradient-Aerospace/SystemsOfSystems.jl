@@ -79,7 +79,7 @@ VariableDescription(
 )
 ```
 """
-struct ModelDescription
+mutable struct ModelDescription
     type
     constants
     continuous_states
@@ -425,7 +425,7 @@ end
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
 """
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
+@kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
     constants::CT
     continuous_states::XCT
@@ -566,7 +566,7 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
+@kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
