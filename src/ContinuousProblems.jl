@@ -204,10 +204,10 @@ function propagate_models(
     model_rates_at_stages::Tuple,
 )
     complete_rates = complete_model_rates(submodels, model_rates_at_stages)
-    return map(
-        (submodel, rates...) -> propagate(submodel, gains, rates),
-        submodels,
-        complete_rates...,
+    return NamedTuple{fieldnames(typeof(submodels))}(
+        map(fieldnames(typeof(submodels))) do f
+            propagate(submodels[f], gains, map(r -> getproperty(r, f), complete_rates))
+        end
     )
 end
 
@@ -310,30 +310,25 @@ function normalized_error(
     absolute_tolerance,
     relative_tolerance,
 )
-    max_error = 0.
-
-    for field in fieldnames(typeof(state.continuous_states))
-        error = normalized_variable_error(
-            state.continuous_states[field],
-            embedded_state.continuous_states[field],
-            absolute_tolerance,
-            relative_tolerance,
+    errors = map(state.continuous_states, embedded_state.continuous_states) do xc1, xc2
+        normalized_variable_error(
+            xc1, xc2, absolute_tolerance, relative_tolerance,
         )
-        max_error = max(max_error, error)
     end
-
-    for field in fieldnames(typeof(state.models))
-        error = normalized_error(
+    max_error = maximum(errors; init = 0.)
+    errors = map(
+        description.models, state.models, embedded_state.models,
+    ) do subdescription, substate, embedded_substate
+        normalized_error(
             policy,
-            description.models[field],
-            state.models[field],
-            embedded_state.models[field],
+            subdescription,
+            substate,
+            embedded_substate,
             absolute_tolerance,
             relative_tolerance,
         )
-        max_error = max(max_error, error)
     end
-
+    max_error = maximum(errors; init = max_error)
     return max_error
 end
 

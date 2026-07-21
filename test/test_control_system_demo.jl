@@ -2,12 +2,15 @@ module TestControlSystemDemo
 
 using Test
 using HDF5: h5open, Group
-using Random: Xoshiro, randn, rand
+using HDF5Vectors
+using Random: Xoshiro, randn
 import Dimensions
 import SystemsOfSystems
-using SystemsOfSystems: ModelDescription, VariableDescription, RatesOutput, UpdatesOutput,
-    is_regular_step_triggering, TimeSeries, DiscreteWhiteNoise, RandomVariableDescription,
-    Solvers, Logs, SimOptions, simulate
+using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDescription,
+    RatesOutput, UpdatesOutput,
+    ContinuousWhiteNoise, DiscreteWhiteNoise,
+    RegularSchedule, is_triggering, on_triggering,
+    Logs, SimOptions, Solvers, TimeSeries, simulate
 
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
@@ -96,7 +99,7 @@ end
 # rate, adding noise to the plant's true position.
 
 @kwdef struct SensorSpecs
-    dt::Float64 # Sample period (s)
+    schedule::RegularSchedule # Defines sample period
     sigma_noise::Float64 # Standard deviation of noise to add to the measurement
     sigma_bias::Float64 # Standard deviation of the measurement bias
 end
@@ -113,13 +116,13 @@ Dimensions.dimstyle(::Type{SensorMeasurement}) = Dimensions.StructDimensionStyle
 
 # Everything the sensor needs while running.
 @kwdef struct Sensor
-    dt::Float64
+    schedule::RegularSchedule
     bias::Float64
     noise::Float64
     measurement::SensorMeasurement
 end
 
-# Describe all of the variables in the plant model, with their initial conditions.
+# Describe all of the variables in the sensor model, with their initial conditions.
 function init(t, specs::SensorSpecs, seed)
 
     # Draw the bias.
@@ -128,11 +131,6 @@ function init(t, specs::SensorSpecs, seed)
     return ModelDescription(;
         type = Sensor,
         constants = (;
-            dt = VariableDescription(
-                specs.dt;
-                title = "Sensor Time Step",
-                dimensions = ["dt" => "s",],
-            ),
             bias = VariableDescription(
                 bias;
                 title = "Sensor Bias",
@@ -154,32 +152,43 @@ function init(t, specs::SensorSpecs, seed)
                 dimensions = ["time" => "s", "position" => "m",],
             )
         ),
-        t_next = t + specs.dt, # Our next step comes from our regular sample period.
+        schedules = (;
+            # Tell the sim that this sensor needs a step on exactly its sample times.
+            schedule = VariableDescription(
+                specs.schedule;
+                title = "Sensor Measurement Schedule",
+                dimensions = ["period" => "s",],
+            ),
+        ),
     )
 
 end
 
-# Given the time and true position, this returns the most recent measurement.
+# Given the time and true position, this returns the most recent measurement. On off
+# samples, it holds its last value.
 function get_measurement(t, sensor::Sensor, true_position)
-    if is_regular_step_triggering(t, sensor.dt)
+
+    # Our schedule triggers at t = 0, period, 2 * period, 3 * period, etc.
+    if is_triggering(sensor.schedule, t)
         return SensorMeasurement(t, true_position + sensor.noise + sensor.bias)
     else
         return sensor.measurement
     end
+
 end
 
 # This says how the discrete states update on this sample.
 function updates(t, sensor::Sensor, meas)
-    if is_regular_step_triggering(t, sensor.dt) # Will be true at 0, dt, 2dt, 3dt, etc.
+
+    # Only update when triggering.
+    on_triggering(sensor.schedule, t) do
         return UpdatesOutput(;
             updates = (;
                 measurement = meas, # Record our measurement (it's stateful).
             ),
-            t_next = t + sensor.dt, # Say when we need the solver to stop for us next.
         )
-    else
-        return UpdatesOutput() # There are no updates when it's not time to trigger.
     end
+
 end
 
 ###########
@@ -238,7 +247,7 @@ end
 # Sensor.
 
 @kwdef struct PDControllerSpecs
-    dt::Float64
+    schedule::RegularSchedule
     p::Float64
     d::Float64
     initial_position::Float64
@@ -246,7 +255,7 @@ end
 end
 
 @kwdef struct PDController
-    dt::Float64
+    schedule::RegularSchedule
     p::Float64
     d::Float64
     position::Float64
@@ -257,11 +266,6 @@ function init(t, specs::PDControllerSpecs, seed)
     return ModelDescription(;
         type = PDController,
         constants =  (;
-            dt = VariableDescription(
-                specs.dt;
-                title = "Controller Time Step",
-                dimensions = ["dt" => "s",],
-            ),
             p = VariableDescription(
                 specs.p;
                 title = "Position Gain",
@@ -285,32 +289,40 @@ function init(t, specs::PDControllerSpecs, seed)
                 dimensions = ["command" => "N",],
             ),
         ),
-        t_next = t + specs.dt, # Don't forget to say when we trigger next!
+        schedules = (;
+            # Tell the sim that this controller acts on a regular period.
+            schedule = VariableDescription(
+                specs.schedule;
+                title = "Controller Schedule",
+                dimensions = ["period" => "s",],
+            ),
+        ),
     )
 end
 
+# Returns a fresh command or holds the last one.
 function get_command(t, controller::PDController, target_position, meas)
-    if is_regular_step_triggering(t, controller.dt)
+    if is_triggering(controller.schedule, t)
         position_error = target_position - meas.position
-        velocity = (meas.position - controller.position) / controller.dt
+        dt = controller.schedule.period
+        velocity = (meas.position - controller.position) / dt
         command = controller.p * position_error - controller.d * velocity
         return command
     else
-        return controller.command # or nothing
+        return controller.command
     end
 end
 
+# Records what states should be updated. This holds the most recent command and position
+# measurement.
 function updates(t, controller::PDController, meas, command)
-    if is_regular_step_triggering(t, controller.dt)
+    on_triggering(controller.schedule, t) do
         return UpdatesOutput(;
             updates = (;
                 command = command,
                 position = meas.position,
             ),
-            t_next = t + controller.dt,
         )
-    else
-        return UpdatesOutput()
     end
 end
 
@@ -338,7 +350,7 @@ function init(t, specs::ActuatorSpecs, seed)
         type = Actuator,
         constants = (;
             time_constant = VariableDescription(
-                0.1;
+                specs.time_constant;
                 title = "First-Order Actuator Response Time Constant",
                 dimensions = ["tau" => "s"]
             ),
@@ -484,6 +496,10 @@ function updates(t, system::ClosedLoopSystem)
 
 end
 
+################
+# Test Helpers #
+################
+
 # These help us compare two HDF5 files, one created by HDF5Log and one created from
 # save_log_to_hdf5.
 function compare_hdf5_group(g1::Group, g2)
@@ -525,7 +541,7 @@ end
             initial_velocity = 0.,
         ),
         sensor = SensorSpecs(
-            dt = 0.1,
+            schedule = RegularSchedule(0.1),
             sigma_noise = 0.,
             sigma_bias = 0.,
         ),
@@ -533,7 +549,7 @@ end
             constant_position = 1.,
         ),
         controller = PDControllerSpecs(
-            dt = 0.1,
+            schedule = RegularSchedule(0.1),
             p = 8.,
             d = 4.,
             initial_position = 0.,
@@ -560,8 +576,9 @@ end
         ),
     )
 
+    dt_sensor = system_specs.sensor.schedule.period
     @test t == 10
-    @test history["/sensor"]["measurement"].time == collect(0. : system_specs.sensor.dt : t)
+    @test history["/sensor"]["measurement"].time == collect(0. : dt_sensor : t)
     @test history["/sensor"]["measurement"].data[end].t == t
 
     Logs.close_log(history.log)
