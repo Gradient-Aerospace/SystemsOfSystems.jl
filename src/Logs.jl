@@ -18,7 +18,7 @@ This stores the time history of a single model, including its discrete and conti
 and outputs, as well as constants, the "path" to this model, and the model histories for its
 sub-models.
 """
-@kwdef struct ModelHistory{
+@kwdef mutable struct ModelHistory{
     CT  <: NamedTuple,
     XCT <: NamedTuple,
     YCT <: NamedTuple,
