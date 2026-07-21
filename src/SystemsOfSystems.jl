@@ -79,7 +79,7 @@ VariableDescription(
 )
 ```
 """
-mutable struct ModelDescription
+struct ModelDescription
     type
     constants
     continuous_states
@@ -867,7 +867,9 @@ function log_continuous_states!(t_f, mh_xc, msd_xc)
 end
 function log_continuous_outputs!(t_f, mh_yc, ro_yc)
     for fn in fieldnames(typeof(mh_yc))
-        push!(mh_yc[fn], t_f, ro_yc[fn])
+        if hasfield(typeof(ro_yc), fn)
+            push!(mh_yc[fn], t_f, ro_yc[fn])
+        end
     end
 end
 function log_continuous_models!(t_f, mh_models, msd_models, ro_models)

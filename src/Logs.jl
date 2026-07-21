@@ -274,7 +274,6 @@ function create_time_series_for_var(
 ) where {T}
 
     model_path = join("/" * el for el in breadcrumbs)
-    signal_path = model_path * "/" * var_name
 
     return TimeSeries(;
         var.title,
@@ -282,7 +281,7 @@ function create_time_series_for_var(
         data = T[],
         time_dimension,
         var.dimensions,
-        path = signal_path,
+        path = model_path,
         discrete,
         var.interpolator,
         var.groups,
@@ -290,15 +289,27 @@ function create_time_series_for_var(
 
 end
 
-function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::T, time_dimension; discrete = true) where {T}
+function create_time_series_for_var(
+    ::BasicLog,
+    breadcrumbs,
+    var_name,
+    var::T,
+    time_dimension;
+    discrete = true,
+) where {T}
+
+    model_path = join("/" * el for el in breadcrumbs)
+    signal_path = model_path * "/" * var_name
+
     return TimeSeries(;
-        title = join("/" * el for el in breadcrumbs), # Let the slug be the title.
+        title = signal_path,
         time = Float64[],
         data = T[],
         time_dimension,
-        path = join("/" * el for el in breadcrumbs),
+        path = model_path,
         discrete,
     )
+
 end
 
 function create_log(::BasicLogOptions, model_description, time_dimension)
