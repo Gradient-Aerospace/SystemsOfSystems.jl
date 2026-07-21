@@ -211,6 +211,27 @@ end
 
 end
 
+@testset "nested model stop paths retain their separators" begin
+
+    # A stop path is assembled while the recursive traversal unwinds. Every model level
+    # must retain the separator between its name and the next `/models` path component.
+    output = RatesOutput(;
+        models = (;
+            outer_model = RatesOutput(;
+                models = (;
+                    inner_model = RatesOutput(; stop = true,),
+                ),
+            ),
+        ),
+    )
+
+    stop = SystemsOfSystems.find_model_requested_stop(output)
+
+    @test stop isa SystemsOfSystems.ModelRequestedStop
+    @test stop.model_path == "/models/outer_model/models/inner_model"
+
+end
+
 @testset "an update can stop after its accepted sample" begin
 
     # The update at the accepted endpoint is applied before its stop request takes effect.

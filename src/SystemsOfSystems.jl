@@ -799,16 +799,15 @@ function draw_drvs(drvs, t)
     end
 end
 
-function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
             ommd.continuous_random_variables, t_last, t_next,
         ),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
-            end
-        ),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+        end,
     )
 end
 
@@ -832,14 +831,13 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
     )
 end
 
-function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
     return copy_model_state_description_except(msd;
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
-        models = NamedTuple{keys(msd.models)}(
-            map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-                draw_wd(t, ommd_submodel, msd_submodel)
-            end
-        ),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wd(t, ommd_submodel, msd_submodel)
+        end,
     )
 end
 
@@ -990,15 +988,18 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     else
         NO_T_NEXT # If t_next is in the past, it no longer limits us.
     end
-    for submodel in msd.models
-        submodel_t_next = find_soonest_t_next_from_models(t_last, submodel)
-        t_next_from_this_model = earlier_time(t_next_from_this_model, submodel_t_next)
+    t_next_from_all_submodels = map(msd.models) do submodel
+        find_soonest_t_next_from_models(t_last, submodel)
     end
+    t_next_from_this_model = reduce(
+        earlier_time, t_next_from_all_submodels;
+        init = t_next_from_this_model,
+    )
     return t_next_from_this_model
 end
 
 """
-    find_model_requested_stop(output, model_path = "/")
+    find_model_requested_stop(output)
 
 Return the first model stop request in a deterministic, depth-first traversal of a
 `RatesOutput` or `UpdatesOutput` hierarchy.
@@ -1008,24 +1009,38 @@ field order. For now, one stop reason is retained; this traversal makes "first"
 predictable until the public model interface can carry structured reasons and the simulation
 history can represent several simultaneous requests.
 """
-function find_model_requested_stop(output, model_path = "/")
+function find_model_requested_stop(output)
 
     if output.stop
-        return ModelRequestedStop(model_path, "The model requested that the simulation stop")
+        return ModelRequestedStop("/", "The model requested that the simulation stop")
     end
 
+    # TODO: This loop allocates, and that seems unnecessary.
     for field in fieldnames(typeof(output.models))
-        submodel_path = model_path == "/" ? "/models/$field" : "$model_path/models/$field"
-        stop = find_model_requested_stop(output.models[field], submodel_path)
+
+        stop = find_model_requested_stop(output.models[field])
         if !isnothing(stop)
-            return stop
+
+            # We build the model_path in reverse. This prevents the need for us to build a
+            # model path for every model, when we only care about the model path once, when
+            # we stop.
+            if stop isa ModelRequestedStop
+                child_path = stop.model_path == "/" ? "" : stop.model_path
+                return ModelRequestedStop(
+                    "/models/$field$child_path",
+                    stop.reason,
+                )
+            else
+                return stop
+            end
+
         end
+
     end
 
     return nothing
 
 end
-
 
 # Preserve the first stop reason encountered while allowing the rest of an accepted sample
 # to complete. In particular, hooks and the discrete update still run after an accepted
