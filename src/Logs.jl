@@ -11,20 +11,29 @@ using OrderedCollections: OrderedDict
 # ModelHistory #
 ################
 
+export ModelHistory
+
 """
 This stores the time history of a single model, including its discrete and continuous states
 and outputs, as well as constants, the "path" to this model, and the model histories for its
 sub-models.
 """
-@kwdef struct ModelHistory
+@kwdef struct ModelHistory{
+    CT  <: NamedTuple,
+    XCT <: NamedTuple,
+    YCT <: NamedTuple,
+    XDT <: NamedTuple,
+    YDT <: NamedTuple,
+    MT  <: NamedTuple,
+}
     type::Type
     path::String
-    constants::NamedTuple
-    continuous_states::NamedTuple # where all the elements are TimeSeries
-    discrete_states::NamedTuple
-    continuous_outputs::NamedTuple
-    discrete_outputs::NamedTuple
-    models::NamedTuple
+    constants::CT # all elements are raw values
+    continuous_states::XCT # all elements are TimeSeries
+    discrete_states::XDT
+    continuous_outputs::YCT
+    discrete_outputs::YDT
+    models::MT
 end
 
 function Base.keys(mh::ModelHistory)
@@ -147,16 +156,30 @@ function record_model_description(log::AbstractLog, breadcrumbs, md)
 end
 
 # "Sets" include continuous states, discrete outputs, etc.
-function create_time_series_for_set(log::AbstractLog, breadcrumbs, set, time_dimension; discrete = true)
+function create_time_series_for_set(
+    log::AbstractLog, breadcrumbs, set, time_dimension;
+    discrete = true,
+)
+
+    # Make a named tuple containing the TimeSeries for all logged signals of this set.
     return NamedTuple(
-        f => create_time_series_for_var(log, breadcrumbs, string(f), v, time_dimension; discrete)
+        f => create_time_series_for_var(
+            log, breadcrumbs, string(f), v, time_dimension; discrete,
+        )
         for (f, v) in pairs(set)
     )
+
 end
 
-function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelDescription, time_dimension)
+function create_time_series_for_model!(
+    log::AbstractLog,
+    breadcrumbs,
+    md::ModelDescription,
+    time_dimension,
+)
 
-    slug = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
+    # Form this model's path.
+    path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
 
     # Record any extra stuff.
     record_model_description(log, breadcrumbs, md)
@@ -164,7 +187,7 @@ function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelD
     # Create the time histories.
     mh = ModelHistory(;
         type = md.type,
-        path = slug,
+        path = path,
         constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
         continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),
         # TODO: Record derivatives too.
@@ -178,7 +201,7 @@ function create_time_series_for_model!(log::AbstractLog, breadcrumbs, md::ModelD
     )
 
     # Put it in the dictionary of time histories.
-    log[slug] = mh
+    log[path] = mh
 
     return mh
 
@@ -241,19 +264,32 @@ Base.keys(log::BasicLog) = keys(log.model_history_dict)
 Base.values(log::BasicLog) = values(log.model_history_dict)
 Base.pairs(log::BasicLog) = pairs(log.model_history_dict)
 
-function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::VariableDescription{T}, time_dimension; discrete = true) where {T}
+function create_time_series_for_var(
+    ::BasicLog,
+    breadcrumbs,
+    var_name,
+    var::VariableDescription{T},
+    time_dimension;
+    discrete = true
+) where {T}
+
+    model_path = join("/" * el for el in breadcrumbs)
+    signal_path = model_path * "/" * var_name
+
     return TimeSeries(;
         var.title,
         time = Float64[],
         data = T[],
         time_dimension,
         var.dimensions,
-        path = join("/" * el for el in breadcrumbs),
+        path = signal_path,
         discrete,
         var.interpolator,
         var.groups,
     )
+
 end
+
 function create_time_series_for_var(::BasicLog, breadcrumbs, var_name, var::T, time_dimension; discrete = true) where {T}
     return TimeSeries(;
         title = join("/" * el for el in breadcrumbs), # Let the slug be the title.

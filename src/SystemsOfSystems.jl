@@ -860,16 +860,23 @@ end
 function log_continuous_stuff!(t, mh::Nothing, msd::ModelStateDescription, ro::RatesOutput)
 end
 
-function log_continuous_stuff!(t, mh, msd::ModelStateDescription, ro::RatesOutput)
-    for fn in keys(msd.continuous_states)
+function log_continuous_stuff!(
+    t,
+    mh::Logs.ModelHistory,
+    msd::ModelStateDescription,
+    ro::RatesOutput,
+)
+    for fn in fieldnames(fieldtype(typeof(mh), :continuous_states))
         push!(mh.continuous_states[fn], float(t), msd.continuous_states[fn])
     end
-    for fn in keys(ro.outputs)
-        push!(mh.continuous_outputs[fn], float(t), ro.outputs[fn])
+    for fn in fieldnames(fieldtype(typeof(mh), :continuous_outputs))
+        if hasfield(fieldtype(typeof(ro), :outputs), fn)
+            push!(mh.continuous_outputs[fn], float(t), ro.outputs[fn])
+        end
     end
     # TODO: Log the derivatives too.
-    for fn in keys(msd.models)
-        if haskey(ro.models, fn)
+    for fn in fieldnames(fieldtype(typeof(mh), :models))
+        if hasfield(fieldtype(typeof(ro), :models), fn)
             log_continuous_stuff!(t, mh.models[fn], msd.models[fn], ro.models[fn])
         end
     end
@@ -878,14 +885,18 @@ end
 function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
 
-function log_initial_discrete_stuff!(t, mh, md::TypedModelDescription)
-    for fn in keys(md.discrete_states)
-        push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
+function log_initial_discrete_stuff!(
+    t,
+    mh::Logs.ModelHistory,
+    md::TypedModelDescription,
+)
+    for fn in fieldnames(fieldtype(typeof(mh), :discrete_states))
+        push!(mh.discrete_states[fn], float(t), md.discrete_states[fn]) # <- must be in MD
     end
-    for fn in keys(md.discrete_outputs)
+    for fn in fieldnames(fieldtype(typeof(mh), :discrete_outputs))
         push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
     end
-    for fn in keys(md.models)
+    for fn in fieldnames(fieldtype(typeof(mh), :models))
         log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
     end
 end
@@ -898,7 +909,10 @@ end
 
 # This is called right after updating.
 function log_discrete_stuff!(
-    t, mh, uo::UpdatesOutput, prior::ModelStateDescription,
+    t,
+    mh::Logs.ModelHistory,
+    uo::UpdatesOutput,
+    prior::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 
@@ -908,11 +922,13 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    for fn in keys(uo.updates)
-        if haskey(mh.discrete_states, fn) # Only log the discrete states.
+    for fn in fieldnames(fieldtype(typeof(mh), :discrete_states))
+        if hasfield(typeof(uo.updates), fn)
             push!(mh.discrete_states[fn], float(t), uo.updates[fn])
         end
-        if haskey(mh.continuous_states, fn)
+    end
+    for fn in fieldnames(fieldtype(typeof(mh), :continuous_states))
+        if hasfield(fieldtype(typeof(uo), :updates), fn)
             push!(mh.continuous_states[fn], float(t), prior.continuous_states[fn])
             if include_updated_continuous_states
                 push!(mh.continuous_states[fn], float(t), uo.updates[fn])
@@ -921,17 +937,21 @@ function log_discrete_stuff!(
     end
 
     # Log whatever outputs they provided this time.
-    for fn in keys(uo.outputs)
-        push!(mh.discrete_outputs[fn], float(t), uo.outputs[fn])
+    for fn in fieldnames(fieldtype(typeof(mh), :discrete_outputs))
+        if hasfield(fieldtype(typeof(uo), :outputs), fn)
+            push!(mh.discrete_outputs[fn], float(t), uo.outputs[fn])
+        end
     end
 
     # Models don't have to pass through updates for their submodels, but if they did, let's
     # use them.
-    for fn in keys(uo.models)
-        log_discrete_stuff!(
-            t, mh.models[fn], uo.models[fn], prior.models[fn],
-            include_updated_continuous_states,
-        )
+    for fn in fieldnames(fieldtype(typeof(mh), :models))
+        if hasfield(fieldtype(typeof(uo), :models), fn)
+            log_discrete_stuff!(
+                t, mh.models[fn], uo.models[fn], prior.models[fn],
+                include_updated_continuous_states,
+            )
+        end
     end
 
 end
