@@ -424,6 +424,8 @@ end
 """
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
+
+This is muutable only to put it on the heap.
 """
 @kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
@@ -566,6 +568,7 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
+# It's mutable only to put it on the heap.
 @kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
     constants::CT
     continuous_states::XCT
@@ -912,19 +915,22 @@ function log_initial_discrete_stuff!(
 end
 
 function log_discrete_stuff!(
-    t, t_f, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
+    t_f, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 end
 
-function log_discrete_states!(t, t_f, mh_xd, uo_updates)
+function log_discrete_states!(t_f, mh_xd, uo_updates)
     for fn in fieldnames(typeof(mh_xd))
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xd[fn], t_f, uo_updates[fn])
         end
     end
 end
-function log_continuous_state_updates!(t, t_f, mh_xc, uo_updates, prior_xc, include_updated_continuous_states)
+function log_continuous_state_updates!(
+    t_f, mh_xc, uo_updates, prior_xc,
+    include_updated_continuous_states,
+)
     for fn in fieldnames(typeof(mh_xc))
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xc[fn], t_f, prior_xc[fn])
@@ -934,18 +940,21 @@ function log_continuous_state_updates!(t, t_f, mh_xc, uo_updates, prior_xc, incl
         end
     end
 end
-function log_discrete_outputs!(t, t_f, mh_yd, uo_outputs)
+function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
     for fn in fieldnames(typeof(mh_yd))
         if hasfield(typeof(uo_outputs), fn)
             push!(mh_yd[fn], t_f, uo_outputs[fn])
         end
     end
 end
-function log_discrete_models!(t, t_f, mh_models, uo_models, prior_models, include_updated_continuous_states)
+function log_discrete_models!(
+    t_f, mh_models, uo_models, prior_models,
+    include_updated_continuous_states,
+)
     for fn in fieldnames(typeof(mh_models))
         if hasfield(typeof(uo_models), fn)
             log_discrete_stuff!(
-                t, t_f,
+                t_f,
                 mh_models[fn], uo_models[fn], prior_models[fn],
                 include_updated_continuous_states,
             )
@@ -955,7 +964,7 @@ end
 
 # This is called right after updating.
 function log_discrete_stuff!(
-    t, t_f,
+    t_f,
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
@@ -968,15 +977,21 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    log_discrete_states!(t, t_f, mh.discrete_states, uo.updates)
-    log_continuous_state_updates!(t, t_f, mh.continuous_states, uo.updates, prior.continuous_states, include_updated_continuous_states)
+    log_discrete_states!(t_f, mh.discrete_states, uo.updates)
+    log_continuous_state_updates!(
+        t_f, mh.continuous_states, uo.updates, prior.continuous_states,
+        include_updated_continuous_states,
+    )
 
     # Log whatever outputs they provided this time.
-    log_discrete_outputs!(t, t_f, mh.discrete_outputs, uo.outputs)
+    log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
 
     # Continue logging for whatever submodels we're supposed to log for (where there were
     # provided anyway).
-    log_discrete_models!(t, t_f, mh.models, uo.models, prior.models, include_updated_continuous_states)
+    log_discrete_models!(
+        t_f, mh.models, uo.models, prior.models,
+        include_updated_continuous_states,
+    )
 
 end
 
@@ -1208,7 +1223,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # If a discrete update changes continuous state, this records the pre-update side of the
     # discontinuity. The next accepted rates sample—or the explicit terminal sample below—
     # records the post-update side together with matching continuous outputs.
-    log_discrete_stuff!(t_next, float(t_next), mh, updates, msd, false)
+    log_discrete_stuff!(float(t_next), mh, updates, msd, false)
 
     # Now accept the update.
     msd = update(msd, updates)

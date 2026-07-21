@@ -11,18 +11,18 @@ using OrderedCollections: OrderedDict
 # ModelHistory #
 ################
 
-export ModelHistory
-
 """
+    ModelHistory
+
 This stores the time history of a single model, including its discrete and continuous states
 and outputs, as well as constants, the "path" to this model, and the model histories for its
 sub-models.
 """
-@kwdef mutable struct ModelHistory{
+@kwdef mutable struct ModelHistory{ # This is muutable only to put it on the heap.
     CT  <: NamedTuple,
     XCT <: NamedTuple,
-    YCT <: NamedTuple,
     XDT <: NamedTuple,
+    YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
 }
