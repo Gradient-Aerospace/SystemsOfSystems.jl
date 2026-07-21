@@ -923,7 +923,7 @@ function log_discrete_stuff!(
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
     for fn in fieldnames(fieldtype(typeof(mh), :discrete_states))
-        if hasfield(typeof(uo.updates), fn)
+        if hasfield(fieldtype(typeof(uo), :updates), fn)
             push!(mh.discrete_states[fn], float(t), uo.updates[fn])
         end
     end
@@ -943,8 +943,8 @@ function log_discrete_stuff!(
         end
     end
 
-    # Models don't have to pass through updates for their submodels, but if they did, let's
-    # use them.
+    # Continue logging for whatever submodels we're supposed to log for (where there were
+    # provided anyway).
     for fn in fieldnames(fieldtype(typeof(mh), :models))
         if hasfield(fieldtype(typeof(uo), :models), fn)
             log_discrete_stuff!(
