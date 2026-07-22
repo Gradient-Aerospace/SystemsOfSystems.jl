@@ -12,7 +12,8 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
     RatesOutput, UpdatesOutput,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     RegularSchedule, is_triggering, on_triggering,
-    Logs, SimOptions, Solvers, TimeSeries, simulate
+    Logs, SimOptions, Solvers, TimeSeries, Samplers, ModelFilters,
+    simulate
 
 #########
 # Plant #
@@ -495,6 +496,87 @@ function updates(t, system::ClosedLoopSystem)
         ),
         outputs = (;
             control_error,
+        ),
+    )
+
+end
+
+##############
+# Simulation #
+##############
+
+"""
+    simulate_closed_loop_system
+
+This is simply a demo of how to call `simulate` with our models.
+"""
+function simulate_closed_loop_system()
+
+    # Set the parameters for all of the models.
+    system_specs = ClosedLoopSystemSpecs(
+        plant = PlantSpecs(
+            mass = 1.,
+            initial_position = 0.,
+            initial_velocity = 0.,
+            acceleration_noise_sigma = 0.1,
+        ),
+        sensor = SensorSpecs(
+            schedule = RegularSchedule(0.1),
+            sigma_noise = 0.,
+            sigma_bias = 0.,
+        ),
+        target = ConstantTargetSpecs(
+            constant_position = 1.,
+        ),
+        controller = PDControllerSpecs(
+            schedule = RegularSchedule(0.1),
+            p = 8.,
+            d = 4.,
+            initial_position = 0.,
+            initial_command = 0.,
+        ),
+        actuator = ActuatorSpecs(
+            time_constant = 0.2,
+            initial_command = 0.,
+            initial_response = 0.,
+        ),
+    )
+
+    # Run the sim.
+    return simulate(
+        system_specs;
+        init_fcn = ControlSystemDemo.init,
+        rates_fcn = ControlSystemDemo.rates,
+        updates_fcn = ControlSystemDemo.updates,
+        t = (0, 10),
+        options = SimOptions(;
+            log = Logs.BasicLogOptions(;
+                model_filter = ModelFilters.RegexModelFilter(
+                    # Here is the very explicit syntax:
+                    entries = [
+                        # Let the root control all logging.
+                        ModelFilters.RegexModelEntry(
+                            expression = r"^/$",
+                            sampler = Samplers.RegularSampler(;
+                                period = 1//10, # Skip logging intermediate samples
+                            ),
+                        ),
+                        # For everything else, when the root allows logging, log everything.
+                        ModelFilters.RegexModelEntry(
+                            expression = r"^/",
+                            sampler = Samplers.CompleteSampler(),
+                        ),
+                    ],
+                    # Here is the desired syntax:
+                    # [
+                    #     # Let the root control all logging.
+                    #     r"^/$" => Samplers.RegularSampler(1//10),
+                    #     # For everything else, when the root allows logging, log everything.
+                    #     r"^/" => Samplers.CompleteSampler(),
+                    # ],
+                ),
+            ),
+            time_dimension = "Time" => "s",
         ),
     )
 

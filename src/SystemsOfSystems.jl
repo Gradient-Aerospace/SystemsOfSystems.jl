@@ -37,6 +37,12 @@ using .Resources
 
 include("Hooks.jl")
 
+include("Samplers.jl")
+using .Samplers
+
+include("ModelFilters.jl")
+using .ModelFilters
+
 #########################
 # User Function Outputs #
 #########################
@@ -802,65 +808,18 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # closed, and it's reasonable to ask for that directly.
 # Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
 
-#########
-# Steps #
-#########
+###########
+# Logging #
+###########
 
-# Functions for drawing from the sets of random variables
-function draw_crvs(crvs, t_last, t_next)
-    return map(crvs) do rv
-        return rv.f(rv.rng, t_last, t_next)
-    end
-end
-function draw_drvs(drvs, t)
-    return map(drvs) do rv
-        return rv.f(rv.rng, t)
-    end
-end
+# These are all of our recursive logging functions.
 
-# We turn off inlining here. This appears to help keep this allocation-free.
-@noinline function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
-    return copy_model_state_description_except(msd;
-        continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, t_last, t_next,
-        ),
-        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
-        end,
-    )
-end
-
-# We haven't pulled out allocations here since this only happens once, but we could.
-function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
-    return ModelStateDescription{T}(;
-        ommd.constants,
-        ommd.continuous_states,
-        ommd.discrete_states,
-        continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
-        ),
-        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
-        ommd.schedules,
-        models = NamedTuple(
-            mn => create_model_state(t, ommd.models[mn])
-            for mn in keys(ommd.models)
-        ),
-        ommd.resources,
-        ommd.t_next,
-    )
-end
-
-# We turn off inlining here. This appears to help keep this allocation-free.
-@noinline function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
-    return copy_model_state_description_except(msd;
-        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
-        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wd(t, ommd_submodel, msd_submodel)
-        end,
-    )
-end
-
-function log_continuous_stuff!(t, mh::Nothing, msd::ModelStateDescription, ro::RatesOutput)
+function log_continuous_stuff!(
+    ::ExactTime, ::Float64,
+    ::Nothing,
+    ::ModelStateDescription,
+    ::RatesOutput,
+)
 end
 
 function log_continuous_states!(t_f, mh_xc, msd_xc)
@@ -875,25 +834,39 @@ function log_continuous_outputs!(t_f, mh_yc, ro_yc)
         end
     end
 end
-function log_continuous_models!(t_f, mh_models, msd_models, ro_models)
+function log_continuous_models!(t, t_f, mh_models, msd_models, ro_models)
     for fn in fieldnames(typeof(mh_models))
         if hasfield(typeof(ro_models), fn)
-            log_continuous_stuff!(t_f, mh_models[fn], msd_models[fn], ro_models[fn])
+            log_continuous_stuff!(t, t_f, mh_models[fn], msd_models[fn], ro_models[fn])
         end
     end
 end
 
 function log_continuous_stuff!(
-    t_f::Float64,
+    t::ExactTime, t_f::Float64,
     mh::Logs.ModelHistory,
     msd::ModelStateDescription,
     ro::RatesOutput,
 )
-    log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
-    log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
+
+    # What our instructions are for logging this sample.
+    logging_directive = get_logging_directive(t, mh.sampler)
+
+    if should_log_states(logging_directive)
+        log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
+    end
+    if should_log_outputs(logging_directive)
+        log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
+    end
     # TODO: Log the derivatives too.
-    log_continuous_models!(t_f, mh.models, msd.models, ro.models)
+    if should_log_models(logging_directive)
+        log_continuous_models!(t, t_f, mh.models, msd.models, ro.models)
+    end
+
 end
+
+# Discrete stuff is logged during initialization. This works differently than logging the
+# results of update_fcn.
 
 function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
@@ -914,8 +887,13 @@ function log_initial_discrete_stuff!(
     end
 end
 
+# This logs the results of updates_fcn.
+
 function log_discrete_stuff!(
-    t_f, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
+    ::ExactTime, ::Float64,
+    ::Nothing,
+    ::UpdatesOutput,
+    ::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 end
@@ -948,13 +926,13 @@ function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
     end
 end
 function log_discrete_models!(
-    t_f, mh_models, uo_models, prior_models,
+    t, t_f, mh_models, uo_models, prior_models,
     include_updated_continuous_states,
 )
     for fn in fieldnames(typeof(mh_models))
         if hasfield(typeof(uo_models), fn)
             log_discrete_stuff!(
-                t_f,
+                t, t_f,
                 mh_models[fn], uo_models[fn], prior_models[fn],
                 include_updated_continuous_states,
             )
@@ -964,12 +942,15 @@ end
 
 # This is called right after updating.
 function log_discrete_stuff!(
-    t_f,
+    t::ExactTime, t_f::Float64,
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
+
+    # What our instructions are for logging this sample.
+    logging_directive = get_logging_directive(t, mh.sampler)
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
@@ -977,22 +958,90 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    log_discrete_states!(t_f, mh.discrete_states, uo.updates)
-    log_continuous_state_updates!(
-        t_f, mh.continuous_states, uo.updates, prior.continuous_states,
-        include_updated_continuous_states,
-    )
+    if should_log_states(logging_directive)
+        log_discrete_states!(t_f, mh.discrete_states, uo.updates)
+        log_continuous_state_updates!(
+            t_f, mh.continuous_states, uo.updates, prior.continuous_states,
+            include_updated_continuous_states,
+        )
+    end
 
     # Log whatever outputs they provided this time.
-    log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
+    if should_log_outputs(logging_directive)
+        log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
+    end
 
     # Continue logging for whatever submodels we're supposed to log for (where there were
     # provided anyway).
-    log_discrete_models!(
-        t_f, mh.models, uo.models, prior.models,
-        include_updated_continuous_states,
-    )
+    if should_log_models(logging_directive)
+        log_discrete_models!(
+            t, t_f, mh.models, uo.models, prior.models,
+            include_updated_continuous_states,
+        )
+    end
 
+end
+
+#########
+# Draws #
+#########
+
+# Functions for drawing from the sets of random variables
+function draw_crvs(crvs, t_last, t_next)
+    return map(crvs) do rv
+        return rv.f(rv.rng, t_last, t_next)
+    end
+end
+function draw_drvs(drvs, t)
+    return map(drvs) do rv
+        return rv.f(rv.rng, t)
+    end
+end
+
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+    return copy_model_state_description_except(msd;
+        continuous_random_variables = draw_crvs(
+            ommd.continuous_random_variables, t_last, t_next,
+        ),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+        end,
+    )
+end
+
+# We turn off inlining here. This appears to help keep this allocation-free.
+@noinline function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+    return copy_model_state_description_except(msd;
+        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
+        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wd(t, ommd_submodel, msd_submodel)
+        end,
+    )
+end
+
+#########
+# Steps #
+#########
+
+# We haven't pulled out allocations here since this only happens once, but we could.
+function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
+    return ModelStateDescription{T}(;
+        ommd.constants,
+        ommd.continuous_states,
+        ommd.discrete_states,
+        continuous_random_variables = draw_crvs(
+            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
+        ),
+        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
+        ommd.schedules,
+        models = NamedTuple(
+            mn => create_model_state(t, ommd.models[mn])
+            for mn in keys(ommd.models)
+        ),
+        ommd.resources,
+        ommd.t_next,
+    )
 end
 
 function update_states(prior_states::T1, updated_states::T2) where {T1, T2}
@@ -1183,7 +1232,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # The beginning state and rates come from the accepted attempt. Rejected attempts and
     # intermediate Runge-Kutta stages never reach logging or model stop handling.
     log_continuous_stuff!(
-        float(t_last),
+        t_last, float(t_last),
         mh,
         result.state_at_start,
         result.rates_at_start,
@@ -1220,10 +1269,12 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     stop = first_stop(stop, find_model_requested_stop(updates))
 
     # Log the updated values.
+    #
     # If a discrete update changes continuous state, this records the pre-update side of the
-    # discontinuity. The next accepted rates sample—or the explicit terminal sample below—
+    # discontinuity. The next accepted rates sample, or the explicit terminal sample below,
     # records the post-update side together with matching continuous outputs.
-    log_discrete_stuff!(float(t_next), mh, updates, msd, false)
+    #
+    log_discrete_stuff!(t_next, float(t_next), mh, updates, msd, false)
 
     # Now accept the update.
     msd = update(msd, updates)
@@ -1471,7 +1522,10 @@ function loop!(runtime)
                     float(t_completed),
                     msd,
                 )
-                log_continuous_stuff!(float(t_completed), mh, msd, terminal_rates)
+                log_continuous_stuff!(
+                    t_completed, float(t_completed),
+                    mh, msd, terminal_rates,
+                )
                 terminal_stop = first_stop(
                     terminal_stop,
                     find_model_requested_stop(terminal_rates),

@@ -8,7 +8,7 @@ using Random: Xoshiro, randn
 import Dimensions
 import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, RatesOutput, UpdatesOutput, RegularSchedule,
-    Solvers, Logs, SimOptions
+    Solvers, Logs, SimOptions, ModelFilters, Samplers
 
 include("../test/control_system_demo.jl")
 using .ControlSystemDemo
@@ -137,10 +137,32 @@ function time_simulations()
                 error("Unknown solver type: $solver_type")
             end
 
+            # We'll use a model filter to make sure sampling is tested as part of the
+            # benchmark.
+            model_filter = ModelFilters.RegexModelFilter(;
+                entries = [
+                    # We'll log /a (and everything below it) at a reduced rate.
+                    ModelFilters.RegexModelEntry(
+                        expression = r"^/a$",
+                        sampler = Samplers.RegularSampler(;
+                            period = 1//1,
+                        ),
+                    ),
+                    # Everything else can log completely.
+                    ModelFilters.RegexModelEntry(
+                        expression = r"^/",
+                        sampler = Samplers.CompleteSampler(),
+                    ),
+                ],
+            )
+
             log = if log_type == "ram"
-                Logs.BasicLogOptions()
+                Logs.BasicLogOptions(; model_filter)
             elseif log_type == "hdf5"
-                Logs.HDF5LogOptions(joinpath(out_dir, "speed_and_allocation_logs.h5"))
+                Logs.HDF5LogOptions(;
+                    filename = joinpath(out_dir, "speed_and_allocation_logs.h5"),
+                    model_filter,
+                )
             elseif log_type == "null"
                 Logs.NullLogOptions()
             else

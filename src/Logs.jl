@@ -4,8 +4,10 @@ log), and `HDF5Log` (import HDF5 for this one to work).
 """
 module Logs
 
-using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
 using OrderedCollections: OrderedDict
+using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription,
+    Samplers
+using ..ModelFilters: AbstractModelFilter, get_model_sampler, AllPassModelFilter
 
 ################
 # ModelHistory #
@@ -25,6 +27,7 @@ sub-models.
     YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
+    ST <: Samplers.AbstractSampler,
 }
     type::Type
     path::String
@@ -34,6 +37,7 @@ sub-models.
     continuous_outputs::YCT
     discrete_outputs::YDT
     models::MT
+    sampler::ST = Samplers.CompleteSampler()
 end
 
 function Base.keys(mh::ModelHistory)
@@ -176,10 +180,18 @@ function create_time_series_for_model!(
     breadcrumbs,
     md::ModelDescription,
     time_dimension,
+    model_filter::AbstractModelFilter,
 )
 
     # Form this model's path.
-    path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
+    model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
+
+    # See how we should sample the sim's results over time.
+    sampler = get_model_sampler(model_filter, model_path)
+
+    # Right now, we assume we will at some point log all variables. However, we could also
+    # allow the sampler to control which variables are logged. Then, we wouldn't even need
+    # to create the time series for things we'll never log.
 
     # Record any extra stuff.
     record_model_description(log, breadcrumbs, md)
@@ -187,7 +199,7 @@ function create_time_series_for_model!(
     # Create the time histories.
     mh = ModelHistory(;
         type = md.type,
-        path = path,
+        path = model_path,
         constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
         continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),
         # TODO: Record derivatives too.
@@ -195,13 +207,17 @@ function create_time_series_for_model!(
         continuous_outputs = create_time_series_for_set(log, breadcrumbs, md.continuous_outputs, time_dimension; discrete = false),
         discrete_outputs = create_time_series_for_set(log, breadcrumbs, md.discrete_outputs, time_dimension; discrete = true),
         models = NamedTuple(
-            f => create_time_series_for_model!(log, vcat(breadcrumbs, string(f)), m, time_dimension)
+            f => create_time_series_for_model!(
+                log, vcat(breadcrumbs, string(f)), m,
+                time_dimension, model_filter,
+            )
             for (f, m) in pairs(md.models)
-        )
+        ),
+        sampler = sampler,
     )
 
     # Put it in the dictionary of time histories.
-    log[path] = mh
+    log[model_path] = mh
 
     return mh
 
@@ -244,9 +260,13 @@ end
 export BasicLogOptions
 
 """
-There are no options for a `BasicLog`, so this is an empty structure.
+    BasicLogOptions
+
+TODO
 """
-struct BasicLogOptions <: AbstractLogOptions end
+@kwdef struct BasicLogOptions <: AbstractLogOptions
+    model_filter::AbstractModelFilter = AllPassModelFilter()
+end
 
 """
     BasicLog
@@ -312,10 +332,14 @@ function create_time_series_for_var(
 
 end
 
-function create_log(::BasicLogOptions, model_description, time_dimension)
+function create_log(options::BasicLogOptions, model_description, time_dimension)
     log = BasicLog(OrderedDict{String, ModelHistory}())
+    model_filter = options.model_filter
     breadcrumbs = String[]
-    mh = create_time_series_for_model!(log, breadcrumbs, model_description, time_dimension)
+    mh = create_time_series_for_model!(
+        log, breadcrumbs, model_description,
+        time_dimension, model_filter,
+    )
     return (log, mh)
 end
 
@@ -357,7 +381,7 @@ end
 export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
-    HDF5LogOptions(; filename)
+    HDF5LogOptions(; filename, model_filter)
 
 The HDF5Log acts like a BasicLog (stores all the same continuous and discrete states and
 outputs, as well as constants and metadata), but the underlying storage is an HDF5 file.
@@ -371,7 +395,11 @@ use `save_log_to_hdf5` when the simulation is over.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
+    model_filter::AbstractModelFilter = AllPassModelFilter()
 end
+
+# For backwards compatibility.
+HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 
 """
     load_hdf5_log(filename)
