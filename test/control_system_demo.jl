@@ -552,28 +552,12 @@ function simulate_closed_loop_system()
         options = SimOptions(;
             log = Logs.BasicLogOptions(;
                 model_filter = ModelFilters.RegexModelFilter(
-                    # Here is the very explicit syntax:
-                    entries = [
+                    [
                         # Let the root control all logging.
-                        ModelFilters.RegexModelEntry(
-                            expression = r"^/$",
-                            sampler = Samplers.RegularSampler(;
-                                period = 1//10, # Skip logging intermediate samples
-                            ),
-                        ),
+                        r"^/$" => Samplers.RegularSampler(1//10),
                         # For everything else, when the root allows logging, log everything.
-                        ModelFilters.RegexModelEntry(
-                            expression = r"^/",
-                            sampler = Samplers.CompleteSampler(),
-                        ),
+                        r"^/" => Samplers.CompleteSampler(),
                     ],
-                    # Here is the desired syntax:
-                    # [
-                    #     # Let the root control all logging.
-                    #     r"^/$" => Samplers.RegularSampler(1//10),
-                    #     # For everything else, when the root allows logging, log everything.
-                    #     r"^/" => Samplers.CompleteSampler(),
-                    # ],
                 ),
             ),
             time_dimension = "Time" => "s",
