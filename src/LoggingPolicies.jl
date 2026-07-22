@@ -71,7 +71,7 @@ have no effect since the top-level model only samples at 10Hz and has
 The next item matches exactly one model by complete name, and it excludes certain variables
 from logging.
 
-If a model path matches none of the entries, then the default is used.
+If a model path matches none of the rules, then the default is used.
 """
 module LoggingPolicies
 
@@ -199,7 +199,7 @@ get_variable_set(policy::ModelLoggingPolicy) = policy.variable_set
 ####################
 
 export AbstractLoggingPolicy, get_model_logging_policy,
-    AllPassLoggingPolicy, RegexLoggingPolicyRule, RegexLoggingPolicy
+    AllPassLoggingPolicy, UniformLoggingPolicy, RegexLoggingPolicyRule, RegexLoggingPolicy
 
 """
     AbstractLoggingPolicy
@@ -233,6 +233,16 @@ end
 get_model_logging_policy(::AllPassLoggingPolicy, ::String) = AllPassModelLoggingPolicy()
 
 """
+    UniformLoggingPolicy(; policy::AbstractModelLoggingPolicy)
+
+Assign the same model logging policy to every model.
+"""
+@kwdef struct UniformLoggingPolicy <: AbstractLoggingPolicy
+    policy::AbstractModelLoggingPolicy
+end
+get_model_logging_policy(policy::UniformLoggingPolicy, ::String) = policy.policy
+
+"""
     RegexLoggingPolicyRule(; expression::Regex, policy::AbstractModelLoggingPolicy)
     RegexLoggingPolicyRule(expression => policy)
 
@@ -261,12 +271,12 @@ function Base.convert(::Type{RegexLoggingPolicyRule}, rule::Pair)
 end
 
 """
-    RegexLoggingPolicy(; entries, default)
-    RegexLoggingPolicy(entries, default)
+    RegexLoggingPolicy(; rules, default)
+    RegexLoggingPolicy(rules, default)
 
-Contains `entries`, a vector of `RegexLoggingPolicyRule`. Each model will be given the model
+Contains `rules`, a vector of `RegexLoggingPolicyRule`. Each model will be given the model
 logging policy from the first entry whose regular expression occurs in the model path.
-Entries can be provided as `RegexLoggingPolicyRule` or as `expression => sampler` pairs.
+Rules can be provided as `RegexLoggingPolicyRule` or as `expression => sampler` pairs.
 A model that matches no entry receives the `default` (which is `NullSampler` by default).
 
 Example:
@@ -275,7 +285,7 @@ Example:
 using SystemsOfSystems: LoggingPolicies, Samplers
 
 LoggingPolicies.RegexLoggingPolicy(;
-    entries = [
+    rules = [
         r"^/my_model\$" => Samplers.RegularSampler(1//10),
         r"^/my_other_model/" => Samplers.RegularSampler(1//1),
     ],
@@ -289,32 +299,26 @@ logged completely.
 """
 struct RegexLoggingPolicy <: AbstractLoggingPolicy
 
-    entries::Vector{RegexLoggingPolicyRule}
+    rules::Vector{RegexLoggingPolicyRule}
     default::AbstractModelLoggingPolicy
 
     function RegexLoggingPolicy(
-        entries::Vector{RegexLoggingPolicyRule},
+        rules::Vector{RegexLoggingPolicyRule},
         default = NullModelLoggingPolicy(),
     )
-        return new(entries, default)
+        return new(rules, default)
     end
-    function RegexLoggingPolicy(entries::AbstractVector, args...)
-        return new(RegexLoggingPolicyRule[entry for entry in entries], args...)
+    function RegexLoggingPolicy(rules::AbstractVector, args...)
+        return new(RegexLoggingPolicyRule[entry for entry in rules], args...)
     end
-    RegexLoggingPolicy(; entries, default = NullModelLoggingPolicy()) = new(entries, default)
+    RegexLoggingPolicy(; rules, default = NullModelLoggingPolicy()) = new(rules, default)
 
 end
-# function RegexLoggingPolicy(entries::AbstractVector, default = NullModelLoggingPolicy())
-#     return RegexLoggingPolicy(RegexLoggingPolicyRule[entry for entry in entries], default)
-# end
-# function RegexLoggingPolicy(; entries, default = NullModelLoggingPolicy())
-#     return RegexLoggingPolicy(entries, default)
-# end
 
 function get_model_logging_policy(policy::RegexLoggingPolicy, model_path::String)
-    for entry in policy.entries
-        if occursin(entry.expression, model_path)
-            return entry.policy
+    for rule in policy.rules
+        if occursin(rule.expression, model_path)
+            return rule.policy
         end
     end
     return policy.default

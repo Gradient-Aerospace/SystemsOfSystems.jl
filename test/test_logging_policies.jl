@@ -21,9 +21,9 @@ using SystemsOfSystems: ModelFilters, Samplers
     # Both positional and keyword filter constructors accept the compact vector. Entry
     # order remains significant because the first matching regular expression wins.
     positional_filter = ModelFilters.RegexModelFilter(compact_entries)
-    keyword_filter = ModelFilters.RegexModelFilter(; entries = compact_entries)
+    keyword_filter = ModelFilters.RegexModelFilter(; rules = compact_entries)
     for filter in (positional_filter, keyword_filter)
-        @test length(filter.entries) == 2
+        @test length(filter.rules) == 2
         @test ModelFilters.get_model_sampler(filter, "/") === regular_sampler
         @test ModelFilters.get_model_sampler(filter, "/models/plant") isa
             Samplers.CompleteSampler
@@ -34,7 +34,7 @@ using SystemsOfSystems: ModelFilters, Samplers
     # The original explicit construction remains available and produces the same matching
     # behavior as the compact form.
     explicit_filter = ModelFilters.RegexModelFilter(;
-        entries = [
+        rules = [
             ModelFilters.RegexModelEntry(;
                 expression = r"^/$",
                 sampler = regular_sampler,

@@ -140,7 +140,7 @@ function time_simulations()
             # We'll use a logging policy to make sure sampling is tested as part of the
             # benchmark.
             logging_policy = LoggingPolicies.RegexLoggingPolicy(;
-                entries = [
+                rules = [
                     # We'll log /a (and everything below it) at a reduced rate.
                     r"^/a$" => LoggingPolicies.ModelLoggingPolicy(;
                         sampler = Samplers.RegularSampler(;
