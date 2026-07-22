@@ -1,6 +1,7 @@
 """
-This module contains the different log types: `BasicLog` (the default), `NullLog` (doesn't
-log), and `HDF5Log` (import HDF5 for this one to work).
+This module contains the different log types: `BasicLog` (the default), `NullLog` (which
+disables logging), and `HDF5Log` (available after importing HDF5). RAM and HDF5 log options
+accept a model filter that assigns sampling behavior throughout the model hierarchy.
 """
 module Logs
 
@@ -16,9 +17,16 @@ using ..ModelFilters: AbstractModelFilter, get_model_sampler, AllPassModelFilter
 """
     ModelHistory
 
-This stores the time history of a single model, including its discrete and continuous states
-and outputs, as well as constants, the "path" to this model, and the model histories for its
-sub-models.
+Store the history and logging configuration for one model.
+
+The named-tuple fields contain the model's constants, state and output time series, and
+recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
+decides which simulation-loop samples record this model and whether logging continues into
+its submodels.
+
+`ModelHistory` is mutable to give large, recursively parameterized histories reference
+semantics. Its fields are established during log construction and are not normally
+reassigned; samples are appended to the contained time series.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -260,9 +268,14 @@ end
 export BasicLogOptions
 
 """
-    BasicLogOptions
+    BasicLogOptions(; model_filter = AllPassModelFilter())
 
-TODO
+Configure an in-memory `BasicLog`.
+
+`model_filter` assigns a sampler to every model path. The default `AllPassModelFilter` logs
+every model at every accepted sample. Sampling affects runtime data appended to each time
+series; the current implementation still creates histories and time-series containers for
+every model and records initial discrete values.
 """
 @kwdef struct BasicLogOptions <: AbstractLogOptions
     model_filter::AbstractModelFilter = AllPassModelFilter()
@@ -271,8 +284,9 @@ end
 """
     BasicLog
 
-This logs all sim results in arrays. It's the simplest and fastest log, but for sims with
-too much output to fit in RAM, a disk-based log (like HDF5Log) is a better choice.
+Store selected simulation results in arrays according to the model filter in
+`BasicLogOptions`. This is the simplest and fastest log, but an HDF5 log is a better choice
+when the selected history is too large to fit in RAM.
 """
 struct BasicLog <: AbstractLog
     model_history_dict::OrderedDict{String, ModelHistory}
@@ -382,16 +396,20 @@ export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
     HDF5LogOptions(; filename, model_filter)
+    HDF5LogOptions(filename)
 
-The HDF5Log acts like a BasicLog (stores all the same continuous and discrete states and
-outputs, as well as constants and metadata), but the underlying storage is an HDF5 file.
-This prevents the need for logs to be stored on disk -- critical for very long simulations.
-Note, however, that this is much slower than BasicLog.
+Configure an HDF5-backed log written to `filename`.
 
-This structure contains the options for the HDF5Log, consisting only of a filename.
+`model_filter` assigns sampling behavior to model paths in the same way as
+`BasicLogOptions`; it defaults to `AllPassModelFilter()`. The positional filename
+constructor retains the same default for compatibility.
 
-If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
-use `save_log_to_hdf5` when the simulation is over.
+An HDF5 log records the same selected continuous and discrete states, outputs, constants,
+and metadata as a `BasicLog`, but stores time-series data on disk. This supports histories
+that would not fit in RAM, at the cost of slower logging.
+
+If the selected history fits in memory and only the final artifact needs to be HDF5, it is
+faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String

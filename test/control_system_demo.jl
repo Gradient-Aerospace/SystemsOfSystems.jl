@@ -506,9 +506,12 @@ end
 ##############
 
 """
-    simulate_closed_loop_system
+    simulate_closed_loop_system()
 
-This is simply a demo of how to call `simulate` with our models.
+Run the closed-loop control demo for ten seconds.
+
+The log configuration demonstrates hierarchical sampling: the root model allows logging at
+0.1-second intervals, and every descendant logs completely whenever traversal reaches it.
 """
 function simulate_closed_loop_system()
 
