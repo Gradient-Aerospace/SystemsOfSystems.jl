@@ -853,16 +853,16 @@ function log_continuous_stuff!(
 )
 
     # What our instructions are for logging this sample.
-    logging_directive = get_logging_directive(t, mh.sampler)
+    sampling_directive = get_sampling_directive(t, mh.sampler)
 
-    if should_log_states(logging_directive)
+    if should_log_states(sampling_directive)
         log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
     end
-    if should_log_outputs(logging_directive)
+    if should_log_outputs(sampling_directive)
         log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
     end
     # TODO: Log the derivatives too.
-    if should_log_models(logging_directive)
+    if should_log_models(sampling_directive)
         log_continuous_models!(t, t_f, mh.models, msd.models, ro.models)
     end
 
@@ -953,7 +953,7 @@ function log_discrete_stuff!(
 )
 
     # What our instructions are for logging this sample.
-    logging_directive = get_logging_directive(t, mh.sampler) # TODO: Change to get_sampling_directive.
+    sampling_directive = get_sampling_directive(t, mh.sampler)
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
@@ -961,7 +961,7 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    if should_log_states(logging_directive)
+    if should_log_states(sampling_directive)
         log_discrete_states!(t_f, mh.discrete_states, uo.updates)
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
@@ -970,13 +970,13 @@ function log_discrete_stuff!(
     end
 
     # Log whatever outputs they provided this time.
-    if should_log_outputs(logging_directive)
+    if should_log_outputs(sampling_directive)
         log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
     end
 
     # Continue logging for whatever submodels we're supposed to log for (where there were
     # provided anyway).
-    if should_log_models(logging_directive)
+    if should_log_models(sampling_directive)
         log_discrete_models!(
             t, t_f, mh.models, uo.models, prior.models,
             include_updated_continuous_states,

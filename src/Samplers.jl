@@ -2,14 +2,14 @@
 Logging samplers decide which parts of a model should be recorded at each accepted
 simulation time.
 
-A sampler receives the exact simulation time through `get_logging_directive` and returns a
+A sampler receives the exact simulation time through `get_sampling_directive` and returns a
 directive that independently controls state logging, output logging, and traversal into
 submodels. Built-in samplers cover complete, absent, and regular-period logging; users can
 extend `AbstractSampler` to implement other policies.
 """
 module Samplers
 
-export get_logging_directive, should_log_states, should_log_outputs, should_log_models
+export get_sampling_directive, should_log_states, should_log_outputs, should_log_models
 
 using ..SimulationTimes: ExactTime
 
@@ -18,9 +18,9 @@ using ..SimulationTimes: ExactTime
 
 The interface for model-history sampling policies.
 
-Subtypes implement `get_logging_directive(t, sampler)`. The returned directive must support
+Subtypes implement `get_sampling_directive(t, sampler)`. The returned directive must support
 `should_log_states`, `should_log_outputs`, and `should_log_models`. It may be a
-`LoggingDirective`, the sampler itself, or another suitable type.
+`SamplingDirective`, the sampler itself, or another suitable type.
 
 Samplers are consulted for simulation-loop samples. Initial discrete states and outputs are
 currently recorded at the simulation start regardless of the sampler.
@@ -28,14 +28,14 @@ currently recorded at the simulation start regardless of the sampler.
 abstract type AbstractSampler end
 
 """
-    get_logging_directive(t, sampler)
+    get_sampling_directive(t, sampler)
 
-Return the logging instructions for `sampler` at exact simulation time `t`.
+Return the sampling instructions for `sampler` at exact simulation time `t`.
 
 Custom `AbstractSampler` implementations must define this method. The returned value is
 queried with `should_log_states`, `should_log_outputs`, and `should_log_models`.
 """
-function get_logging_directive end
+function get_sampling_directive end
 
 """
     should_log_states(directive)
@@ -62,26 +62,26 @@ time.
 function should_log_models end
 
 """
-    LoggingDirective(; log_states, log_outputs, log_models)
+    SamplingDirective(; log_states, log_outputs, log_models)
 
 A logging instruction with independent controls for a model's states, outputs, and
 submodels.
 
-`LoggingDirective` also implements the `AbstractSampler` interface by returning itself from
-`get_logging_directive`. It can therefore be used directly as a model's fixed sampler.
+`SamplingDirective` also implements the `AbstractSampler` interface by returning itself from
+`get_sampling_directive`. It can therefore be used directly as a model's fixed sampler.
 """
-@kwdef struct LoggingDirective <: AbstractSampler
+@kwdef struct SamplingDirective <: AbstractSampler
     log_states::Bool
     log_outputs::Bool
     log_models::Bool
 end
 
-@inline should_log_states(x::LoggingDirective) = x.log_states
-@inline should_log_outputs(x::LoggingDirective) = x.log_outputs
-@inline should_log_models(x::LoggingDirective) = x.log_models
+@inline should_log_states(x::SamplingDirective) = x.log_states
+@inline should_log_outputs(x::SamplingDirective) = x.log_outputs
+@inline should_log_models(x::SamplingDirective) = x.log_models
 
-# This allows the LoggingDirective, itself, to fulfill the AbstractSampler interface.
-@inline get_logging_directive(::ExactTime, x::LoggingDirective) = x
+# This allows the SamplingDirective, itself, to fulfill the AbstractSampler interface.
+@inline get_sampling_directive(::ExactTime, x::SamplingDirective) = x
 
 """
     CompleteSampler()
@@ -92,7 +92,7 @@ sample.
 @kwdef struct CompleteSampler <: AbstractSampler
 end
 
-@inline get_logging_directive(::ExactTime, x::CompleteSampler) = x
+@inline get_sampling_directive(::ExactTime, x::CompleteSampler) = x
 @inline should_log_states(x::CompleteSampler) = true
 @inline should_log_outputs(x::CompleteSampler) = true
 @inline should_log_models(x::CompleteSampler) = true
@@ -109,7 +109,7 @@ and initial discrete values are currently recorded before runtime sampling begin
 @kwdef struct NullSampler <: AbstractSampler
 end
 
-@inline get_logging_directive(::ExactTime, x::NullSampler) = x
+@inline get_sampling_directive(::ExactTime, x::NullSampler) = x
 @inline should_log_states(x::NullSampler) = false
 @inline should_log_outputs(x::NullSampler) = false
 @inline should_log_models(x::NullSampler) = false
@@ -131,15 +131,15 @@ or not).
 end
 # TODO: Use exact_time to allow the user to enter non-Rationals.
 
-@inline function get_logging_directive(t::ExactTime, sampler::RegularSampler)
+@inline function get_sampling_directive(t::ExactTime, sampler::RegularSampler)
     if t >= sampler.offset && isinteger((t - sampler.offset) / sampler.period) # TODO: Should this widen?
-        return LoggingDirective(;
+        return SamplingDirective(;
             log_states = true,
             log_outputs = true,
             log_models = true,
         )
     else
-        return LoggingDirective(;
+        return SamplingDirective(;
             log_states = false,
             log_outputs = false,
             log_models = sampler.continue_to_submodels,
