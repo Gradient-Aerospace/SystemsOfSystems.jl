@@ -121,76 +121,84 @@ function warm_up_then_time(system_specs, solver, log, t_end)
     run_for_timing(system_specs, solver, log, t_end)
 end
 
-for solver_type in ["rk4", "dp54"]
+# We wrap this in a function so we aren't dumping a bunch of things into this module.
+function time_simulations()
 
-    for log_type in ["ram", "null"] # Deliberately excluded hdf5 for now.
+    for solver_type in ["rk4", "dp54"]
 
-        dt_rk4 = 0.02
-        solver = if solver_type == "dp54"
-            Solvers.DormandPrince54Options()
-        elseif solver_type == "rk4"
-            Solvers.RungeKutta4Options(; dt = dt_rk4)
-        else
-            error("Unknown solver type: $solver_type")
-        end
+        for log_type in ["ram", "null"] # Deliberately excludes hdf5 for now.
 
-        log = if log_type == "ram"
-            Logs.BasicLogOptions()
-        elseif log_type == "hdf5"
-            Logs.HDF5LogOptions(joinpath(out_dir, "speed_and_allocation_logs.h5"))
-        elseif log_type == "null"
-            Logs.NullLogOptions()
-        else
-            error("Unknown log type: $log_type")
-        end
+            dt_rk4 = 0.02
+            solver = if solver_type == "dp54"
+                Solvers.DormandPrince54Options()
+            elseif solver_type == "rk4"
+                Solvers.RungeKutta4Options(; dt = dt_rk4)
+            else
+                error("Unknown solver type: $solver_type")
+            end
 
-        rng = Xoshiro(1)
+            log = if log_type == "ram"
+                Logs.BasicLogOptions()
+            elseif log_type == "hdf5"
+                Logs.HDF5LogOptions(joinpath(out_dir, "speed_and_allocation_logs.h5"))
+            elseif log_type == "null"
+                Logs.NullLogOptions()
+            else
+                error("Unknown log type: $log_type")
+            end
 
-        # Set the parameters for all of the models.
-        function make_closed_loop_system(position, velocity)
-            return ClosedLoopSystemSpecs(
-                plant = PlantSpecs(
-                    mass = 1.,
-                    initial_position = position,
-                    initial_velocity = velocity,
-                    acceleration_noise_sigma = 0.1,
-                ),
-                sensor = SensorSpecs(
-                    schedule = RegularSchedule(0.1),
-                    sigma_noise = 0.,
-                    sigma_bias = 0.,
-                ),
-                target = ConstantTargetSpecs(
-                    constant_position = 1.,
-                ),
-                controller = PDControllerSpecs(
-                    schedule = RegularSchedule(0.1),
-                    p = 8.,
-                    d = 4.,
-                    initial_position = 0.,
-                    initial_command = 0.,
-                ),
-                actuator = ActuatorSpecs(
-                    time_constant = 0.2,
-                    initial_command = 0.,
-                    initial_response = 0.,
-                ),
+            rng = Xoshiro(1)
+
+            # Set the parameters for all of the models.
+            function make_closed_loop_system(position, velocity)
+                return ClosedLoopSystemSpecs(
+                    plant = PlantSpecs(
+                        mass = 1.,
+                        initial_position = position,
+                        initial_velocity = velocity,
+                        acceleration_noise_sigma = 0.1,
+                    ),
+                    sensor = SensorSpecs(
+                        schedule = RegularSchedule(0.1),
+                        sigma_noise = 0.,
+                        sigma_bias = 0.,
+                    ),
+                    target = ConstantTargetSpecs(
+                        constant_position = 1.,
+                    ),
+                    controller = PDControllerSpecs(
+                        schedule = RegularSchedule(0.1),
+                        p = 8.,
+                        d = 4.,
+                        initial_position = 0.,
+                        initial_command = 0.,
+                    ),
+                    actuator = ActuatorSpecs(
+                        time_constant = 0.2,
+                        initial_command = 0.,
+                        initial_response = 0.,
+                    ),
+                )
+            end
+
+            system_specs = ManyClosedLoopSystemsSpecs(;
+                a = make_closed_loop_system(randn(rng), randn(rng)),
+                b = make_closed_loop_system(randn(rng), randn(rng)),
+                c = make_closed_loop_system(randn(rng), randn(rng)),
+                d = make_closed_loop_system(randn(rng), randn(rng)),
+                e = make_closed_loop_system(randn(rng), randn(rng)),
             )
+
+            println("solver = $solver_type, log = $log_type")
+            simout = warm_up_then_time(system_specs, solver, log, 100)
+
         end
-
-        system_specs = ManyClosedLoopSystemsSpecs(;
-            a = make_closed_loop_system(randn(rng), randn(rng)),
-            b = make_closed_loop_system(randn(rng), randn(rng)),
-            c = make_closed_loop_system(randn(rng), randn(rng)),
-            d = make_closed_loop_system(randn(rng), randn(rng)),
-            e = make_closed_loop_system(randn(rng), randn(rng)),
-        )
-
-        println("solver = $solver_type, log = $log_type")
-        simout = warm_up_then_time(system_specs, solver, log, 100)
 
     end
 
 end
 
 end # BenchmarkSpeedAndAllocations
+
+# Now actually run the timing.
+BenchmarkSpeedAndAllocations.time_simulations()

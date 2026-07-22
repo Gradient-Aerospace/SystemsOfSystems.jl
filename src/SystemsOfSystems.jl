@@ -424,8 +424,10 @@ end
 """
 This is the same as ModelDescription, except that any VariableDescription stuff has been
 pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
+
+This is mutable only to put it on the heap.
 """
-@kwdef struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
+@kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
     constants::CT
     continuous_states::XCT
@@ -566,7 +568,8 @@ end
 #########################
 
 # This is our internal representation of the stuff necessary to construct the model form.
-@kwdef struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
+# It's mutable only to put it on the heap.
+@kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
@@ -860,45 +863,111 @@ end
 function log_continuous_stuff!(t, mh::Nothing, msd::ModelStateDescription, ro::RatesOutput)
 end
 
-function log_continuous_stuff!(t, mh, msd::ModelStateDescription, ro::RatesOutput)
-    for fn in keys(msd.continuous_states)
-        push!(mh.continuous_states[fn], float(t), msd.continuous_states[fn])
+function log_continuous_states!(t_f, mh_xc, msd_xc)
+    for fn in fieldnames(typeof(mh_xc))
+        push!(mh_xc[fn], t_f, msd_xc[fn])
     end
-    for fn in keys(ro.outputs)
-        push!(mh.continuous_outputs[fn], float(t), ro.outputs[fn])
-    end
-    # TODO: Log the derivatives too.
-    for fn in keys(msd.models)
-        if haskey(ro.models, fn)
-            log_continuous_stuff!(t, mh.models[fn], msd.models[fn], ro.models[fn])
+end
+function log_continuous_outputs!(t_f, mh_yc, ro_yc)
+    for fn in fieldnames(typeof(mh_yc))
+        if hasfield(typeof(ro_yc), fn)
+            push!(mh_yc[fn], t_f, ro_yc[fn])
         end
     end
+end
+function log_continuous_models!(t_f, mh_models, msd_models, ro_models)
+    for fn in fieldnames(typeof(mh_models))
+        if hasfield(typeof(ro_models), fn)
+            log_continuous_stuff!(t_f, mh_models[fn], msd_models[fn], ro_models[fn])
+        end
+    end
+end
+
+function log_continuous_stuff!(
+    t_f::Float64,
+    mh::Logs.ModelHistory,
+    msd::ModelStateDescription,
+    ro::RatesOutput,
+)
+    log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
+    log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
+    # TODO: Log the derivatives too.
+    log_continuous_models!(t_f, mh.models, msd.models, ro.models)
 end
 
 function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
 
-function log_initial_discrete_stuff!(t, mh, md::TypedModelDescription)
-    for fn in keys(md.discrete_states)
-        push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
+function log_initial_discrete_stuff!(
+    t,
+    mh::Logs.ModelHistory,
+    md::TypedModelDescription,
+)
+    for fn in keys(mh.discrete_states)
+        push!(mh.discrete_states[fn], float(t), md.discrete_states[fn]) # <- must be in MD
     end
-    for fn in keys(md.discrete_outputs)
+    for fn in keys(mh.discrete_outputs)
         push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
     end
-    for fn in keys(md.models)
+    for fn in keys(mh.models)
         log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
     end
 end
 
 function log_discrete_stuff!(
-    t, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
+    t_f, mh::Nothing, md::UpdatesOutput, msd::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 end
 
+function log_discrete_states!(t_f, mh_xd, uo_updates)
+    for fn in fieldnames(typeof(mh_xd))
+        if hasfield(typeof(uo_updates), fn)
+            push!(mh_xd[fn], t_f, uo_updates[fn])
+        end
+    end
+end
+function log_continuous_state_updates!(
+    t_f, mh_xc, uo_updates, prior_xc,
+    include_updated_continuous_states,
+)
+    for fn in fieldnames(typeof(mh_xc))
+        if hasfield(typeof(uo_updates), fn)
+            push!(mh_xc[fn], t_f, prior_xc[fn])
+            if include_updated_continuous_states
+                push!(mh_xc[fn], t_f, uo_updates[fn])
+            end
+        end
+    end
+end
+function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
+    for fn in fieldnames(typeof(mh_yd))
+        if hasfield(typeof(uo_outputs), fn)
+            push!(mh_yd[fn], t_f, uo_outputs[fn])
+        end
+    end
+end
+function log_discrete_models!(
+    t_f, mh_models, uo_models, prior_models,
+    include_updated_continuous_states,
+)
+    for fn in fieldnames(typeof(mh_models))
+        if hasfield(typeof(uo_models), fn)
+            log_discrete_stuff!(
+                t_f,
+                mh_models[fn], uo_models[fn], prior_models[fn],
+                include_updated_continuous_states,
+            )
+        end
+    end
+end
+
 # This is called right after updating.
 function log_discrete_stuff!(
-    t, mh, uo::UpdatesOutput, prior::ModelStateDescription,
+    t_f,
+    mh::Logs.ModelHistory,
+    uo::UpdatesOutput,
+    prior::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 
@@ -908,31 +977,21 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    for fn in keys(uo.updates)
-        if haskey(mh.discrete_states, fn) # Only log the discrete states.
-            push!(mh.discrete_states[fn], float(t), uo.updates[fn])
-        end
-        if haskey(mh.continuous_states, fn)
-            push!(mh.continuous_states[fn], float(t), prior.continuous_states[fn])
-            if include_updated_continuous_states
-                push!(mh.continuous_states[fn], float(t), uo.updates[fn])
-            end
-        end
-    end
+    log_discrete_states!(t_f, mh.discrete_states, uo.updates)
+    log_continuous_state_updates!(
+        t_f, mh.continuous_states, uo.updates, prior.continuous_states,
+        include_updated_continuous_states,
+    )
 
     # Log whatever outputs they provided this time.
-    for fn in keys(uo.outputs)
-        push!(mh.discrete_outputs[fn], float(t), uo.outputs[fn])
-    end
+    log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
 
-    # Models don't have to pass through updates for their submodels, but if they did, let's
-    # use them.
-    for fn in keys(uo.models)
-        log_discrete_stuff!(
-            t, mh.models[fn], uo.models[fn], prior.models[fn],
-            include_updated_continuous_states,
-        )
-    end
+    # Continue logging for whatever submodels we're supposed to log for (where there were
+    # provided anyway).
+    log_discrete_models!(
+        t_f, mh.models, uo.models, prior.models,
+        include_updated_continuous_states,
+    )
 
 end
 
@@ -1124,7 +1183,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # The beginning state and rates come from the accepted attempt. Rejected attempts and
     # intermediate Runge-Kutta stages never reach logging or model stop handling.
     log_continuous_stuff!(
-        t_last,
+        float(t_last),
         mh,
         result.state_at_start,
         result.rates_at_start,
@@ -1164,7 +1223,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # If a discrete update changes continuous state, this records the pre-update side of the
     # discontinuity. The next accepted rates sample—or the explicit terminal sample below—
     # records the post-update side together with matching continuous outputs.
-    log_discrete_stuff!(t_next, mh, updates, msd, false)
+    log_discrete_stuff!(float(t_next), mh, updates, msd, false)
 
     # Now accept the update.
     msd = update(msd, updates)
@@ -1412,7 +1471,7 @@ function loop!(runtime)
                     float(t_completed),
                     msd,
                 )
-                log_continuous_stuff!(t_completed, mh, msd, terminal_rates)
+                log_continuous_stuff!(float(t_completed), mh, msd, terminal_rates)
                 terminal_stop = first_stop(
                     terminal_stop,
                     find_model_requested_stop(terminal_rates),
