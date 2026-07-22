@@ -542,15 +542,15 @@ function default_closed_loop_system_specs()
 end
 
 """
-    default_logging_policy()
+    default_log()
 
-Returns a sensible default logging policy for the closed-loop system.
+Returns a sensible default log for the closed-loop system.
 
-Here, the log configuration demonstrates hierarchical sampling: the root model allows
+Here, the log's logging policy demonstrates hierarchical sampling: the root model allows
 logging at 0.1-second intervals, and every descendant logs completely whenever traversal
 reaches it.
 """
-function default_logging_policy()
+function default_log()
     return Logs.BasicLogOptions(;
         logging_policy = LoggingPolicies.RegexLoggingPolicy(
             [
@@ -579,7 +579,7 @@ reaches it.
 """
 function simulate_closed_loop_system(;
     system_specs = default_closed_loop_system_specs(),
-    log = default_logging_policy(),
+    log = default_log(),
     solver = Solvers.DormandPrince54Options(),
 )
     return simulate(
