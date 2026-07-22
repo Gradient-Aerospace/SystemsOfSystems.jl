@@ -18,7 +18,7 @@ export Dimension, TimeSeries,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, next_regular_time
 
-using Random: Xoshiro
+using Random: Xoshiro, randn
 
 include("SimulationTimes.jl")
 using .SimulationTimes
@@ -318,7 +318,11 @@ struct VariableDescription{T}
     # record::Bool # To let users decide if they want this signal logged (e.g., a weird state or a constant might not be logged).
 end
 VariableDescription(value; kwargs...) = VariableDescription{typeof(value)}(value; kwargs...)
-function VariableDescription{T}(value; title, dimensions, groups = missing, interpolator = missing) where {T}
+function VariableDescription{T}(
+    value;
+    title, dimensions,
+    groups = missing, interpolator = missing
+) where {T}
     return VariableDescription{T}(
         value, title, Dimension[dimensions...], groups, interpolator,
     )
@@ -477,7 +481,11 @@ end
     descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
     payloads::Vector{Any} = Any[]
 end
-function add_resource!(manager::ResourceManager, description::Resources.AbstractResource, payload)
+function add_resource!(
+    manager::ResourceManager,
+    description::Resources.AbstractResource,
+    payload,
+)
     push!(manager.descriptions, description)
     push!(manager.payloads, payload)
     return nothing
@@ -487,7 +495,10 @@ function try_to_close_resource(resource, payload)
             Resources.close_resource(resource, payload)
         catch err
             trace = catch_backtrace()
-            @error "Failed to close resource = $resource. Continuing..." exception = (err, trace)
+            @error(
+                "Failed to close resource = $resource. Continuing...",
+                exception = (err, trace),
+            )
         end
 end
 function close_resources(manager::ResourceManager)
@@ -618,7 +629,10 @@ function model(desc::ModelStateDescription{T}) where {T}
 end
 
 # This has no allocations for bits types.
-function copy_model_state_description_except(md::T; kwargs...) where {T <: ModelStateDescription}
+function copy_model_state_description_except(
+    md::T;
+    kwargs...
+) where {T <: ModelStateDescription}
     return T(;
         md.constants,
         md.continuous_states,
@@ -693,19 +707,26 @@ struct EncounteredError <: AbstractFailureReason
     trace::Any
 end
 
-describe(reason::AbstractTerminationReason) = string(typeof(reason))
-describe(stop::UnknownStopReason) = "The sim stopped for an unknown reason."
-describe(stop::ReachedEndTime) = "The sim reached the specified end time of $(float(stop.t_end))."
-describe(stop::ModelRequestedStop) = "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
-describe(stop::HookRequestedStop) = "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
-describe(stop::EncounteredError) = "The sim experienced an error."
+describe(reason::AbstractTerminationReason) =
+    string(typeof(reason))
+describe(stop::UnknownStopReason) =
+    "The sim stopped for an unknown reason."
+describe(stop::ReachedEndTime) =
+    "The sim reached the specified end time of $(float(stop.t_end))."
+describe(stop::ModelRequestedStop) =
+    "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
+describe(stop::HookRequestedStop) =
+    "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
+describe(stop::EncounteredError) =
+    "The sim experienced an error."
 
 ##############
 # SimOptions #
 ##############
 
-# We define this generic function before loading the continuous-problem adapter. Its concrete
-# hierarchical method remains with the simulation's random-variable machinery below.
+# We define this generic function before loading the continuous-problem adapter. Its
+# concrete hierarchical method remains with the simulation's random-variable machinery,
+# below.
 function draw_wc end
 
 include("Logs.jl")
@@ -778,9 +799,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 # closed, and it's reasonable to ask for that directly.
 # Logs.close_log(history::SimHistory) = Logs.close_log(history.log)
 
-############
-# The Loop #
-############
+#########
+# Steps #
+#########
 
 # Functions for drawing from the sets of random variables
 function draw_crvs(crvs, t_last, t_next)
@@ -1042,7 +1063,6 @@ end
 # beginning-of-step rates evaluation requests a stop.
 first_stop(current, candidate) = isnothing(current) ? candidate : current
 
-
 """
     step!(...)
 
@@ -1054,19 +1074,7 @@ variables, and accepts the discrete update at the rational endpoint. Returning e
 that endpoint as the simulation loop's latest committed time and state. Terminal rate
 sampling occurs afterward in `loop!`, where an exception cannot hide the committed sample.
 """
-function step!(
-    mh,
-    t,
-    schedules,
-    ommd,
-    problem,
-    updates_fcn,
-    t_last,
-    msd,
-    integrator,
-    hooks,
-    t_end,
-)
+function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integrator, hooks)
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
     # belong to the runtime integrator; the scheduler owns only exact external boundaries.
@@ -1165,6 +1173,187 @@ function step!(
 
 end
 
+########################
+# Model Initialization #
+########################
+
+get_branching_seed(seed::BranchingSeed) = seed
+get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
+
+# Collect and normalize the settings shared by every initialization interface.
+function initialization_context(;
+    t_start = 0//1,
+    model_path = "",
+    seed = BranchingSeed(0, model_path),
+    outdir = nothing,
+)
+    return (; t_start, model_path, seed = get_branching_seed(seed), outdir)
+end
+
+# Run the user's initialization function before constructing the simulation artifacts.
+function create_initialization_artifacts(init_fcn, user_data, context)
+
+    model_description = init_fcn(context.t_start, user_data, context.seed)
+    return create_initialization_artifacts(model_description, context)
+
+end
+
+# Construct the typed model description, model state, schedules, and resource manager from
+# a model description and normalized initialization context.
+function create_initialization_artifacts(
+    model_description::ModelDescription,
+    context,
+)
+
+    # Schedules are immutable declarations, so validate and collect them before opening any
+    # model resources. The concrete, deduplicated tuple becomes simulation-level scheduler
+    # metadata, while each named declaration also remains available on its model form.
+    validate_model_schedules(model_description)
+    schedules = collect_unique_schedules(model_description)
+
+    # We'll keep track of resources we create along the way so that we can close them.
+    manager = ResourceManager()
+
+    try
+
+        # We should be done with VariableDescriptions, etc., at this point. Now, we can
+        # strip all of those out to obtain the simplified TypedModelDescription.
+        ommd = create_typed_model_description!(
+            manager,
+            model_description,
+            context.seed,
+            context.outdir,
+            context.model_path,
+        )
+
+        # We can now fill in the draws to have a complete "model state description", from
+        # which we can construct the model form.
+        msd = create_model_state(context.t_start, ommd)
+
+        return (; model_description, ommd, msd, schedules, manager)
+
+    catch
+
+        # Make sure we close anything we opened along the way.
+        close_resources(manager)
+
+        # Now return to the regular error.
+        rethrow()
+
+    end
+
+end
+
+"""
+    Base.close(desc::ModelDescription, m)
+
+Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
+the model.
+"""
+function Base.close(desc::ModelDescription, m)
+
+    # Let the submodels close their resources, in the reverse order in which we opened them.
+    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
+        Base.close(desc.models[mn], getproperty(m, mn))
+    end
+
+    # Close this model's resources, again in reverse order.
+    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
+        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
+    end
+
+    return nothing
+
+end
+
+##############
+# Simulation #
+##############
+
+# Hooks may open resources, so we want to make sure we can always call the close function
+# for them.
+function close_hooks(hooks, t_end, final_model)
+    for hook in Iterators.reverse(hooks)
+        try
+            Hooks.close_hook!(hook, t_end, final_model)
+        catch err
+            trace = catch_backtrace()
+            @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+        end
+    end
+end
+
+# Build all of the things necessary for the loop and subsequent tear-down.
+function make_runtime(inputs)
+
+    # This might be a tuple with (t_start, t_end), but it can also be any collection of
+    # monotonic times.
+    t = [exact_time(el) for el in inputs.t]
+    t_start = first(t)
+
+    # Pull out the full model description from the initialization function, as well as the
+    # typed model description, and finally the model state description.
+    context = initialization_context(;
+        t_start,
+        seed = inputs.seed,
+        outdir = inputs.options.outdir,
+    )
+    artifacts = create_initialization_artifacts(
+        inputs.init_fcn,
+        inputs.user_data,
+        context,
+    )
+    (; model_description, ommd, msd, schedules, manager) = artifacts
+
+    # Now that resources are open, we need to make absolutely sure we close them.
+    try
+
+        # Use those descriptions to set up the time histories.
+        log, mh = Logs.create_log(
+            inputs.options.log, model_description, inputs.options.time_dimension,
+        )
+
+        # Log the initial stuff.
+        log_initial_discrete_stuff!(t_start, mh, ommd)
+
+        # Adapt the hierarchical model to the small mathematical interface consumed by
+        # continuous-time integrators, then create runtime solver state for this simulation.
+        problem = ContinuousProblems.ContinuousProblem(ommd, inputs.rates_fcn)
+        integrator = Solvers.create_integrator(inputs.options.solver, problem, msd)
+
+        # Create the hooks one at a time. If any throws, close the already-opened hooks and
+        # then rethrow.
+        initial_model = model(msd)
+        hooks = Hooks.AbstractHook[]
+        try
+            for hook_options in inputs.options.hooks
+                push!(hooks, Hooks.create_hook(hook_options, t, initial_model))
+            end
+        catch err
+            close_hooks(hooks, t_start, initial_model)
+            rethrow(err)
+        end
+
+        return (;
+            inputs.updates_fcn, inputs.close_fcn,
+            model_description, ommd,
+            t, schedules,
+            msd,
+            log, mh,
+            problem, integrator,
+            hooks, manager,
+        )
+
+    catch err
+
+        # Close any open resources.
+        close_resources(manager)
+        rethrow(err)
+
+    end
+
+end
+
 """
     loop!(...)
 
@@ -1174,10 +1363,25 @@ This function is the exception boundary for simulation execution. Numerical fail
 as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
 so resources, hooks, and logs can still be closed by `simulate`.
 """
-function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, hooks)
-    t_completed = first(t)
-    t_end = last(t)
+function loop!(runtime)
+
+    # Pull these out here so we aren't constantly pulling them in the loop.
+    mh = runtime.mh
+    t = runtime.t
+    schedules = runtime.schedules
+    ommd = runtime.ommd
+    problem = runtime.problem
+    updates_fcn = runtime.updates_fcn
+    integrator = runtime.integrator
+    hooks = runtime.hooks
+    t_end = last(runtime.t)
+
+    # These are updated by the loop.
+    t_completed = first(runtime.t)
+    msd = runtime.msd
     stop = UnknownStopReason()
+
+    # No matter what happens, this function returns all of the progress it's made.
     try
 
         while isa(stop, UnknownStopReason)
@@ -1187,7 +1391,7 @@ function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, ho
             # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
                 mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
-                integrator, hooks, t_end,
+                integrator, hooks
             )
 
             # A successfully processed terminal sample receives one direct post-update
@@ -1230,172 +1434,123 @@ function loop!(mh, t, schedules, ommd, problem, updates_fcn, msd, integrator, ho
 
     end
 
-    return (t_completed, msd, stop)
+    return (; t_completed, msd, stop)
 
 end
 
-##############
-# initialize #
-##############
-
-get_branching_seed(seed::BranchingSeed) = seed
-get_branching_seed(seed::Integer) = BranchingSeed(seed, "")
-
-# This takes in a model prototype (the user data) and runs the initialization function to
-# get the model description. It then sets up the typed model description and model state.
-function _initialize(
-    model_prototype;
-    init_fcn,
-    t_start = 0//1,
-    model_path = "",
-    seed = BranchingSeed(0, model_path),
-    outdir = nothing,
-)
-
-    # Run the initialization to get the description of the model given the prototype.
-    seed = get_branching_seed(seed)
-    model_description = init_fcn(t_start, model_prototype, seed)
-
-    # We can now get the typed model description and model state description.
-    return _initialize(model_description; t_start, model_path, seed, outdir)
-
-end
-
-# Once we have the model description, this sets up the typed model description and model
-# state.
-function _initialize(
-    model_description::ModelDescription;
-    t_start = 0//1,
-    model_path = "",
-    seed = BranchingSeed(0, model_path),
-    outdir = nothing,
-)
-
-    # Schedules are immutable declarations, so validate and collect them before opening any
-    # model resources. The concrete, deduplicated tuple becomes simulation-level scheduler
-    # metadata, while each named declaration also remains available on its model form.
-    validate_model_schedules(model_description)
-    schedules = collect_unique_schedules(model_description)
-
-    # We'll keep track of resources we create along the way so that we can close them.
-    manager = ResourceManager()
-
+# Produces the final model, closes the open resources, and wraps up the results.
+function tear_down(runtime, loop_outputs)
+    final_model = nothing
     try
-
-        # We should be done with VariableDescriptions, etc., at this point. Now, we can
-        # strip all of those out to obtain the simplified TypedModelDescription.
-        seed = get_branching_seed(seed)
-        ommd = create_typed_model_description!(manager, model_description, seed, outdir, model_path)
-
-        # We can now fill in the draws to have a complete "model state description", from
-        # which we can construct the model form.
-        msd = create_model_state(t_start, ommd)
-
-        return (; model_description, ommd, msd, schedules, manager)
-
-    catch err
-
-        # Make sure we close anything we opened along the way.
-        close_resources(manager)
-
-        # Now return to the regular error.
-        rethrow(err)
-
+        final_model = model(loop_outputs.msd)
+        runtime.close_fcn(loop_outputs.t_completed, final_model)
+        return (;
+            history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
+            t_final = loop_outputs.t_completed,
+            final_model,
+        )
+    finally
+        close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
+        close_resources(runtime.manager)
     end
-
 end
+
+#############
+# Interface #
+#############
 
 """
     initialize(user_data; init_fcn, seed = 0, t_start = 0)
 
-This is useful for debugging model initialization. Provided the `user_data`, `init_fcn`, and
-optionally `seed` and `t_start`, it will run the `init_fcn`, construct the model, and return
-it. The `init_fcn` receives a `BranchingSeed` derived from the integer `seed`.
+Creates the initial model form from the given `user_data`, `init_fcn`, `seed`, and start
+time, `t_start`. See `simulate` for a definition of these inputs.
 
 If the `model_description` contains any resources (open files, connections), call
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
-using the `do` form: `initialize(model_prototype) do model ... end`.
+using the `do` form: `initialize(user_data) do model ... end`.
 """
-function initialize(model_prototype; kwargs...)
-    return model(_initialize(model_prototype; kwargs...).msd)
+function initialize(user_data; init_fcn, kwargs...)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(init_fcn, user_data, context)
+    return model(artifacts.msd)
 end
 
 """
-    initialize(model_description; seed = BranchingSeed(0, ""), t_start = 0)
+    initialize(model_description; seed = 0, t_start = 0)
 
-This is useful for debugging model initialization. Given a `ModelDescription` (such as would
-be provided by the `init_fcn` input to `simulate`, this will construct and return the model.
-The `seed` is used for random variables that do not provide their own
-`RandomVariableDescription` seed.
+Creates the initial model form from the given `ModelDescription`, `seed`, and start time,
+`t_start`.
 
 If the `model_description` contains any resources (open files, connections), call
 `Base.close(model_description, model)` to release those resources. Alternatively, consider
-using the `do` form: `initialize(model_prototype) do model ... end`.
+using the `do` form: `initialize(model_description) do model ... end`.
 """
 function initialize(model_description::ModelDescription; kwargs...)
-    return model(_initialize(model_description; kwargs...).msd)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(model_description, context)
+    return model(artifacts.msd)
+end
+
+# Run a function with an initialized model and close its resources afterward.
+function use_initialized_model(f, artifacts)
+    try
+        return f(model(artifacts.msd))
+    finally
+        close_resources(artifacts.manager)
+    end
 end
 
 """
-    initialize(f, model_prototype_or_description; kwargs...)
+    initialize(f, user_data; init_fcn, kwargs...)
+
+This form of `initialize` allows the `do` pattern, like so:
+
+```
+initialize(user_data; init_fcn = ..., kwargs...) do m
+    # Do something with model m.
+    ...
+end
+```
+
+This is useful when a model opens a resource, like a file. When the `do` block is finished,
+this function will automatically close all opened resources, even if there was an error.
+
+Optional keyword arguments:
+
+* `seed`: An integer or `BranchingSeed`
+* `t_start`: The time to use for initialization
+"""
+function initialize(f::Function, user_data; init_fcn, kwargs...)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(init_fcn, user_data, context)
+    return use_initialized_model(f, artifacts)
+end
+
+"""
+    initialize(f, model_description::ModelDescription; kwargs...)
 
 This form of `initialize` allows the `do` pattern:
 
 ```
 initialize(model_description; kwargs...) do m
+    # Do something with model m.
     ...
 end
 ```
 
-This is useful when a model opens a file. When the `do` block is finished, this function
-will automatically close all opened resources, even if there was an error.
+This is useful when a model opens a resource, like a file. When the `do` block is finished,
+this function will automatically close all opened resources, even if there was an error.
 
-All additional `args` and `kwargs` are the same as for the other initialization functions.
+Optional keyword arguments:
+
+* `seed`: An integer or `BranchingSeed`
+* `t_start`: The time to use for initialization
 """
-function initialize(f::Function, model_prototype_or_description; kwargs...)
-
-    # Initialize everything. If there's an error during this process, all resources that
-    # were opened along the way will be closed, and then the error will be re-thrown, so if
-    # this function completes, all of the resources (and everything else) went well.
-    (; model_description, ommd, msd, manager) = _initialize(
-        model_prototype_or_description;
-        kwargs...
-    )
-
-    # Now try to run the function, returning whatever it returns.
-    try
-        f(model(msd))
-    finally
-        close_resources(manager)
-    end
-
+function initialize(f::Function, model_description::ModelDescription; kwargs...)
+    context = initialization_context(; kwargs...)
+    artifacts = create_initialization_artifacts(model_description, context)
+    return use_initialized_model(f, artifacts)
 end
-
-"""
-    Base.close(desc::ModelDescription, m)
-
-Closes all resources described in the `desc` ModelDescription, where `m` is an instance of
-the model.
-"""
-function Base.close(desc::ModelDescription, m)
-
-    # Let the submodels close their resources, in the reverse order in which we opened them.
-    for mn in Iterators.reverse(fieldnames(typeof(desc.models)))
-        Base.close(desc.models[mn], getproperty(m, mn))
-    end
-
-    # Close this model's resources, again in reverse order.
-    for fn in Iterators.reverse(fieldnames(typeof(desc.resources)))
-        try_to_close_resource(desc.resources[fn], getproperty(m, fn))
-    end
-
-    return nothing
-
-end
-
-############
-# simulate #
-############
 
 """
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
@@ -1403,7 +1558,7 @@ end
 Runs a simulation, returning the time history, end time, and final model.
 
 * `user_data`: Can be anything used by the `init_fcn`
-* `t`: A collection of monotonic times; the sim will step to exactly each given time, plus
+* `t`: A collection of monotonic times. The sim will step to exactly each given time, plus
   as many other steps are required by the solver and models. At the very least, this must
   contain a start time and end time.
 * `init_fcn`: Will be called with `(t_start, user_data, seed)`, where `t_start` is the first
@@ -1418,95 +1573,20 @@ Runs a simulation, returning the time history, end time, and final model.
 * `options`: See `SimOptions`.
 """
 function simulate(
-    model_prototype;
-    t, # Any collection; sim starts at first(t) and goes to last(t) and breaks at everything in between.
-    init_fcn, # Turns the prototype into a model description, which can be turned into a model
+    user_data;
+    t,
+    init_fcn,
     rates_fcn = (args...) -> RatesOutput(),
     updates_fcn = (args...) -> UpdatesOutput(),
     close_fcn = (t, model) -> nothing,
-    seed = 0,
+    seed::Union{Integer, BranchingSeed} = 0,
     options::SimOptions = SimOptions(),
 )
-    # This might be a tuple with (t_start, t_end), but it can also be any collection of
-    # monotonic times.
-    t = [exact_time(el) for el in t]
-    t_start = first(t)
-    t_end = last(t)
-
-    # The user can provide an integer or BranchingSeed, but we want the latter.
-    seed = get_branching_seed(seed)
-
-    # Pull out the full model description from the initialization function, as well as the
-    # typed model description, and finally the model state description.
-    (; model_description, ommd, msd, schedules, manager) = _initialize(
-        model_prototype;
-        init_fcn, t_start, seed, options.outdir,
-    )
-
-    # Outputs from the try block
-    history = nothing
-    final_model = nothing
-
-    try
-
-        # Use those descriptions to set up the time histories.
-        log, mh = Logs.create_log(options.log, model_description, options.time_dimension)
-
-        # Log the initial stuff.
-        log_initial_discrete_stuff!(t_start, mh, ommd)
-
-        # Adapt the hierarchical model to the small mathematical interface consumed by
-        # continuous-time integrators, then create runtime solver state for this simulation.
-        problem = ContinuousProblems.ContinuousProblem(ommd, rates_fcn)
-        integrator = Solvers.create_integrator(options.solver, problem, msd)
-
-        # Create the hooks.
-        initial_model = model(msd)
-        hooks = map(options.hooks) do hook_options
-            return Hooks.create_hook(hook_options, t, initial_model)
-        end
-
-        # Propagate until we're done.
-        t_end, msd, stop = loop!(
-            mh,
-            t,
-            schedules,
-            ommd,
-            problem,
-            updates_fcn,
-            msd,
-            integrator,
-            hooks,
-        )
-
-        # Create the final model.
-        final_model = model(msd)
-
-        # Close out the models.
-        close_fcn(t_end, final_model)
-
-        # Wrap up all of the history into a single object.
-        history = SimHistory(model_description, log, stop)
-
-        # Close the hooks.
-        for hook in hooks
-            try
-                Hooks.close_hook!(hook, t_end, final_model)
-            catch err
-                trace = catch_backtrace()
-                @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
-            end
-        end
-
-    finally
-
-        # Close any open resources.
-        close_resources(manager)
-
-    end
-
-    return (history, t_end, final_model)
-
+    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    runtime = make_runtime(inputs)
+    loop_outputs = loop!(runtime)
+    results = tear_down(runtime, loop_outputs)
+    return (results.history, results.t_final, results.final_model)
 end
 
 end # module SystemsOfSystems

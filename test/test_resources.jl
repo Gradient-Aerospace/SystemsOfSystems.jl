@@ -231,6 +231,33 @@ end
 
 end
 
+@testset "do-block initialization preserves its model path" begin
+
+    # The user-data overload and the ModelDescription overload share one normalized
+    # initialization context. The model path must reach resource creation unchanged when
+    # the user-data overload delegates to the common artifact constructor.
+    opened_model_path = Ref("")
+    initialize(
+        nothing;
+        init_fcn = (args...) -> ModelDescription(;
+            resources = (;
+                resource = Resource(;
+                    open_args = (),
+                    open_fcn = inputs -> begin
+                        opened_model_path[] = inputs.model_path
+                        return nothing
+                    end,
+                    close_fcn = resource -> nothing,
+                ),
+            ),
+        ),
+        model_path = "/expected",
+    ) do _
+        @test opened_model_path[] == "/expected"
+    end
+
+end
+
 @testset "Close gets called in case of error" begin
 
     # It doesn't matter which resource type we use for this, so we'll use a generic
