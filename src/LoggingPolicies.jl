@@ -63,8 +63,9 @@ log = Logs.BasicLogOptions(;
 Let's break that apart. The `RegexLoggingPolicy` uses regular expressions to map model paths
 to model logging policies. The first "hit" in the vector is used. In this case, the first
 rule is `r"^/\$"`, which will only match exactly `"/"`. Therefore, the root model will
-sample at 10 Hz. At other accepted times, `continue_to_submodels = false` prevents logging
-from continuing to submodels, so the root sampler also limits when any descendant can log.
+sample at 10 Hz (or rather, it will sample at all simulation times that align with a 0.1s
+step). At other times, `continue_to_submodels = false` prevents logging from continuing to
+submodels, so the root sampler also limits when any descendant can log.
 
 The next item matches any model path starting with `"/some_model/"`, so all of the children
 of `"/some_model"`, and samples them more slowly. (Note that sampling them faster would
