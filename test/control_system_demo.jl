@@ -506,17 +506,12 @@ end
 ##############
 
 """
-    simulate_closed_loop_system()
+    default_closed_loop_system_specs()
 
-Run the closed-loop control demo for ten seconds.
-
-The log configuration demonstrates hierarchical sampling: the root model allows logging at
-0.1-second intervals, and every descendant logs completely whenever traversal reaches it.
+Returns a useful default `ClosedLoopSystemSpecs`.
 """
-function simulate_closed_loop_system()
-
-    # Set the parameters for all of the models.
-    system_specs = ClosedLoopSystemSpecs(
+function default_closed_loop_system_specs()
+    return ClosedLoopSystemSpecs(
         plant = PlantSpecs(
             mass = 1.,
             initial_position = 0.,
@@ -544,33 +539,57 @@ function simulate_closed_loop_system()
             initial_response = 0.,
         ),
     )
+end
 
-    # Run the sim.
+"""
+    default_logging_policy()
+
+Returns a sensible default logging policy for the closed-loop system.
+
+Here, the log configuration demonstrates hierarchical sampling: the root model allows
+logging at 0.1-second intervals, and every descendant logs completely whenever traversal
+reaches it.
+"""
+function default_logging_policy()
+    return Logs.BasicLogOptions(;
+        logging_policy = LoggingPolicies.RegexLoggingPolicy(
+            [
+                # Let the root control all logging.
+                r"^/$" => LoggingPolicies.ModelLoggingPolicy(;
+                    sampler = Samplers.RegularSampler(1//10),
+                ),
+                # For everything else, when the root allows logging, log everything.
+                r"^/" => LoggingPolicies.ModelLoggingPolicy(;
+                    sampler = Samplers.CompleteSampler(),
+                ),
+            ],
+        ),
+    )
+end
+
+"""
+    simulate_closed_loop_system(; system_specs, log, solver)
+
+Run the closed-loop control demo for 10s. Sensible defaults are included for `system_specs`,
+`log`, and `solver`.
+
+By default, the log configuration demonstrates hierarchical sampling: the root model allows
+logging at 0.1-second intervals, and every descendant logs completely whenever traversal
+reaches it.
+"""
+function simulate_closed_loop_system(;
+    system_specs = default_closed_loop_system_specs(),
+    log = default_logging_policy(),
+    solver = Solvers.DormandPrince54Options(),
+)
     return simulate(
         system_specs;
         init_fcn = ControlSystemDemo.init,
         rates_fcn = ControlSystemDemo.rates,
         updates_fcn = ControlSystemDemo.updates,
         t = (0, 10),
-        options = SimOptions(;
-            log = Logs.BasicLogOptions(;
-                logging_policy = LoggingPolicies.RegexLoggingPolicy(
-                    [
-                        # Let the root control all logging.
-                        r"^/$" => LoggingPolicies.ModelLoggingPolicy(;
-                            sampler = Samplers.RegularSampler(1//10),
-                        ),
-                        # For everything else, when the root allows logging, log everything.
-                        r"^/" => LoggingPolicies.ModelLoggingPolicy(;
-                            sampler = Samplers.CompleteSampler(),
-                        ),
-                    ],
-                ),
-            ),
-            time_dimension = "Time" => "s",
-        ),
+        options = SimOptions(; log, solver, time_dimension = "Time" => "s"),
     )
-
 end
 
 end
