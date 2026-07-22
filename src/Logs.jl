@@ -8,7 +8,7 @@ using OrderedCollections: OrderedDict
 using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription,
     Samplers
 using ..LoggingPolicies: AbstractLoggingPolicy, get_model_logging_policy,
-    get_sampler, get_variable_set,
+    get_sampler, get_variable_set, is_variable_in_set,
     AllPassLoggingPolicy
 
 ################
@@ -168,9 +168,18 @@ function record_model_description(log::AbstractLog, breadcrumbs, md)
     nothing
 end
 
+# TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators
+# for the TimeSeries, below?
+function store_constants(constants, variable_set)
+    return NamedTuple(
+        f => v
+        for (f, v) in pairs(constants) if is_variable_in_set(f, variable_set)
+    )
+end
+
 # "Sets" include continuous states, discrete outputs, etc.
 function create_time_series_for_set(
-    log::AbstractLog, breadcrumbs, set, time_dimension;
+    log::AbstractLog, breadcrumbs, set, variable_set, time_dimension;
     discrete = true,
 )
 
@@ -179,7 +188,7 @@ function create_time_series_for_set(
         f => create_time_series_for_var(
             log, breadcrumbs, string(f), v, time_dimension; discrete,
         )
-        for (f, v) in pairs(set)
+        for (f, v) in pairs(set) if is_variable_in_set(f, variable_set)
     )
 
 end
@@ -211,12 +220,12 @@ function create_time_series_for_model!(
     mh = ModelHistory(;
         type = md.type,
         path = model_path,
-        constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
-        continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),
+        constants = store_constants(md.constants, variable_set),
+        continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, variable_set, time_dimension; discrete = false),
         # TODO: Record derivatives too.
-        discrete_states = create_time_series_for_set(log, breadcrumbs, md.discrete_states, time_dimension; discrete = true),
-        continuous_outputs = create_time_series_for_set(log, breadcrumbs, md.continuous_outputs, time_dimension; discrete = false),
-        discrete_outputs = create_time_series_for_set(log, breadcrumbs, md.discrete_outputs, time_dimension; discrete = true),
+        discrete_states = create_time_series_for_set(log, breadcrumbs, md.discrete_states, variable_set, time_dimension; discrete = true),
+        continuous_outputs = create_time_series_for_set(log, breadcrumbs, md.continuous_outputs, variable_set, time_dimension; discrete = false),
+        discrete_outputs = create_time_series_for_set(log, breadcrumbs, md.discrete_outputs, variable_set, time_dimension; discrete = true),
         models = NamedTuple(
             f => create_time_series_for_model!(
                 log, vcat(breadcrumbs, string(f)), m,
