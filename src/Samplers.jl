@@ -115,21 +115,24 @@ end
 @inline should_log_models(x::NullSampler) = false
 
 """
-    RegularSampler(; period)
-    RegularSampler(period)
+    RegularSampler(; period, offset = 0, continue_to_submodels = false)
+    RegularSampler(period, offset = 0, continue_to_submodels = false)
 
 Log the model's states and outputs and continue into its submodels only when the exact
-simulation time is an integer multiple of `period`, measured from time zero. At other
-times, all three operations are skipped.
-
-Use an exact rational period, such as `1//10`, when the sampling boundary must be exact.
+simulation time (less an optional `offset`) is an integer multiple of `period`. At other
+times, the logging of models and states is skipped, and `continue_to_submodels` controls
+whether logging continues to the submodels (if this model blocks its submodels from logging
+or not).
 """
 @kwdef struct RegularSampler <: AbstractSampler
     period::ExactTime
+    offset::ExactTime = 0//1
+    continue_to_submodels::Bool = false
 end
+# TODO: Use exact_time to allow the user to enter non-Rationals.
 
 @inline function get_logging_directive(t::ExactTime, sampler::RegularSampler)
-    if isinteger(t / sampler.period)
+    if t >= sampler.offset && isinteger((t - sampler.offset) / sampler.period) # TODO: Should this widen?
         return LoggingDirective(;
             log_states = true,
             log_outputs = true,
@@ -139,7 +142,7 @@ end
         return LoggingDirective(;
             log_states = false,
             log_outputs = false,
-            log_models = false,
+            log_models = sampler.continue_to_submodels,
         )
     end
 end
