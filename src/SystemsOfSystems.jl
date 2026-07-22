@@ -913,7 +913,7 @@ function log_continuous_state_updates!(
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xc[fn], t_f, prior_xc[fn])
             if include_updated_continuous_states
-                push!(mh_xc[fn], float(t), uo_updates[fn])
+                push!(mh_xc[fn], t_f, uo_updates[fn])
             end
         end
     end
@@ -950,7 +950,7 @@ function log_discrete_stuff!(
 )
 
     # What our instructions are for logging this sample.
-    logging_directive = get_logging_directive(t, mh.sampler)
+    logging_directive = get_logging_directive(t, mh.sampler) # TODO: Change to get_sampling_directive.
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because

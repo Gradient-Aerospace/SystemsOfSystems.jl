@@ -195,7 +195,7 @@ function create_time_series_for_model!(
     model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
 
     # See how we should sample the sim's results over time.
-    sampler = get_model_sampler(model_filter, model_path)
+    sampler = get_model_sampler(model_filter, model_path) # TODO: Change to get_model_logging_policy
 
     # Right now, we assume we will at some point log all variables. However, we could also
     # allow the sampler to control which variables are logged. Then, we wouldn't even need
