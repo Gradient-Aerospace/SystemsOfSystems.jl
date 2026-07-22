@@ -1,14 +1,15 @@
 """
 This module contains the different log types: `BasicLog` (the default), `NullLog` (which
-disables logging), and `HDF5Log` (available after importing HDF5). RAM and HDF5 log options
-accept a model filter that assigns sampling behavior throughout the model hierarchy.
+disables logging), and `HDF5Log` (available after importing HDF5).
 """
 module Logs
 
 using OrderedCollections: OrderedDict
 using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription,
     Samplers
-using ..ModelFilters: AbstractModelFilter, get_model_sampler, AllPassModelFilter
+using ..LoggingPolicies: AbstractLoggingPolicy, get_model_logging_policy,
+    get_sampler, get_variable_set,
+    AllPassLoggingPolicy
 
 ################
 # ModelHistory #
@@ -188,14 +189,16 @@ function create_time_series_for_model!(
     breadcrumbs,
     md::ModelDescription,
     time_dimension,
-    model_filter::AbstractModelFilter,
+    logging_policy::AbstractLoggingPolicy,
 )
 
     # Form this model's path.
     model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
 
-    # See how we should sample the sim's results over time.
-    sampler = get_model_sampler(model_filter, model_path) # TODO: Change to get_model_logging_policy
+    # See what should be logged (variable set) and when it should be logged (sampler).
+    model_logging_policy = get_model_logging_policy(logging_policy, model_path)
+    variable_set = get_variable_set(model_logging_policy)
+    sampler = get_sampler(model_logging_policy)
 
     # Right now, we assume we will at some point log all variables. However, we could also
     # allow the sampler to control which variables are logged. Then, we wouldn't even need
@@ -217,7 +220,7 @@ function create_time_series_for_model!(
         models = NamedTuple(
             f => create_time_series_for_model!(
                 log, vcat(breadcrumbs, string(f)), m,
-                time_dimension, model_filter,
+                time_dimension, logging_policy,
             )
             for (f, m) in pairs(md.models)
         ),
@@ -268,25 +271,22 @@ end
 export BasicLogOptions
 
 """
-    BasicLogOptions(; model_filter = AllPassModelFilter())
+    BasicLogOptions(; logging_policy = AllPassLoggingPolicy())
 
 Configure an in-memory `BasicLog`.
 
-`model_filter` assigns a sampler to every model path. The default `AllPassModelFilter` logs
-every model at every accepted sample. Sampling affects runtime data appended to each time
-series; the current implementation still creates histories and time-series containers for
-every model and records initial discrete values.
+`logging_policy` assigns a model logging policy every model, by path. The default
+`AllPassLoggingPolicy` logs all variables of all models on all samples.
 """
 @kwdef struct BasicLogOptions <: AbstractLogOptions
-    model_filter::AbstractModelFilter = AllPassModelFilter()
+    logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
 end
 
 """
     BasicLog
 
-Store selected simulation results in arrays according to the model filter in
-`BasicLogOptions`. This is the simplest and fastest log, but an HDF5 log is a better choice
-when the selected history is too large to fit in RAM.
+Stores time histories for model variables in arrays. This is the simplest and fastest log,
+but an HDF5 log is a better choice when the selected history is too large to fit in RAM.
 """
 struct BasicLog <: AbstractLog
     model_history_dict::OrderedDict{String, ModelHistory}
@@ -348,11 +348,11 @@ end
 
 function create_log(options::BasicLogOptions, model_description, time_dimension)
     log = BasicLog(OrderedDict{String, ModelHistory}())
-    model_filter = options.model_filter
+    logging_policy = options.logging_policy
     breadcrumbs = String[]
     mh = create_time_series_for_model!(
         log, breadcrumbs, model_description,
-        time_dimension, model_filter,
+        time_dimension, logging_policy,
     )
     return (log, mh)
 end
@@ -395,14 +395,13 @@ end
 export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
-    HDF5LogOptions(; filename, model_filter)
+    HDF5LogOptions(; filename, logging_policy)
     HDF5LogOptions(filename)
 
 Configure an HDF5-backed log written to `filename`.
 
-`model_filter` assigns sampling behavior to model paths in the same way as
-`BasicLogOptions`; it defaults to `AllPassModelFilter()`. The positional filename
-constructor retains the same default for compatibility.
+`logging_policy` assigns a model logging policy every model, by path. The default
+`AllPassLoggingPolicy` logs all variables of all models on all samples.
 
 An HDF5 log records the same selected continuous and discrete states, outputs, constants,
 and metadata as a `BasicLog`, but stores time-series data on disk. This supports histories
@@ -413,7 +412,7 @@ faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
-    model_filter::AbstractModelFilter = AllPassModelFilter()
+    logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
 end
 
 # For backwards compatibility.

@@ -37,11 +37,14 @@ using .Resources
 
 include("Hooks.jl")
 
+# We could move this and the LoggingPolicies include inside the Logs module, but we leave
+# them here so they are more easily accessible to users (Samplers.<whatever> instead of
+# Logs.Samplers.<whatever>).
 include("Samplers.jl")
 using .Samplers
 
-include("ModelFilters.jl")
-using .ModelFilters
+include("ModelFilters.jl") # TODO: git mv this file.
+using .LoggingPolicies
 
 #########################
 # User Function Outputs #

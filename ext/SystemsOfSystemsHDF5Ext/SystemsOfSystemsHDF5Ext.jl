@@ -150,12 +150,12 @@ function create_log(options::HDF5LogOptions, model_description, time_dimension)
     fid = HDF5.h5open(options.filename, "w")
     mhd = OrderedDict{String, ModelHistory}()
     log = HDF5Log(fid, mhd)
-    model_filter = options.model_filter
+    logging_policy = options.logging_policy
     finalizer(close_log, log) # Close the file when this goes out of scope.
     breadcrumbs = String[]
     mh = create_time_series_for_model!(
         log, breadcrumbs, model_description,
-        time_dimension, model_filter,
+        time_dimension, logging_policy,
     )
     return (log, mh)
 end

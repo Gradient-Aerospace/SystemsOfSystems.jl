@@ -8,7 +8,7 @@ using Random: Xoshiro, randn
 import Dimensions
 import SystemsOfSystems
 using SystemsOfSystems: ModelDescription, RatesOutput, UpdatesOutput, RegularSchedule,
-    Solvers, Logs, SimOptions, ModelFilters, Samplers
+    Solvers, Logs, SimOptions, LoggingPolicies, Samplers
 
 include("../test/control_system_demo.jl")
 using .ControlSystemDemo
@@ -137,31 +137,27 @@ function time_simulations()
                 error("Unknown solver type: $solver_type")
             end
 
-            # We'll use a model filter to make sure sampling is tested as part of the
+            # We'll use a logging policy to make sure sampling is tested as part of the
             # benchmark.
-            model_filter = ModelFilters.RegexModelFilter(;
+            logging_policy = LoggingPolicies.RegexLoggingPolicy(;
                 entries = [
                     # We'll log /a (and everything below it) at a reduced rate.
-                    ModelFilters.RegexModelEntry(
-                        expression = r"^/a$",
+                    r"^/a$" => LoggingPolicies.ModelLoggingPolicy(;
                         sampler = Samplers.RegularSampler(;
                             period = 1//1,
                         ),
                     ),
-                    # Everything else can log completely.
-                    ModelFilters.RegexModelEntry(
-                        expression = r"^/",
-                        sampler = Samplers.CompleteSampler(),
-                    ),
                 ],
+                # Everything else can log completely.
+                default = LoggingPolicies.AllPassModelLoggingPolicy(),
             )
 
             log = if log_type == "ram"
-                Logs.BasicLogOptions(; model_filter)
+                Logs.BasicLogOptions(; logging_policy)
             elseif log_type == "hdf5"
                 Logs.HDF5LogOptions(;
                     filename = joinpath(out_dir, "speed_and_allocation_logs.h5"),
-                    model_filter,
+                    logging_policy,
                 )
             elseif log_type == "null"
                 Logs.NullLogOptions()

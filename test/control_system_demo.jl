@@ -12,7 +12,7 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
     RatesOutput, UpdatesOutput,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     RegularSchedule, is_triggering, on_triggering,
-    Logs, SimOptions, Solvers, TimeSeries, Samplers, ModelFilters,
+    Logs, SimOptions, Solvers, TimeSeries, Samplers, LoggingPolicies,
     simulate
 
 #########
@@ -554,12 +554,16 @@ function simulate_closed_loop_system()
         t = (0, 10),
         options = SimOptions(;
             log = Logs.BasicLogOptions(;
-                model_filter = ModelFilters.RegexModelFilter(
+                logging_policy = LoggingPolicies.RegexLoggingPolicy(
                     [
                         # Let the root control all logging.
-                        r"^/$" => Samplers.RegularSampler(1//10),
+                        r"^/$" => LoggingPolicies.ModelLoggingPolicy(;
+                            sampler = Samplers.RegularSampler(1//10),
+                        ),
                         # For everything else, when the root allows logging, log everything.
-                        r"^/" => Samplers.CompleteSampler(),
+                        r"^/" => LoggingPolicies.ModelLoggingPolicy(;
+                            sampler = Samplers.CompleteSampler(),
+                        ),
                     ],
                 ),
             ),
