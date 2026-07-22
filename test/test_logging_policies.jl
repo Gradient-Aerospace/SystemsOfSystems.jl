@@ -5,6 +5,20 @@ using HDF5Vectors # Load the HDF5 extension.
 using SystemsOfSystems
 using SystemsOfSystems: LoggingPolicies, Logs, Samplers, Solvers
 
+# Logging configuration has three layers that are useful to keep separate while reading
+# these tests:
+#
+# 1. A logging policy assigns a model logging policy based on the model's path.
+# 2. A model logging policy chooses which variables get storage and supplies a sampler.
+# 3. A sampler decides which of the simulation's already-accepted times are recorded and
+#    whether logging traversal continues into submodels.
+#
+# The unit tests below exercise each layer on its own. The integration tests then use one
+# deliberately small two-level model to show how the layers interact during a simulation.
+
+# Every variable category in the synthetic model has one "keep" and one "drop" member.
+# Reusing this list lets one assertion helper verify that filtering treats constants,
+# continuous/discrete states, and continuous/discrete outputs consistently.
 const SELECTED_VARIABLES = [
     :keep_constant,
     :keep_continuous_state,
@@ -15,12 +29,18 @@ const SELECTED_VARIABLES = [
 
 function model_description(; include_child = true)
 
+    # A root and one child are deep enough to test path assignment and parent-to-child
+    # traversal without obscuring the expected histories. The child omits another child so
+    # this recursion terminates after two model levels.
     models = if include_child
         (; child = model_description(; include_child = false))
     else
         (;)
     end
 
+    # Each category contains values with matching shapes and types. That makes any missing
+    # or extra logged field attributable to the logging policy, rather than to differences
+    # in how a particular model variable is represented.
     return ModelDescription(;
         constants = (;
             keep_constant = 1.0,
@@ -49,12 +69,17 @@ end
 
 function rates(t, model)
 
+    # RatesOutput must mirror the model hierarchy. Recursing here ensures that root and
+    # child have real continuous samples, allowing traversal behavior to be observed in
+    # their time vectors.
     models = if hasproperty(model, :child)
         (; child = rates(t, model.child))
     else
         (;)
     end
 
+    # Simple opposite-valued signals make the keep/drop variables distinguishable while
+    # keeping the numerical model irrelevant to these logging tests.
     return RatesOutput(;
         rates = (;
             keep_continuous_state = 1.0,
@@ -69,15 +94,19 @@ function rates(t, model)
 
 end
 
-
 function updates(t, model)
 
+    # As with rates, discrete updates are supplied for the complete hierarchy at every
+    # accepted step. A missing child UpdatesOutput would test update propagation instead of
+    # logging traversal, which is outside this file's purpose.
     models = if hasproperty(model, :child)
         (; child = updates(t, model.child))
     else
         (;)
     end
 
+    # Both discrete states change on every accepted step, and both outputs are always
+    # supplied. Consequently, gaps in a resulting history come only from its sampler.
     return UpdatesOutput(;
         updates = (;
             keep_discrete_state = model.keep_discrete_state + 1,
@@ -94,10 +123,15 @@ end
 
 function run_logging_simulation(logging_policy; log_options = nothing)
 
+    # Most tests want the fast in-memory log. Accepting an already-constructed option keeps
+    # the exact same model and solver available to the HDF5 tests below.
     if isnothing(log_options)
         log_options = Logs.BasicLogOptions(; logging_policy)
     end
 
+    # RK4 with a quarter-second step gives the known accepted-time grid
+    # [0, 0.25, 0.5, 0.75, 1]. Regular samplers can therefore be checked with exact expected
+    # vectors instead of depending on the adaptive solver's chosen steps.
     history, = simulate(
         nothing;
         init_fcn = (args...) -> model_description(),
@@ -115,6 +149,9 @@ end
 
 function assert_selected_variables(model_history)
 
+    # This helper intentionally inspects the five storage categories directly. Checking
+    # only ModelHistory.keys would not reveal a variable accidentally placed in the wrong
+    # category, and repeating these assertions for RAM and HDF5 logs would be noisy.
     @test keys(model_history.constants) == (:keep_constant,)
     @test keys(model_history.continuous_states) == (:keep_continuous_state,)
     @test keys(model_history.discrete_states) == (:keep_discrete_state,)
@@ -125,23 +162,36 @@ end
 
 @testset "variable sets" begin
 
+    # Variable sets are pure membership rules used during log construction. Test them
+    # independently first so later integration failures can be attributed to storage
+    # creation rather than to the membership predicates themselves.
     all_variables = LoggingPolicies.AllVariables()
     no_variables = LoggingPolicies.NoVariables()
     variable_list = LoggingPolicies.VariableList(["one", "two"])
     exclusion_list = LoggingPolicies.VariableExclusionList(; list = [:one, :two])
 
+    # The all/none sets are the building blocks for the corresponding model policies.
     @test LoggingPolicies.is_variable_in_set(:anything, all_variables)
     @test !LoggingPolicies.is_variable_in_set(:anything, no_variables)
+
+    # Inclusion and exclusion lists should be complementary for names both inside and
+    # outside the configured list.
     @test LoggingPolicies.is_variable_in_set(:one, variable_list)
     @test !LoggingPolicies.is_variable_in_set(:three, variable_list)
     @test !LoggingPolicies.is_variable_in_set(:one, exclusion_list)
     @test LoggingPolicies.is_variable_in_set(:three, exclusion_list)
+
+    # String input is user-friendly, but the stored form is normalized to symbols so it
+    # matches NamedTuple field names without conversion in the logging setup path.
     @test variable_list.list == [:one, :two]
 
 end
 
 @testset "sampling directives and built-in samplers" begin
 
+    # CompleteSampler and NullSampler are constant directives at opposite extremes. A
+    # SamplingDirective itself is also a sampler, which is useful when states, outputs, and
+    # descendant traversal need different fixed answers.
     complete = Samplers.get_sampling_directive(0//1, Samplers.CompleteSampler())
     null = Samplers.get_sampling_directive(0//1, Samplers.NullSampler())
     states_only = Samplers.SamplingDirective(;
@@ -150,6 +200,8 @@ end
         log_models = false,
     )
 
+    # Verify all three axes; checking only state logging could hide a regression in output
+    # logging or recursive traversal.
     @test Samplers.should_log_states(complete)
     @test Samplers.should_log_outputs(complete)
     @test Samplers.should_log_models(complete)
@@ -197,6 +249,9 @@ end
 
 @testset "model logging policies" begin
 
+    # A model logging policy is only a composition of a storage selection and a sampler.
+    # These interface tests ensure the convenience policies expand to the intended pair and
+    # that an explicit policy preserves the exact objects supplied by the user.
     all_pass = LoggingPolicies.AllPassModelLoggingPolicy()
     null = LoggingPolicies.NullModelLoggingPolicy()
     variable_set = LoggingPolicies.VariableList(SELECTED_VARIABLES)
@@ -212,16 +267,18 @@ end
 
 end
 
-
 @testset "logging-policy assignment" begin
 
+    # This testset concerns the top-level path-to-policy mapping only. Simulation behavior
+    # is tested later; here we can directly check conversion, path matching, precedence,
+    # and fallback behavior without a model obscuring the result.
     root_sampler = Samplers.RegularSampler(1//2)
     child_policy = LoggingPolicies.ModelLoggingPolicy(;
         variable_set = LoggingPolicies.VariableList([:keep_constant]),
     )
     compact_rules = [
         r"^/$" => root_sampler,
-        "/child\$" => child_policy,
+        "/child\$" => child_policy, # Note that this is a string, not a Regex.
     ]
 
     # Pair conversion supports both sampler shorthand and explicit model policies.
@@ -232,6 +289,8 @@ end
     @test child_rule.expression == r"/child$"
     @test child_rule.policy === child_policy
 
+    # Preserve the verbose construction form as well as the pair shorthand. The verbose
+    # form is useful when rules are assembled or documented individually.
     explicit_rule = LoggingPolicies.RegexLoggingPolicyRule(;
         expression = r"^/explicit$",
         policy = child_policy,
@@ -256,10 +315,14 @@ end
             explicit_default
     end
 
+    # An omitted default must be a fully initialized NullModelLoggingPolicy, rather than an
+    # undefined struct field or a bare NullSampler.
     defaulted = LoggingPolicies.RegexLoggingPolicy(compact_rules)
     @test LoggingPolicies.get_model_logging_policy(defaulted, "/other") isa
         LoggingPolicies.NullModelLoggingPolicy
 
+    # Both expressions match the root. The broad rule comes first deliberately to establish
+    # that rule order, not specificity, determines the result.
     first_match = LoggingPolicies.RegexLoggingPolicy(
         [
             r"^/" => LoggingPolicies.NullModelLoggingPolicy(),
@@ -269,6 +332,7 @@ end
     @test LoggingPolicies.get_model_logging_policy(first_match, "/") isa
         LoggingPolicies.NullModelLoggingPolicy
 
+    # The non-regex policies cover the common cases where path matching is unnecessary.
     all_pass_policy = LoggingPolicies.AllPassLoggingPolicy()
     uniform_policy = LoggingPolicies.UniformLoggingPolicy(; policy = child_policy)
     @test LoggingPolicies.get_model_logging_policy(all_pass_policy, "/anything") isa
@@ -278,9 +342,11 @@ end
 
 end
 
-
 @testset "variable selection in model histories" begin
 
+    # Apply a selective policy only to the root and an all-pass default to its child. This
+    # distinguishes per-model variable selection from recursive sampler traversal: storage
+    # decisions are made independently for each path during log construction.
     root_policy = LoggingPolicies.ModelLoggingPolicy(;
         variable_set = LoggingPolicies.VariableList(string.(SELECTED_VARIABLES)),
     )
@@ -293,6 +359,8 @@ end
     child_history = history["/child"]
 
     # A variable set is applied consistently to constants and every state/output category.
+    # The nonempty histories also confirm that selected containers remain connected to the
+    # runtime logging functions, rather than merely being created during setup.
     assert_selected_variables(root_history)
     @test root_history["keep_constant"] == 1.0
     @test_throws ErrorException root_history["drop_constant"]
@@ -310,7 +378,8 @@ end
     @test length(keys(child_history.discrete_outputs)) == 2
 
     # A null policy retains the hierarchy as structural model-history nodes without
-    # allocating variable containers or recording samples.
+    # allocating variable containers or recording samples. Retaining the nodes makes paths
+    # and descendants navigable even when a model contributes no variables of its own.
     null_history = run_logging_simulation(LoggingPolicies.UniformLoggingPolicy(;
         policy = LoggingPolicies.NullModelLoggingPolicy(),
     ))
@@ -328,8 +397,13 @@ end
 
 @testset "regular sampling and subtree traversal" begin
 
+    # This is the central hierarchical-sampling test. The child always has a complete
+    # sampler; only the root's continue_to_submodels setting changes. That isolates whether
+    # a rejected parent sample prevents or permits the child's independent decision.
+
     # An offset sampler rejects the initial discrete values and records both root and child
-    # only at matching accepted times when the root gates its subtree.
+    # only at matching accepted times when the root gates its subtree. The absence of t=0
+    # specifically verifies that initial discrete values obey the sampler.
     gated_policy = LoggingPolicies.RegexLoggingPolicy(
         [
             r"^/$" => Samplers.RegularSampler(1//2, 1//4),
@@ -346,7 +420,8 @@ end
     end
 
     # Continuing traversal on rejected root samples lets the child retain its own complete
-    # sampling behavior while the root remains decimated.
+    # sampling behavior while the root remains decimated. The root therefore records the
+    # half-second grid, while the child sees the solver's complete quarter-second grid.
     traversing_policy = LoggingPolicies.RegexLoggingPolicy(
         [
             r"^/$" => Samplers.RegularSampler(1//2, 0, true),
@@ -365,6 +440,9 @@ end
 
 @testset "independent state, output, and submodel directives" begin
 
+    # RegularSampler treats states and outputs alike, so use a fixed SamplingDirective to
+    # prove the three flags are honored independently. Continuing to models is important:
+    # it lets the child use the all-pass fallback even though root states are suppressed.
     output_only = Samplers.SamplingDirective(;
         log_states = false,
         log_outputs = true,
@@ -376,6 +454,7 @@ end
     )
     history = run_logging_simulation(policy)
 
+    # Both continuous and discrete variants of each category must follow the same flag.
     @test isempty(history["/"]["keep_continuous_state"].time)
     @test isempty(history["/"]["keep_discrete_state"].time)
     @test !isempty(history["/"]["keep_continuous_output"].time)
@@ -387,12 +466,17 @@ end
 
 @testset "filtered HDF5 logs" begin
 
+    # HDF5 uses the same ModelHistory interface as an in-memory log, but it also writes a
+    # separate list of variable names as metadata. A filtered log is valid only if both the
+    # time-series groups and that metadata describe precisely the same selected variables.
     selected_policy = LoggingPolicies.UniformLoggingPolicy(;
         policy = LoggingPolicies.ModelLoggingPolicy(;
             variable_set = LoggingPolicies.VariableList(SELECTED_VARIABLES),
         ),
     )
 
+    # Use an isolated directory because HDF5 logs own open file handles and the test creates
+    # both a direct-to-disk log and a saved copy of an in-memory log.
     mktempdir() do directory
 
         # Direct-to-HDF5 logging stores metadata for exactly the selected variables, so the
@@ -409,6 +493,8 @@ end
         assert_selected_variables(history["/child"])
         Logs.close_log(history.log)
 
+        # Reloading is the important regression check: stale metadata for a dropped variable
+        # would make the loader search for a time-series group that was never created.
         loaded_log, loaded_history = Logs.load_hdf5_log(filename)
         assert_selected_variables(loaded_history)
         assert_selected_variables(loaded_history["child"])
@@ -416,8 +502,8 @@ end
         @test collect(loaded_history["keep_continuous_state"].data) == expected_data
         Logs.close_log(loaded_log)
 
-        # Saving a filtered in-memory log uses the same on-disk representation and retains
-        # the selected structure when loaded again.
+        # Saving a filtered in-memory log follows a separate code path from direct HDF5
+        # logging. It should nevertheless produce the same selected on-disk structure.
         basic_history = run_logging_simulation(selected_policy)
         saved_filename = joinpath(directory, "saved_filtered_log.h5")
         Logs.save_log_to_hdf5(saved_filename, basic_history.log)
@@ -429,6 +515,5 @@ end
     end
 
 end
-
 
 end # TestLoggingPolicies
