@@ -1,6 +1,6 @@
 """
 This module contains the different log types: `BasicLog` (the default), `NullLog` (which
-disables logging), and `HDF5Log` (available after importing HDF5).
+disables logging), and `HDF5Log` (available after importing HDF5Vectors).
 """
 module Logs
 

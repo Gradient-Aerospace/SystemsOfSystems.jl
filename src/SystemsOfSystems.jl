@@ -16,7 +16,8 @@ export Dimension, TimeSeries,
     AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
     is_triggering, next_trigger_time,
     KEEP_T_NEXT, NO_T_NEXT,
-    is_regular_step_triggering, next_regular_time
+    is_regular_step_triggering, next_regular_time,
+    Samplers, LoggingPolicies
 
 using Random: Xoshiro, randn
 

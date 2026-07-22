@@ -9,7 +9,9 @@ extend `AbstractSampler` to implement other policies.
 """
 module Samplers
 
-export get_sampling_directive, should_log_states, should_log_outputs, should_log_models
+export AbstractSampler,
+    get_sampling_directive, should_log_states, should_log_outputs, should_log_models,
+    SamplingDirective, CompleteSampler, NullSampler, RegularSampler
 
 using ..SimulationTimes: ExactTime, exact_time
 using ..Schedules: is_regular_step_triggering
