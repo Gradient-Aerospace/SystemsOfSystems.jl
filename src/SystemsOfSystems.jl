@@ -935,7 +935,7 @@ function log_continuous_state_updates!(
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xc[fn], t_f, prior_xc[fn])
             if include_updated_continuous_states
-                push!(mh_xc[fn], float(t), uo_updates[fn])
+                push!(mh_xc[fn], t_f, uo_updates[fn])
             end
         end
     end
