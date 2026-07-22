@@ -198,17 +198,55 @@ function complete_model_rates(
     end
 end
 
+# Expanding the submodel tuple at generation time avoids both a many-input map and recursive
+# Base.tail specialization. The generated body contains one ordinary propagate call per
+# submodel; the hierarchical propagation logic remains in `propagate`.
+@generated function propagate_model_values(
+    submodels::S,
+    gains::G,
+    model_rates_at_stages::R,
+) where {S <: NamedTuple, G <: Tuple, R <: Tuple}
+
+    names = fieldnames(S)
+    values = map(enumerate(names)) do (index, name)
+        rates = Expr(
+            :tuple,
+            map(1:fieldcount(R)) do stage_index
+                stage_type = fieldtype(R, stage_index)
+                if hasfield(stage_type, name)
+                    return :(
+                        getfield(
+                            getfield(model_rates_at_stages, $stage_index),
+                            $(QuoteNode(name)),
+                        )
+                    )
+                else
+                    return :(RatesOutput())
+                end
+            end...,
+        )
+        return :(
+            propagate(
+                getfield(submodels, $index),
+                gains,
+                $rates,
+            )
+        )
+    end
+    return :(
+        NamedTuple{$(QuoteNode(names))}(
+            $(Expr(:tuple, values...)),
+        )
+    )
+
+end
+
 function propagate_models(
     submodels::NamedTuple,
     gains::Tuple,
     model_rates_at_stages::Tuple,
 )
-    complete_rates = complete_model_rates(submodels, model_rates_at_stages)
-    return NamedTuple{fieldnames(typeof(submodels))}(
-        map(fieldnames(typeof(submodels))) do f
-            propagate(submodels[f], gains, map(r -> getproperty(r, f), complete_rates))
-        end
-    )
+    return propagate_model_values(submodels, gains, model_rates_at_stages)
 end
 
 """

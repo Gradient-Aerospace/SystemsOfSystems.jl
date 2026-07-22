@@ -1073,6 +1073,33 @@ function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) 
     return t_next_from_this_model
 end
 
+function prepend_model_stop_path(stop::ModelRequestedStop, field::Symbol)
+    child_path = stop.model_path == "/" ? "" : stop.model_path
+    return ModelRequestedStop(
+        "/models/$field$child_path",
+        stop.reason,
+    )
+end
+prepend_model_stop_path(stop, ::Symbol) = stop
+
+# A generated straight-line traversal preserves named-tuple field order without the
+# recursive Base.tail types that become expensive to infer for wide model hierarchies. Each
+# emitted block performs the ordinary recursive search for one child and returns early
+# when that child contains the first request.
+@generated function find_model_requested_stop_in_models(models::M) where {M <: NamedTuple}
+
+    statements = map(fieldnames(M)) do field
+        return quote
+            stop = find_model_requested_stop(getfield(models, $(QuoteNode(field))))
+            if !isnothing(stop)
+                return prepend_model_stop_path(stop, $(QuoteNode(field)))
+            end
+        end
+    end
+    return Expr(:block, statements..., :(return nothing))
+
+end
+
 """
     find_model_requested_stop(output)
 
@@ -1089,31 +1116,7 @@ function find_model_requested_stop(output)
     if output.stop
         return ModelRequestedStop("/", "The model requested that the simulation stop")
     end
-
-    # TODO: This loop allocates, and that seems unnecessary.
-    for field in fieldnames(typeof(output.models))
-
-        stop = find_model_requested_stop(output.models[field])
-        if !isnothing(stop)
-
-            # We build the model_path in reverse. This prevents the need for us to build a
-            # model path for every model, when we only care about the model path once, when
-            # we stop.
-            if stop isa ModelRequestedStop
-                child_path = stop.model_path == "/" ? "" : stop.model_path
-                return ModelRequestedStop(
-                    "/models/$field$child_path",
-                    stop.reason,
-                )
-            else
-                return stop
-            end
-
-        end
-
-    end
-
-    return nothing
+    return find_model_requested_stop_in_models(output.models)
 
 end
 
