@@ -5,7 +5,9 @@ import HDF5
 using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
-using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog, HDF5LogOptions, create_time_series_for_model!
+using SystemsOfSystems.LoggingPolicies: is_variable_in_set
+using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog,
+    HDF5LogOptions, create_time_series_for_model!
 
 import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
     record_model_description, close_log,
@@ -99,7 +101,12 @@ function record_constant(constant_group, v, breadcrumbs, name)
     constant_group["units"] = String[]
 end
 
-function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescription)
+function record_model_description(
+    log::HDF5Log,
+    breadcrumbs,
+    md::ModelDescription,
+    variable_set,
+)
 
     # Get the ground started.
     group_path = join("/models/" * el for el in breadcrumbs)
@@ -120,6 +127,9 @@ function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescriptio
     constants_group = HDF5.create_group(group, "constants")
     saved_constants = String[]
     for (k, v) in pairs(md.constants)
+        if !is_variable_in_set(k, variable_set)
+            continue
+        end
         constant_group = HDF5.create_group(constants_group, string(k))
         try
             record_constant(constant_group, v, breadcrumbs, k)
@@ -136,10 +146,22 @@ function record_model_description(log::HDF5Log, breadcrumbs, md::ModelDescriptio
     names_group_path = group_path * "/names"
     names_group = HDF5.create_group(log.fid, names_group_path)
     names_group["constants"] = saved_constants
-    names_group["continuous_states"] = String[string(k) for k in keys(md.continuous_states)]
-    names_group["discrete_states"] = String[string(k) for k in keys(md.discrete_states)]
-    names_group["continuous_outputs"] = String[string(k) for k in keys(md.continuous_outputs)]
-    names_group["discrete_outputs"] = String[string(k) for k in keys(md.discrete_outputs)]
+    names_group["continuous_states"] = String[
+        string(k)
+        for k in keys(md.continuous_states) if is_variable_in_set(k, variable_set)
+    ]
+    names_group["discrete_states"] = String[
+        string(k)
+        for k in keys(md.discrete_states) if is_variable_in_set(k, variable_set)
+    ]
+    names_group["continuous_outputs"] = String[
+        string(k)
+        for k in keys(md.continuous_outputs) if is_variable_in_set(k, variable_set)
+    ]
+    names_group["discrete_outputs"] = String[
+        string(k)
+        for k in keys(md.discrete_outputs) if is_variable_in_set(k, variable_set)
+    ]
 
     return nothing
 

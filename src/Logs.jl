@@ -25,6 +25,8 @@ recursive submodel histories. `path` identifies the model, using `/` for the roo
 decides which simulation-loop samples record this model and whether logging continues into
 its submodels.
 
+A model logging policy may omit constants and time-series fields from these named tuples.
+
 `ModelHistory` is mutable to give large, recursively parameterized histories reference
 semantics. Its fields are established during log construction and are not normally
 reassigned; samples are appended to the contained time series.
@@ -164,7 +166,7 @@ Functions:
 abstract type AbstractLog end
 
 # This isn't used by the BasicLog, but it lets the HDF5Log record extra details.
-function record_model_description(log::AbstractLog, breadcrumbs, md)
+function record_model_description(log::AbstractLog, breadcrumbs, md, variable_set)
     nothing
 end
 
@@ -209,23 +211,31 @@ function create_time_series_for_model!(
     variable_set = get_variable_set(model_logging_policy)
     sampler = get_sampler(model_logging_policy)
 
-    # Right now, we assume we will at some point log all variables. However, we could also
-    # allow the sampler to control which variables are logged. Then, we wouldn't even need
-    # to create the time series for things we'll never log.
-
     # Record any extra stuff.
-    record_model_description(log, breadcrumbs, md)
+    record_model_description(log, breadcrumbs, md, variable_set)
 
     # Create the time histories.
     mh = ModelHistory(;
         type = md.type,
         path = model_path,
         constants = store_constants(md.constants, variable_set),
-        continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, variable_set, time_dimension; discrete = false),
+        continuous_states = create_time_series_for_set(
+            log, breadcrumbs, md.continuous_states, variable_set, time_dimension;
+            discrete = false,
+        ),
         # TODO: Record derivatives too.
-        discrete_states = create_time_series_for_set(log, breadcrumbs, md.discrete_states, variable_set, time_dimension; discrete = true),
-        continuous_outputs = create_time_series_for_set(log, breadcrumbs, md.continuous_outputs, variable_set, time_dimension; discrete = false),
-        discrete_outputs = create_time_series_for_set(log, breadcrumbs, md.discrete_outputs, variable_set, time_dimension; discrete = true),
+        discrete_states = create_time_series_for_set(
+            log, breadcrumbs, md.discrete_states, variable_set, time_dimension;
+            discrete = true,
+        ),
+        continuous_outputs = create_time_series_for_set(
+            log, breadcrumbs, md.continuous_outputs, variable_set, time_dimension;
+            discrete = false,
+        ),
+        discrete_outputs = create_time_series_for_set(
+            log, breadcrumbs, md.discrete_outputs, variable_set, time_dimension;
+            discrete = true,
+        ),
         models = NamedTuple(
             f => create_time_series_for_model!(
                 log, vcat(breadcrumbs, string(f)), m,
@@ -284,7 +294,7 @@ export BasicLogOptions
 
 Configure an in-memory `BasicLog`.
 
-`logging_policy` assigns a model logging policy every model, by path. The default
+`logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
 """
 @kwdef struct BasicLogOptions <: AbstractLogOptions
@@ -409,7 +419,7 @@ export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 Configure an HDF5-backed log written to `filename`.
 
-`logging_policy` assigns a model logging policy every model, by path. The default
+`logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
 
 An HDF5 log records the same selected continuous and discrete states, outputs, constants,
