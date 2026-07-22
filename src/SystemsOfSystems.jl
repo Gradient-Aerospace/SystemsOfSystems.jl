@@ -43,7 +43,7 @@ include("Hooks.jl")
 include("Samplers.jl")
 using .Samplers
 
-include("ModelFilters.jl") # TODO: git mv this file.
+include("LoggingPolicies.jl")
 using .LoggingPolicies
 
 #########################
