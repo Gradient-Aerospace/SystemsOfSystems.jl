@@ -879,14 +879,21 @@ function log_initial_discrete_stuff!(
     mh::Logs.ModelHistory,
     md::TypedModelDescription,
 )
-    for fn in keys(mh.discrete_states)
-        push!(mh.discrete_states[fn], float(t), md.discrete_states[fn]) # <- must be in MD
+    sampling_directive = get_sampling_directive(t, mh.sampler)
+    if should_log_states(sampling_directive)
+        for fn in keys(mh.discrete_states)
+            push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
+        end
     end
-    for fn in keys(mh.discrete_outputs)
-        push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
+    if should_log_outputs(sampling_directive)
+        for fn in keys(mh.discrete_outputs)
+            push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
+        end
     end
-    for fn in keys(mh.models)
-        log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
+    if should_log_models(sampling_directive)
+        for fn in keys(mh.models)
+            log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
+        end
     end
 end
 
