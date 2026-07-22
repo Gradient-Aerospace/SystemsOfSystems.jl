@@ -448,6 +448,8 @@ This is mutable only to put it on the heap.
     discrete_random_variables::WDT
     schedules::ST
     models::MT
+    models_have_continuous_random_variables::Bool
+    models_have_discrete_random_variables::Bool
     resources::RT
     t_next::ExactTime
 end
@@ -544,6 +546,25 @@ function create_typed_model_description!(
         for (field, payload) in zip(fieldnames(typeof(desc.resources)), payloads)
     )
 
+    # Create the typed submodels first so that we can record which random-variable draw
+    # processes need to continue into them during the simulation loop.
+    models = NamedTuple(
+        field => create_typed_model_description!(
+            manager,
+            desc.models[field], seed / string(field), outdir,
+            model_path * "/" * string(field)
+        )
+        for field in fieldnames(typeof(desc.models))
+    )
+    models_have_continuous_random_variables = any(models) do model
+        return !isempty(model.continuous_random_variables) ||
+            model.models_have_continuous_random_variables
+    end
+    models_have_discrete_random_variables = any(models) do model
+        return !isempty(model.discrete_random_variables) ||
+            model.models_have_discrete_random_variables
+    end
+
     # Strip the "fluff" from everything, returning just the types we'll need in the loop.
     return TypedModelDescription(;
         type = desc.type,
@@ -559,14 +580,9 @@ function create_typed_model_description!(
             desc.discrete_random_variables, seed,
         ),
         schedules = map(strip_fluff_from_variable, desc.schedules),
-        models = NamedTuple(
-            field => create_typed_model_description!(
-                manager,
-                desc.models[field], seed / string(field), outdir,
-                model_path * "/" * string(field)
-            )
-            for field in fieldnames(typeof(desc.models))
-        ),
+        models,
+        models_have_continuous_random_variables,
+        models_have_discrete_random_variables,
         resources,
         t_next = exact_time(desc.t_next),
     )
@@ -1010,25 +1026,60 @@ function draw_drvs(drvs, t)
 end
 
 # We turn off inlining here. This appears to help keep this allocation-free.
-@noinline function draw_wc(t_last, t_next, ommd::TypedModelDescription, msd::ModelStateDescription)
+@noinline function draw_wc(
+    t_last,
+    t_next,
+    ommd::TypedModelDescription,
+    msd::ModelStateDescription,
+)
+
+    # Reuse the entire state description when neither this model nor its descendants have
+    # any continuous random variables.
+    if isempty(ommd.continuous_random_variables) &&
+        !ommd.models_have_continuous_random_variables
+        return msd
+    end
+
+    models = if ommd.models_have_continuous_random_variables
+        map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+        end
+    else
+        msd.models
+    end
+
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
             ommd.continuous_random_variables, t_last, t_next,
         ),
-        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
-        end,
+        models,
     )
+
 end
 
 # We turn off inlining here. This appears to help keep this allocation-free.
 @noinline function draw_wd(t, ommd::TypedModelDescription, msd::ModelStateDescription)
+
+    # Reuse the entire state description when neither this model nor its descendants have
+    # any discrete random variables.
+    if isempty(ommd.discrete_random_variables) &&
+        !ommd.models_have_discrete_random_variables
+        return msd
+    end
+
+    models = if ommd.models_have_discrete_random_variables
+        map(ommd.models, msd.models) do ommd_submodel, msd_submodel
+            draw_wd(t, ommd_submodel, msd_submodel)
+        end
+    else
+        msd.models
+    end
+
     return copy_model_state_description_except(msd;
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
-        models = map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wd(t, ommd_submodel, msd_submodel)
-        end,
+        models,
     )
+
 end
 
 #########
