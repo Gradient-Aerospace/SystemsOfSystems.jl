@@ -81,18 +81,14 @@ end
     schedule = RegularSchedule(; period = 1//10)
     closure_calls = Ref(0)
 
-    # An unrelated accepted sample produces the ordinary empty update and, importantly,
-    # does not evaluate the model's scheduled-update body.
+    # An unrelated accepted sample produces `nothing` and, importantly, does not evaluate
+    # the model's scheduled-update body.
     inactive_update = on_triggering(schedule, 1//20) do
         closure_calls[] += 1
         return UpdatesOutput(; updates = (; count = 1,))
     end
     @test iszero(closure_calls[])
-    @test isempty(inactive_update.updates)
-    @test isempty(inactive_update.outputs)
-    @test isempty(inactive_update.models)
-    @test inactive_update.t_next == KEEP_T_NEXT
-    @test !inactive_update.stop
+    @test isnothing(inactive_update)
 
     # At a schedule occurrence, the helper evaluates the body exactly once and preserves
     # its complete UpdatesOutput rather than interpreting or rebuilding it.

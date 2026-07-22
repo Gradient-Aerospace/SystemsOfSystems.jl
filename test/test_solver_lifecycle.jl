@@ -30,7 +30,7 @@ using SystemsOfSystems: Solvers
         updates_fcn = (t, model) -> if t == 1
             UpdatesOutput(; updates = (; x = 10.,),)
         else
-            UpdatesOutput()
+            nothing
         end,
         options = SimOptions(;
             solver = Solvers.RungeKutta4Options(; dt = 1),

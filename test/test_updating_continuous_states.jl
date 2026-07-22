@@ -41,7 +41,7 @@ end
                 ),
             )
         else
-            UpdatesOutput()
+            nothing
         end,
     )
 
@@ -90,7 +90,7 @@ end
                 updates = (; x = 10.),
             )
         else
-            UpdatesOutput()
+            nothing
         end,
         options = SimOptions(;
             hooks = [StopAtOneSecondOptions(),],

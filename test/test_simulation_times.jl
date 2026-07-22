@@ -110,6 +110,28 @@ end
 
 end
 
+@testset "nothing is a no-op discrete result" begin
+
+    # Returning `nothing` must preserve the exact ModelStateDescription object. Besides
+    # defining the result semantically, object identity guards the intended allocation-free
+    # fast path. Stop traversal must likewise interpret it as no request.
+    model_state = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        discrete_states = (; count = 1,),
+        t_next = 1//2,
+    )
+
+    @test SystemsOfSystems.update(model_state, nothing) === model_state
+    @test isnothing(SystemsOfSystems.find_model_requested_stop(nothing))
+
+    # Empty UpdatesOutput values remain valid for compatibility, although only `nothing`
+    # promises to return the original object without traversing its contents.
+    updated_model_state = SystemsOfSystems.update(model_state, UpdatesOutput())
+    @test updated_model_state.discrete_states == model_state.discrete_states
+    @test updated_model_state.t_next == model_state.t_next
+    @test isnothing(SystemsOfSystems.find_model_requested_stop(UpdatesOutput()))
+
+end
+
 @testset "independent exact model clocks at a large epoch" begin
 
     # Two nested models request unrelated periods and offsets. Each model owns only its
@@ -148,7 +170,7 @@ end
                     t_next = next_regular_time(t, period_a, offset_a),
                 )
             else
-                UpdatesOutput()
+                nothing
             end
             update_b = if is_regular_step_triggering(t, period_b, offset_b)
                 push!(triggers_b, t)
@@ -157,7 +179,7 @@ end
                     t_next = next_regular_time(t, period_b, offset_b),
                 )
             else
-                UpdatesOutput()
+                nothing
             end
 
             return UpdatesOutput(; models = (; a = update_a, b = update_b,),)

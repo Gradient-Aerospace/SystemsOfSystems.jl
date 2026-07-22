@@ -222,7 +222,7 @@ end
                     t_next = t + model.dt,
                 )
             else
-                UpdatesOutput()
+                nothing
             end
         end,
         t = (0, t_end),
