@@ -232,6 +232,31 @@ end
 
 end
 
+@testset "stop traversal handles wide model hierarchies" begin
+
+    # Wide named tuples caused the recursive Base.tail implementation to specialize on a
+    # long chain of successively shorter tuple types. Put the only stop in the final field
+    # so the generated implementation must visit every emitted child expression.
+    n_models = 64
+    names = ntuple(index -> Symbol("model_$index"), Val(n_models))
+    models = NamedTuple{names}(
+        ntuple(Val(n_models)) do index
+            RatesOutput(; stop = index == n_models)
+        end,
+    )
+
+    stop = @inferred(
+        Union{Nothing, SystemsOfSystems.ModelRequestedStop},
+        SystemsOfSystems.find_model_requested_stop(
+            RatesOutput(; models),
+        ),
+    )
+
+    @test stop isa SystemsOfSystems.ModelRequestedStop
+    @test stop.model_path == "/models/model_64"
+
+end
+
 @testset "an update can stop after its accepted sample" begin
 
     # The update at the accepted endpoint is applied before its stop request takes effect.

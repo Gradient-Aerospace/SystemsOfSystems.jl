@@ -2,7 +2,62 @@ module TestSolverOptions
 
 using Test
 using SystemsOfSystems
-using SystemsOfSystems: Solvers
+using SystemsOfSystems: ContinuousProblems, Solvers
+
+@testset "wide model propagation" begin
+
+    # A wide, flat model hierarchy is where recursive Base.tail tuple processing becomes
+    # expensive for the compiler. Use enough fields to exercise the generated expansion
+    # while keeping the numerical result simple enough to verify field by field.
+    n_models = 64
+    names = ntuple(index -> Symbol("model_$index"), Val(n_models))
+    submodels = NamedTuple{names}(
+        ntuple(Val(n_models)) do index
+            SystemsOfSystems.ModelStateDescription{Nothing}(;
+                continuous_states = (; x = Float64(index)),
+            )
+        end,
+    )
+
+    # The two stages deliberately use different values so this verifies that the generated
+    # code selects the matching field from every stage, rather than accidentally reusing
+    # one model's rates.
+    function make_stage_rates(multiplier)
+        return NamedTuple{names}(
+            ntuple(Val(n_models)) do index
+                RatesOutput(; rates = (; x = multiplier * index))
+            end,
+        )
+    end
+
+    # RatesOutputs may omit submodels without continuous dynamics. Omit the final submodel
+    # from every stage to verify that the generated code supplies the same empty RatesOutput
+    # that the previous complete_model_rates path supplied.
+    function omit_final_model(stage)
+        return NamedTuple{Base.front(names)}(Base.front(Tuple(stage)))
+    end
+    gains = (1/4, 1/2)
+    first_stage = omit_final_model(make_stage_rates(1.))
+    second_stage = omit_final_model(make_stage_rates(2.))
+    model_rates_at_stages = (first_stage, second_stage)
+
+    propagated = @inferred ContinuousProblems.propagate_models(
+        submodels,
+        gains,
+        model_rates_at_stages,
+    )
+
+    @test keys(propagated) == names
+    for index in 1:n_models
+        initial_value = Float64(index)
+        expected_value = initial_value
+        if index < n_models
+            expected_value += gains[1] * index + gains[2] * 2 * index
+        end
+        @test propagated[index].continuous_states.x == expected_value
+    end
+
+end
 
 @testset "failed steps in DP54 for max_dt = $max_dt" for max_dt in (10//1, 1//10)
 
@@ -86,4 +141,3 @@ end
 end
 
 end # TestSolverOptions
-
