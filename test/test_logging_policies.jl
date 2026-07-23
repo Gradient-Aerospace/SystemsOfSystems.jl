@@ -147,6 +147,105 @@ function run_logging_simulation(logging_policy; log_options = nothing)
 
 end
 
+function sparse_update_model_description(; include_child = true)
+
+    # This hierarchy reproduces the failure mode that a complete update tree in the primary
+    # fixture cannot expose. Both models change once between regular logging samples and
+    # then disappear from later UpdatesOutput trees.
+    models = if include_child
+        (; child = sparse_update_model_description(; include_child = false))
+    else
+        (;)
+    end
+
+    return ModelDescription(;
+        discrete_states = (;
+            sampled_state = 0,
+        ),
+        discrete_outputs = (;
+            sampled_output = -1,
+        ),
+        models,
+    )
+
+end
+
+function sparse_update_rates(t, model)
+
+    # The simulation still needs a structurally complete RatesOutput tree even though this
+    # fixture has no continuous variables. Keeping the continuous side empty ensures every
+    # resulting sample comes from discrete logging.
+    models = if hasproperty(model, :child)
+        (; child = sparse_update_rates(t, model.child))
+    else
+        (;)
+    end
+
+    return RatesOutput(; models)
+
+end
+
+function sparse_updates(t, model)
+
+    # Emit exactly one state change and output event, halfway between the regular sampler's
+    # selected times. Later update results omit both variables and the child model entirely.
+    if t != 1//4
+        return UpdatesOutput()
+    end
+
+    models = if hasproperty(model, :child)
+        (; child = sparse_updates(t, model.child))
+    else
+        (;)
+    end
+    return UpdatesOutput(;
+        updates = (;
+            sampled_state = 1,
+        ),
+        outputs = (;
+            sampled_output = 1,
+        ),
+        models,
+    )
+
+end
+
+function run_sparse_update_simulation(logging_policy; log_options = nothing)
+
+    # Accepting either log implementation lets the same behavioral assertions exercise the
+    # in-memory and direct-to-HDF5 paths.
+    if isnothing(log_options)
+        log_options = Logs.BasicLogOptions(; logging_policy)
+    end
+
+    history, = simulate(
+        nothing;
+        init_fcn = (args...) -> sparse_update_model_description(),
+        rates_fcn = sparse_update_rates,
+        updates_fcn = sparse_updates,
+        t = (0, 1),
+        options = SimOptions(;
+            log = log_options,
+            solver = Solvers.RungeKutta4Options(; dt = 1//4),
+        ),
+    )
+    return history
+
+end
+
+function assert_regular_state_snapshots(root_history)
+
+    # A state exists at every selected time, including times when the current UpdatesOutput
+    # omits it. The off-grid output is ephemeral, so only its initialization value remains.
+    for model_history in (root_history, root_history["child"])
+        @test collect(model_history["sampled_state"].time) == [0.0, 0.5, 1.0]
+        @test collect(model_history["sampled_state"].data) == [0, 1, 1]
+        @test collect(model_history["sampled_output"].time) == [0.0]
+        @test collect(model_history["sampled_output"].data) == [-1]
+    end
+
+end
+
 function assert_selected_variables(model_history)
 
     # This helper intentionally inspects the five storage categories directly. Checking
@@ -203,13 +302,17 @@ end
     # Verify all three axes; checking only state logging could hide a regression in output
     # logging or recursive traversal.
     @test Samplers.should_log_states(complete)
+    @test !Samplers.should_snapshot_states(complete)
     @test Samplers.should_log_outputs(complete)
     @test Samplers.should_log_models(complete)
     @test !Samplers.should_log_states(null)
+    @test !Samplers.should_snapshot_states(null)
     @test !Samplers.should_log_outputs(null)
     @test !Samplers.should_log_models(null)
     @test Samplers.get_sampling_directive(0//1, states_only) === states_only
+    @test Samplers.SamplingDirective(true, false, false) == states_only
     @test Samplers.should_log_states(states_only)
+    @test !Samplers.should_snapshot_states(states_only)
     @test !Samplers.should_log_outputs(states_only)
     @test !Samplers.should_log_models(states_only)
 
@@ -231,11 +334,14 @@ end
     on_grid = Samplers.get_sampling_directive(3//4, keyword)
     off_grid = Samplers.get_sampling_directive(1//2, keyword)
     @test !Samplers.should_log_states(before_offset)
+    @test !Samplers.should_snapshot_states(before_offset)
     @test Samplers.should_log_models(before_offset)
     @test Samplers.should_log_states(on_grid)
+    @test Samplers.should_snapshot_states(on_grid)
     @test Samplers.should_log_outputs(on_grid)
     @test Samplers.should_log_models(on_grid)
     @test !Samplers.should_log_states(off_grid)
+    @test !Samplers.should_snapshot_states(off_grid)
     @test !Samplers.should_log_outputs(off_grid)
     @test Samplers.should_log_models(off_grid)
 
@@ -438,11 +544,58 @@ end
 
 end
 
+@testset "regular state snapshots preserve off-grid changes" begin
+
+    # The root controls when its complete-sampled child can be visited. At each permitted
+    # half-second time, both models must snapshot their current states even though neither
+    # appears in that time's UpdatesOutput tree.
+    policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/$" => Samplers.RegularSampler(1//2),
+            r"^/" => Samplers.CompleteSampler(),
+        ],
+    )
+    history = run_sparse_update_simulation(policy)
+    assert_regular_state_snapshots(history["/"])
+
+    # A regular sampler can also live below a complete parent. Its selected times must be
+    # consulted even when the parent's current UpdatesOutput omits that child. The root
+    # remains a sparse change-event history while the child forms regular snapshots.
+    child_sampling_policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/$" => Samplers.CompleteSampler(),
+            r"^/child$" => Samplers.RegularSampler(1//2),
+        ],
+    )
+    child_sampling_history = run_sparse_update_simulation(child_sampling_policy)
+    child_sampling_root = child_sampling_history["/"]
+    @test child_sampling_root["sampled_state"].time == [0.0, 0.25]
+    @test child_sampling_root["sampled_state"].data == [0, 1]
+    @test child_sampling_root["child"]["sampled_state"].time == [0.0, 0.5, 1.0]
+    @test child_sampling_root["child"]["sampled_state"].data == [0, 1, 1]
+
+    # Without regular sampling, CompleteSampler retains the original sparse change-event
+    # behavior. This guards against turning every accepted solver step into a redundant
+    # discrete-state sample while fixing the regular-snapshot path.
+    complete_history = run_sparse_update_simulation(
+        LoggingPolicies.AllPassLoggingPolicy(),
+    )
+    for model_path in ("/", "/child")
+        model_history = complete_history[model_path]
+        @test model_history["sampled_state"].time == [0.0, 0.25]
+        @test model_history["sampled_state"].data == [0, 1]
+        @test model_history["sampled_output"].time == [0.0, 0.25]
+        @test model_history["sampled_output"].data == [-1, 1]
+    end
+
+end
+
 @testset "independent state, output, and submodel directives" begin
 
-    # RegularSampler treats states and outputs alike, so use a fixed SamplingDirective to
-    # prove the three flags are honored independently. Continuing to models is important:
-    # it lets the child use the all-pass fallback even though root states are suppressed.
+    # RegularSampler selects states and outputs together, so use a fixed SamplingDirective
+    # to prove the three flags are honored independently. Continuing to models is
+    # important: it lets the child use the all-pass fallback even though root states are
+    # suppressed.
     output_only = Samplers.SamplingDirective(;
         log_states = false,
         log_outputs = true,
@@ -511,6 +664,35 @@ end
         assert_selected_variables(saved_history)
         assert_selected_variables(saved_history["child"])
         Logs.close_log(saved_log)
+
+    end
+
+end
+
+@testset "regular state snapshots in HDF5 logs" begin
+
+    # Direct-to-disk logging uses the same runtime functions but different TimeSeries
+    # storage. Repeating the sparse-update regression here ensures snapshot fallback values
+    # are appended correctly without relying on in-memory vector behavior.
+    policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/$" => Samplers.RegularSampler(1//2),
+            r"^/" => Samplers.CompleteSampler(),
+        ],
+    )
+    mktempdir() do directory
+
+        filename = joinpath(directory, "regular_state_snapshots.h5")
+        options = Logs.HDF5LogOptions(; filename, logging_policy = policy)
+        history = run_sparse_update_simulation(policy; log_options = options)
+        assert_regular_state_snapshots(history["/"])
+        Logs.close_log(history.log)
+
+        # Reloading verifies that both the snapshot values and their selected timestamps
+        # were persisted, rather than only being visible through the live HDF5 vectors.
+        loaded_log, loaded_history = Logs.load_hdf5_log(filename)
+        assert_regular_state_snapshots(loaded_history)
+        Logs.close_log(loaded_log)
 
     end
 

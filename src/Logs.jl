@@ -30,6 +30,10 @@ A model logging policy may omit constants and time-series fields from these name
 `ModelHistory` is mutable to give large, recursively parameterized histories reference
 semantics. Its fields are established during log construction and are not normally
 reassigned; samples are appended to the contained time series.
+
+`may_snapshot_states_in_subtree` caches whether a sampler in this subtree can request state
+snapshots. It lets sparse update logging avoid traversing complete or null subtrees that
+have no current update.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -49,6 +53,7 @@ reassigned; samples are appended to the contained time series.
     discrete_outputs::YDT
     models::MT
     sampler::ST = Samplers.CompleteSampler()
+    may_snapshot_states_in_subtree::Bool = false
 end
 
 function Base.keys(mh::ModelHistory)
@@ -245,6 +250,9 @@ function create_time_series_for_model!(
         ),
         sampler = sampler,
     )
+    mh.may_snapshot_states_in_subtree =
+        Samplers.may_snapshot_states(sampler) ||
+        any(model.may_snapshot_states_in_subtree for model in mh.models)
 
     # Put it in the dictionary of time histories.
     log[model_path] = mh

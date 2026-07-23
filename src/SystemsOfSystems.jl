@@ -898,7 +898,7 @@ function log_initial_discrete_stuff!(
     end
 end
 
-# This logs the results of updates_fcn.
+# This logs the results of updates_fcn and any state snapshots requested at that time.
 
 function log_discrete_stuff!(
     ::ExactTime, ::Float64,
@@ -909,10 +909,12 @@ function log_discrete_stuff!(
 )
 end
 
-function log_discrete_states!(t_f, mh_xd, uo_updates)
+function log_discrete_states!(t_f, mh_xd, uo_updates, prior_xd, snapshot_states)
     for fn in fieldnames(typeof(mh_xd))
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xd[fn], t_f, uo_updates[fn])
+        elseif snapshot_states
+            push!(mh_xd[fn], t_f, prior_xd[fn])
         end
     end
 end
@@ -938,14 +940,20 @@ function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
 end
 function log_discrete_models!(
     t, t_f, mh_models, uo_models, prior_models,
-    include_updated_continuous_states,
+    include_updated_continuous_states, snapshot_states,
 )
     for fn in fieldnames(typeof(mh_models))
         if hasfield(typeof(uo_models), fn)
             log_discrete_stuff!(
                 t, t_f,
                 mh_models[fn], uo_models[fn], prior_models[fn],
-                include_updated_continuous_states,
+                include_updated_continuous_states, snapshot_states,
+            )
+        elseif snapshot_states || mh_models[fn].may_snapshot_states_in_subtree
+            log_discrete_stuff!(
+                t, t_f,
+                mh_models[fn], UpdatesOutput(), prior_models[fn],
+                include_updated_continuous_states, snapshot_states,
             )
         end
     end
@@ -957,11 +965,14 @@ function log_discrete_stuff!(
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
-    include_updated_continuous_states::Bool
+    include_updated_continuous_states::Bool,
+    ancestor_snapshot_states::Bool = false,
 )
 
     # What our instructions are for logging this sample.
     sampling_directive = get_sampling_directive(t, mh.sampler)
+    snapshot_states =
+        ancestor_snapshot_states || should_snapshot_states(sampling_directive)
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
@@ -970,7 +981,9 @@ function log_discrete_stuff!(
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
     if should_log_states(sampling_directive)
-        log_discrete_states!(t_f, mh.discrete_states, uo.updates)
+        log_discrete_states!(
+            t_f, mh.discrete_states, uo.updates, prior.discrete_states, snapshot_states,
+        )
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
             include_updated_continuous_states,
@@ -982,12 +995,12 @@ function log_discrete_stuff!(
         log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
     end
 
-    # Continue logging for whatever submodels we're supposed to log for (where there were
-    # provided anyway).
+    # Continue into permitted submodels. Snapshot-capable subtrees may need to be visited
+    # even when the current update result omits them.
     if should_log_models(sampling_directive)
         log_discrete_models!(
             t, t_f, mh.models, uo.models, prior.models,
-            include_updated_continuous_states,
+            include_updated_continuous_states, snapshot_states,
         )
     end
 
