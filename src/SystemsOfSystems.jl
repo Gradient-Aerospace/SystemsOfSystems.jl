@@ -230,13 +230,15 @@ RatesOutput(;
 ) = RatesOutput(rates, outputs, models, stop)
 
 """
-Describes a model's discrete-time updates and outputs.
+Describes a model's discrete-time updates and outputs. A model that has no updates, outputs,
+replacement `t_next`, or stop request at a sample may return `nothing` instead of an empty
+`UpdatesOutput()`.
 
 * `updates`: A named tuple mapping state name (can be a continuous or discrete state) to the
    updated value
 * `outputs`: A named tuple of discrete-time outputs (must match the original
   `ModelDescription`).
-* `models`: A named tuple contains the `UpdatesOutput` for each submodel.
+* `models`: A named tuple containing the `UpdatesOutput` or `nothing` for each submodel.
 * `t_next`: A replacement for the model's next requested time. When omitted, it defaults to
   `KEEP_T_NEXT` and retains the previous request. `NO_T_NEXT` cancels a finite request.
 * `stop`: Set to true to request that the simulation stop after this update is accepted.
@@ -260,7 +262,7 @@ UpdatesOutput(;
     on_triggering(f, schedule::AbstractSchedule, t)
 
 Run `f` and return its result when `schedule` is triggering at official time `t`; otherwise,
-return an empty `UpdatesOutput` without evaluating `f`.
+return `nothing` without evaluating `f`.
 
 The function argument comes first so model update code can use Julia's `do` syntax:
 
@@ -273,7 +275,7 @@ end
 ```
 """
 @inline function on_triggering(f, schedule::AbstractSchedule, t)
-    return is_triggering(schedule, t) ? f() : UpdatesOutput()
+    return is_triggering(schedule, t) ? f() : nothing
 end
 
 """
@@ -920,6 +922,12 @@ function log_discrete_stuff!(
 )
 end
 
+function log_discrete_stuff!(
+    t_f, mh, ::Nothing, msd::ModelStateDescription,
+    include_updated_continuous_states::Bool,
+)
+end
+
 function log_discrete_states!(t_f, mh_xd, uo_updates)
     for fn in fieldnames(typeof(mh_xd))
         if hasfield(typeof(uo_updates), fn)
@@ -1011,7 +1019,7 @@ end
 # restrictive. If types can change, should MSD know about that ahead of time?
 #
 # `submodels` is a named tuple of MSDs.
-# `submodels_updates` is a named tuple (same fields) of UpdatesOutput.
+# `submodels_updates` is a named tuple of UpdatesOutput or `nothing` values.
 #
 function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T2}
 
@@ -1019,7 +1027,7 @@ function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T
     # a continuous-only model as a submodel, there's no point in "updating" it (a discrete
     # operation). However, in order to make this operation efficient, we'll build a
     # "complete" set of updates, where every model is listed, and if it wasn't in the
-    # original submodels_updates, then it will be given an empty UpdatesOutput(). Then,
+    # original submodels_updates, then it will be given `nothing`. Then,
     # we'll have a named tuple that matches submodels in fields (including their order),
     # and we can just map out `update` function to the corresponding submodels and updates.
     #
@@ -1031,7 +1039,7 @@ function update_submodels(submodels::T1, submodels_updates::T2)::T1 where {T1, T
             if hasfield(T2, f)
                 submodels_updates[f]
             else
-                UpdatesOutput()
+                nothing
             end
         end
     )
@@ -1056,6 +1064,8 @@ function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
         t_next = update_model_t_next(msd.t_next, updates_output.t_next),
     )
 end
+
+update(msd::ModelStateDescription, ::Nothing) = msd
 
 function find_soonest_t_next_from_models(t_last, msd::ModelStateDescription{T}) where {T}
     t_next_from_this_model = if time_isless(t_last, msd.t_next)
@@ -1119,6 +1129,8 @@ function find_model_requested_stop(output)
     return find_model_requested_stop_in_models(output.models)
 
 end
+
+find_model_requested_stop(::Nothing) = nothing
 
 # Preserve the first stop reason encountered while allowing the rest of an accepted sample
 # to complete. In particular, hooks and the discrete update still run after an accepted
@@ -1627,7 +1639,8 @@ Runs a simulation, returning the time history, end time, and final model.
   element of the above `t` input. This must return a `ModelDescription`.
 * `rates_fcn`: Will be called with `(t, model)` and is expected to return a `RatesOutput`.
 * `updates_fcn`: Will be called with `(t, model)` and is expected to return an
-  `UpdatesOutput`.
+  `UpdatesOutput`, or `nothing` when there are no updates, outputs, replacement `t_next`, or
+  stop request.
 * `close_fcn`: Will be called when simulation completes (even if an error is caught) with
   `(t, model)`. No return value is expected.
 * `seed`: A top-level seed (Int) to control all random number generation in the sim. The
@@ -1639,7 +1652,7 @@ function simulate(
     t,
     init_fcn,
     rates_fcn = (args...) -> RatesOutput(),
-    updates_fcn = (args...) -> UpdatesOutput(),
+    updates_fcn = (args...) -> nothing,
     close_fcn = (t, model) -> nothing,
     seed::Union{Integer, BranchingSeed} = 0,
     options::SimOptions = SimOptions(),
