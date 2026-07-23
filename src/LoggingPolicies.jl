@@ -35,7 +35,6 @@ log = Logs.BasicLogOptions(;
             r"^/\$" => LoggingPolicies.ModelLoggingPolicy(;
                 sampler = Samplers.RegularSampler(;
                     period = 1//10,
-                    continue_to_submodels = false,
                 ),
             ),
             # Sample the children of some_model more coarsely (1s).
@@ -64,13 +63,11 @@ Let's break that apart. The `RegexLoggingPolicy` uses regular expressions to map
 to model logging policies. The first "hit" in the vector is used. In this case, the first
 rule is `r"^/\$"`, which will only match exactly `"/"`. Therefore, the root model will
 sample at 10 Hz (or rather, it will sample at all simulation times that align with a 0.1s
-step). At other times, `continue_to_submodels = false` prevents logging from continuing to
-submodels, so the root sampler also limits when any descendant can log.
+step). Its sampler affects only the root model.
 
 The next item matches any model path starting with `"/some_model/"`, so all of the children
-of `"/some_model"`, and samples them more slowly. (Note that sampling them faster would
-have no effect since the top-level model only samples at 10 Hz and has
-`continue_to_submodels = false`.)
+of `"/some_model"`, and samples them more slowly. A model's sampler never controls its
+children; each model independently uses the first matching rule or the policy's default.
 
 The next item matches exactly one model by complete name, and it excludes certain variables
 from logging.
@@ -195,9 +192,9 @@ get_variable_set(::AllPassModelLoggingPolicy) = AllVariables()
 """
     NullModelLoggingPolicy()
 
-A model logging policy that stores none of the model's variables and prevents logging from
-traversing into its submodels. The model history itself is still present as a structural
-node in the log.
+A model logging policy that stores none of the model's variables. The model history itself
+is still present as a structural node in the log, and submodels use their independently
+assigned policies.
 """
 @kwdef struct NullModelLoggingPolicy <: AbstractModelLoggingPolicy
 end

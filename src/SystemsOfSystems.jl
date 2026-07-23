@@ -818,6 +818,27 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 
 # These are all of our recursive logging functions.
 
+@inline function sampling_group_logs_sample(group)
+    return group.log_states || group.log_outputs
+end
+
+@inline function sampling_groups_log_sample(groups)
+    return any(sampling_group_logs_sample, groups)
+end
+
+@inline sampling_group_snapshots_states(group) = group.snapshot_states
+
+@inline function sampling_groups_snapshot_states(groups)
+    return any(sampling_group_snapshots_states, groups)
+end
+
+function update_sampling_groups!(t, groups)
+    for group in groups
+        Logs.update_sampling_group!(t, group)
+    end
+    return nothing
+end
+
 function log_continuous_stuff!(
     ::ExactTime, ::Float64,
     ::Nothing,
@@ -838,12 +859,67 @@ function log_continuous_outputs!(t_f, mh_yc, ro_yc)
         end
     end
 end
-function log_continuous_models!(t, t_f, mh_models, msd_models, ro_models)
-    for fn in fieldnames(typeof(mh_models))
-        if hasfield(typeof(ro_models), fn)
-            log_continuous_stuff!(t, t_f, mh_models[fn], msd_models[fn], ro_models[fn])
+
+function log_continuous_model! end
+
+# Generate direct field accesses for the heterogeneous child histories. A runtime Symbol
+# index makes Julia box those values before the recursive call. The generated code only
+# handles this static routing; the logging behavior remains in log_continuous_model!.
+@generated function log_continuous_models!(
+    t,
+    t_f,
+    mh_models::MHT,
+    msd_models::MSDT,
+    ro_models::ROT,
+) where {
+    MHT <: NamedTuple,
+    MSDT <: NamedTuple,
+    ROT <: NamedTuple,
+}
+
+    statements = map(fieldnames(MHT)) do fn
+        field = QuoteNode(fn)
+        rates_output = if hasfield(ROT, fn)
+            :(getfield(ro_models, $field))
+        else
+            :(RatesOutput())
+        end
+        return quote
+            model_history = getfield(mh_models, $field)
+            if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
+                log_continuous_model!(
+                    t, t_f,
+                    model_history, getfield(msd_models, $field), $rates_output,
+                )
+            end
         end
     end
+    return quote
+        $(statements...)
+        nothing
+    end
+
+end
+
+function log_continuous_model!(
+    t::ExactTime, t_f::Float64,
+    mh::Logs.ModelHistory,
+    msd::ModelStateDescription,
+    ro::RatesOutput,
+)
+
+    # The compiled group contains this model's independently evaluated sampling decision.
+    sampling_group = mh.sampling_group
+
+    if sampling_group.log_states
+        log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
+    end
+    if sampling_group.log_outputs
+        log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
+    end
+    # TODO: Log the derivatives too.
+    log_continuous_models!(t, t_f, mh.models, msd.models, ro.models)
+
 end
 
 function log_continuous_stuff!(
@@ -853,18 +929,12 @@ function log_continuous_stuff!(
     ro::RatesOutput,
 )
 
-    # What our instructions are for logging this sample.
-    sampling_directive = get_sampling_directive(t, mh.sampler)
-
-    if should_log_states(sampling_directive)
-        log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
-    end
-    if should_log_outputs(sampling_directive)
-        log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
-    end
-    # TODO: Log the derivatives too.
-    if should_log_models(sampling_directive)
-        log_continuous_models!(t, t_f, mh.models, msd.models, ro.models)
+    # Evaluate each distinct sampler once, then reject the whole tree when every group is
+    # inactive at this accepted time.
+    sampling_groups = mh.sampling_groups_in_subtree
+    update_sampling_groups!(t, sampling_groups)
+    if sampling_groups_log_sample(sampling_groups)
+        log_continuous_model!(t, t_f, mh, msd, ro)
     end
 
 end
@@ -875,27 +945,45 @@ end
 function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
 
+function log_initial_discrete_model!(
+    t,
+    mh::Logs.ModelHistory,
+    md::TypedModelDescription,
+)
+
+    sampling_group = mh.sampling_group
+    if sampling_group.log_states
+        for fn in keys(mh.discrete_states)
+            push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
+        end
+    end
+    if sampling_group.log_outputs
+        for fn in keys(mh.discrete_outputs)
+            push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
+        end
+    end
+
+    for fn in keys(mh.models)
+        model_history = mh.models[fn]
+        if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
+            log_initial_discrete_model!(t, model_history, md.models[fn])
+        end
+    end
+
+end
+
 function log_initial_discrete_stuff!(
     t,
     mh::Logs.ModelHistory,
     md::TypedModelDescription,
 )
-    sampling_directive = get_sampling_directive(t, mh.sampler)
-    if should_log_states(sampling_directive)
-        for fn in keys(mh.discrete_states)
-            push!(mh.discrete_states[fn], float(t), md.discrete_states[fn])
-        end
+
+    sampling_groups = mh.sampling_groups_in_subtree
+    update_sampling_groups!(t, sampling_groups)
+    if sampling_groups_log_sample(sampling_groups)
+        log_initial_discrete_model!(t, mh, md)
     end
-    if should_log_outputs(sampling_directive)
-        for fn in keys(mh.discrete_outputs)
-            push!(mh.discrete_outputs[fn], float(t), md.discrete_outputs[fn])
-        end
-    end
-    if should_log_models(sampling_directive)
-        for fn in keys(mh.models)
-            log_initial_discrete_stuff!(t, mh.models[fn], md.models[fn])
-        end
-    end
+
 end
 
 # This logs the results of updates_fcn and any state snapshots requested at that time.
@@ -938,41 +1026,71 @@ function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
         end
     end
 end
-function log_discrete_models!(
-    t, t_f, mh_models, uo_models, prior_models,
-    include_updated_continuous_states, snapshot_states,
-)
-    for fn in fieldnames(typeof(mh_models))
-        if hasfield(typeof(uo_models), fn)
-            log_discrete_stuff!(
-                t, t_f,
-                mh_models[fn], uo_models[fn], prior_models[fn],
-                include_updated_continuous_states, snapshot_states,
-            )
-        elseif snapshot_states || mh_models[fn].may_snapshot_states_in_subtree
-            log_discrete_stuff!(
-                t, t_f,
-                mh_models[fn], UpdatesOutput(), prior_models[fn],
-                include_updated_continuous_states, snapshot_states,
-            )
+
+function log_discrete_model! end
+
+# As in continuous logging, generate only the direct field routing needed to preserve each
+# heterogeneous child type. Missing update branches are emitted only when a sampler in that
+# child's subtree can request a state snapshot.
+@generated function log_discrete_models!(
+    t, t_f,
+    mh_models::MHT,
+    uo_models::UOT,
+    prior_models::PT,
+    include_updated_continuous_states,
+) where {
+    MHT <: NamedTuple,
+    UOT <: NamedTuple,
+    PT <: NamedTuple,
+}
+
+    statements = map(fieldnames(MHT)) do fn
+        field = QuoteNode(fn)
+        if hasfield(UOT, fn)
+            return quote
+                model_history = getfield(mh_models, $field)
+                if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
+                    log_discrete_model!(
+                        t, t_f,
+                        model_history, getfield(uo_models, $field),
+                        getfield(prior_models, $field),
+                        include_updated_continuous_states,
+                    )
+                end
+            end
+        else
+            return quote
+                model_history = getfield(mh_models, $field)
+                if sampling_groups_snapshot_states(
+                    model_history.sampling_groups_in_subtree,
+                )
+                    log_discrete_model!(
+                        t, t_f,
+                        model_history, UpdatesOutput(), getfield(prior_models, $field),
+                        include_updated_continuous_states,
+                    )
+                end
+            end
         end
     end
+    return quote
+        $(statements...)
+        nothing
+    end
+
 end
 
-# This is called right after updating.
-function log_discrete_stuff!(
+# This is called recursively right after updating.
+function log_discrete_model!(
     t::ExactTime, t_f::Float64,
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
     include_updated_continuous_states::Bool,
-    ancestor_snapshot_states::Bool = false,
 )
 
-    # What our instructions are for logging this sample.
-    sampling_directive = get_sampling_directive(t, mh.sampler)
-    snapshot_states =
-        ancestor_snapshot_states || should_snapshot_states(sampling_directive)
+    # The compiled group contains this model's independently evaluated sampling decision.
+    sampling_group = mh.sampling_group
 
     # This can update either discrete states or continuous states. If it's discrete, go
     # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
@@ -980,9 +1098,10 @@ function log_discrete_stuff!(
     # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
-    if should_log_states(sampling_directive)
+    if sampling_group.log_states
         log_discrete_states!(
-            t_f, mh.discrete_states, uo.updates, prior.discrete_states, snapshot_states,
+            t_f, mh.discrete_states, uo.updates, prior.discrete_states,
+            sampling_group.snapshot_states,
         )
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
@@ -991,16 +1110,33 @@ function log_discrete_stuff!(
     end
 
     # Log whatever outputs they provided this time.
-    if should_log_outputs(sampling_directive)
+    if sampling_group.log_outputs
         log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
     end
 
-    # Continue into permitted submodels. Snapshot-capable subtrees may need to be visited
-    # even when the current update result omits them.
-    if should_log_models(sampling_directive)
-        log_discrete_models!(
-            t, t_f, mh.models, uo.models, prior.models,
-            include_updated_continuous_states, snapshot_states,
+    # Each child follows its own sampling group. A missing update subtree only needs to be
+    # visited when one of its active groups requests a state snapshot.
+    log_discrete_models!(
+        t, t_f, mh.models, uo.models, prior.models,
+        include_updated_continuous_states,
+    )
+
+end
+
+# This is the top-level entry point called right after updating.
+function log_discrete_stuff!(
+    t::ExactTime, t_f::Float64,
+    mh::Logs.ModelHistory,
+    uo::UpdatesOutput,
+    prior::ModelStateDescription,
+    include_updated_continuous_states::Bool,
+)
+
+    sampling_groups = mh.sampling_groups_in_subtree
+    update_sampling_groups!(t, sampling_groups)
+    if sampling_groups_log_sample(sampling_groups)
+        log_discrete_model!(
+            t, t_f, mh, uo, prior, include_updated_continuous_states,
         )
     end
 

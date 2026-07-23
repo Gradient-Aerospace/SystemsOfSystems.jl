@@ -141,8 +141,8 @@ function time_simulations()
             # benchmark.
             logging_policy = LoggingPolicies.RegexLoggingPolicy(;
                 rules = [
-                    # We'll log /a (and everything below it) at a reduced rate.
-                    r"^/a$" => LoggingPolicies.ModelLoggingPolicy(;
+                    # We'll log /a and every model below it at a reduced rate.
+                    r"^/a(?:/|$)" => LoggingPolicies.ModelLoggingPolicy(;
                         sampler = Samplers.RegularSampler(;
                             period = 1//1,
                         ),

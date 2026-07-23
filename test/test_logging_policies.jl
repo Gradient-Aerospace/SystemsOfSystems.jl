@@ -10,8 +10,8 @@ using SystemsOfSystems: LoggingPolicies, Logs, Samplers, Solvers
 #
 # 1. A logging policy assigns a model logging policy based on the model's path.
 # 2. A model logging policy chooses which variables get storage and supplies a sampler.
-# 3. A sampler decides which of the simulation's already-accepted times are recorded and
-#    whether logging traversal continues into submodels.
+# 3. A sampler decides which of the simulation's already-accepted times are recorded for
+#    that model. Every submodel receives and follows its own sampler independently.
 #
 # The unit tests below exercise each layer on its own. The integration tests then use one
 # deliberately small two-level model to show how the layers interact during a simulation.
@@ -26,6 +26,19 @@ const SELECTED_VARIABLES = [
     :keep_continuous_output,
     :keep_discrete_output,
 ]
+
+# This custom sampler records how often the compiled logging plan queries it. Assigning one
+# instance to multiple models lets the integration tests distinguish shared trigger
+# evaluation from merely producing the same histories through repeated per-model calls.
+mutable struct CountingSampler <: Samplers.AbstractSampler
+    times::Vector{Rational{Int64}}
+end
+CountingSampler() = CountingSampler(Rational{Int64}[])
+
+function Samplers.get_sampling_directive(t, sampler::CountingSampler)
+    push!(sampler.times, t)
+    return Samplers.SamplingDirective(true, true)
+end
 
 function model_description(; include_child = true)
 
@@ -289,61 +302,51 @@ end
 @testset "sampling directives and built-in samplers" begin
 
     # CompleteSampler and NullSampler are constant directives at opposite extremes. A
-    # SamplingDirective itself is also a sampler, which is useful when states, outputs, and
-    # descendant traversal need different fixed answers.
+    # SamplingDirective itself is also a sampler, which is useful when states and outputs
+    # need different fixed answers.
     complete = Samplers.get_sampling_directive(0//1, Samplers.CompleteSampler())
     null = Samplers.get_sampling_directive(0//1, Samplers.NullSampler())
     states_only = Samplers.SamplingDirective(;
         log_states = true,
         log_outputs = false,
-        log_models = false,
     )
 
-    # Verify all three axes; checking only state logging could hide a regression in output
-    # logging or recursive traversal.
+    # Verify the state and output decisions independently.
     @test Samplers.should_log_states(complete)
     @test !Samplers.should_snapshot_states(complete)
     @test Samplers.should_log_outputs(complete)
-    @test Samplers.should_log_models(complete)
     @test !Samplers.should_log_states(null)
     @test !Samplers.should_snapshot_states(null)
     @test !Samplers.should_log_outputs(null)
-    @test !Samplers.should_log_models(null)
     @test Samplers.get_sampling_directive(0//1, states_only) === states_only
-    @test Samplers.SamplingDirective(true, false, false) == states_only
+    @test Samplers.SamplingDirective(true, false) == states_only
     @test Samplers.should_log_states(states_only)
     @test !Samplers.should_snapshot_states(states_only)
     @test !Samplers.should_log_outputs(states_only)
-    @test !Samplers.should_log_models(states_only)
 
     # Positional and keyword construction both convert ordinary real values to exact time.
-    positional = Samplers.RegularSampler(0.5, 0.25, true)
+    positional = Samplers.RegularSampler(0.5, 0.25)
     keyword = Samplers.RegularSampler(;
         period = 1//2,
         offset = 1//4,
-        continue_to_submodels = true,
     )
     @test positional.period == 1//2
     @test positional.offset == 1//4
     @test positional == keyword
     @test Samplers.RegularSampler(0.1).period == 1//10
 
-    # The offset is the first sample. Off-grid behavior independently controls whether
-    # descendant samplers are still consulted.
+    # The offset is the first sample. A model is inactive before and between its grid times.
     before_offset = Samplers.get_sampling_directive(0//1, keyword)
     on_grid = Samplers.get_sampling_directive(3//4, keyword)
     off_grid = Samplers.get_sampling_directive(1//2, keyword)
     @test !Samplers.should_log_states(before_offset)
     @test !Samplers.should_snapshot_states(before_offset)
-    @test Samplers.should_log_models(before_offset)
     @test Samplers.should_log_states(on_grid)
     @test Samplers.should_snapshot_states(on_grid)
     @test Samplers.should_log_outputs(on_grid)
-    @test Samplers.should_log_models(on_grid)
     @test !Samplers.should_log_states(off_grid)
     @test !Samplers.should_snapshot_states(off_grid)
     @test !Samplers.should_log_outputs(off_grid)
-    @test Samplers.should_log_models(off_grid)
 
     # Invalid clocks are rejected during construction rather than failing in the loop.
     @test_throws ArgumentError Samplers.RegularSampler(0)
@@ -451,8 +454,8 @@ end
 @testset "variable selection in model histories" begin
 
     # Apply a selective policy only to the root and an all-pass default to its child. This
-    # distinguishes per-model variable selection from recursive sampler traversal: storage
-    # decisions are made independently for each path during log construction.
+    # demonstrates that storage decisions are made independently for each path during log
+    # construction.
     root_policy = LoggingPolicies.ModelLoggingPolicy(;
         variable_set = LoggingPolicies.VariableList(string.(SELECTED_VARIABLES)),
     )
@@ -501,58 +504,91 @@ end
 
 end
 
-@testset "regular sampling and subtree traversal" begin
+@testset "independent model sampling and shared decisions" begin
 
-    # This is the central hierarchical-sampling test. The child always has a complete
-    # sampler; only the root's continue_to_submodels setting changes. That isolates whether
-    # a rejected parent sample prevents or permits the child's independent decision.
-
-    # An offset sampler rejects the initial discrete values and records both root and child
-    # only at matching accepted times when the root gates its subtree. The absence of t=0
-    # specifically verifies that initial discrete values obey the sampler.
-    gated_policy = LoggingPolicies.RegexLoggingPolicy(
+    # Give the root an offset regular sampler and its child a complete sampler. The child's
+    # history must remain complete when the root is off-grid, proving that a parent sampling
+    # decision cannot suppress an independently assigned child.
+    independent_policy = LoggingPolicies.RegexLoggingPolicy(
         [
             r"^/$" => Samplers.RegularSampler(1//2, 1//4),
             r"^/" => Samplers.CompleteSampler(),
         ],
     )
-    gated_history = run_logging_simulation(gated_policy)
-    for model_path in ("/", "/child")
-        model_history = gated_history[model_path]
+    independent_history = run_logging_simulation(independent_policy)
+    @test independent_history["/"]["keep_continuous_state"].time == [0.25, 0.75]
+    @test independent_history["/"]["keep_discrete_state"].time == [0.25, 0.75]
+    @test independent_history["/child"]["keep_continuous_state"].time ==
+        [0.0, 0.25, 0.5, 0.75, 1.0]
+    @test independent_history["/child"]["keep_discrete_state"].time ==
+        [0.0, 0.25, 0.5, 0.75, 1.0]
+    @test independent_history["/"].sampling_group !==
+        independent_history["/child"].sampling_group
+    @test length(independent_history["/"].sampling_groups_in_subtree) == 2
+
+    # NullModelLoggingPolicy used to stop traversal as well as suppressing its own model.
+    # Under independent sampling, a null root must not hide a specifically enabled child.
+    null_parent_policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/$" => LoggingPolicies.NullModelLoggingPolicy(),
+            r"^/child$" => Samplers.CompleteSampler(),
+        ],
+    )
+    null_parent_history = run_logging_simulation(null_parent_policy)
+    @test isempty(null_parent_history["/"].continuous_states)
+    @test isempty(null_parent_history["/"].discrete_states)
+    @test null_parent_history["/child"]["keep_continuous_state"].time ==
+        [0.0, 0.25, 0.5, 0.75, 1.0]
+    @test null_parent_history["/child"]["keep_discrete_state"].time ==
+        [0.0, 0.25, 0.5, 0.75, 1.0]
+
+    # A broad rule is the common way to request one rate for the entire simulation. Both
+    # models should use the same canonical sampling group so the regular trigger is tested
+    # only once per logging opportunity and the whole tree can be rejected at its root.
+    shared_sampler = Samplers.RegularSampler(1//2, 1//4)
+    shared_policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/" => shared_sampler,
+        ],
+    )
+    shared_history = run_logging_simulation(shared_policy)
+    shared_root = shared_history["/"]
+    shared_child = shared_history["/child"]
+    for model_history in (shared_root, shared_child)
         @test model_history["keep_continuous_state"].time == [0.25, 0.75]
         @test model_history["keep_continuous_output"].time == [0.25, 0.75]
         @test model_history["keep_discrete_state"].time == [0.25, 0.75]
         @test model_history["keep_discrete_output"].time == [0.25, 0.75]
     end
+    @test shared_root.sampling_group === shared_child.sampling_group
+    @test shared_root.sampling_groups_in_subtree == (shared_root.sampling_group,)
 
-    # Continuing traversal on rejected root samples lets the child retain its own complete
-    # sampling behavior while the root remains decimated. The root therefore records the
-    # half-second grid, while the child sees the solver's complete quarter-second grid.
-    traversing_policy = LoggingPolicies.RegexLoggingPolicy(
+    # Sharing a group must also share the work, rather than simply sharing a sampler field.
+    # This simulation has five accepted times. Each is a discrete logging opportunity and a
+    # continuous logging opportunity, so the sampler should be called twice per time—not
+    # once per time, phase, and model.
+    counting_sampler = CountingSampler()
+    counting_policy = LoggingPolicies.RegexLoggingPolicy(
         [
-            r"^/$" => Samplers.RegularSampler(1//2, 0, true),
-            r"^/" => Samplers.CompleteSampler(),
+            r"^/" => counting_sampler,
         ],
     )
-    traversing_history = run_logging_simulation(traversing_policy)
-    @test traversing_history["/"]["keep_continuous_state"].time == [0.0, 0.5, 1.0]
-    @test traversing_history["/"]["keep_discrete_state"].time == [0.0, 0.5, 1.0]
-    @test traversing_history["/child"]["keep_continuous_state"].time ==
-        [0.0, 0.25, 0.5, 0.75, 1.0]
-    @test traversing_history["/child"]["keep_discrete_state"].time ==
-        [0.0, 0.25, 0.5, 0.75, 1.0]
+    run_logging_simulation(counting_policy)
+    @test length(counting_sampler.times) == 10
+    for t in (0//1, 1//4, 1//2, 3//4, 1//1)
+        @test count(==(t), counting_sampler.times) == 2
+    end
 
 end
 
 @testset "regular state snapshots preserve off-grid changes" begin
 
-    # The root controls when its complete-sampled child can be visited. At each permitted
-    # half-second time, both models must snapshot their current states even though neither
-    # appears in that time's UpdatesOutput tree.
+    # Assign one regular sampler to the entire hierarchy. At every half-second time, both
+    # models must snapshot their current states even though neither appears in that time's
+    # UpdatesOutput tree.
     policy = LoggingPolicies.RegexLoggingPolicy(
         [
-            r"^/$" => Samplers.RegularSampler(1//2),
-            r"^/" => Samplers.CompleteSampler(),
+            r"^/" => Samplers.RegularSampler(1//2),
         ],
     )
     history = run_sparse_update_simulation(policy)
@@ -590,16 +626,14 @@ end
 
 end
 
-@testset "independent state, output, and submodel directives" begin
+@testset "independent state and output directives" begin
 
     # RegularSampler selects states and outputs together, so use a fixed SamplingDirective
-    # to prove the three flags are honored independently. Continuing to models is
-    # important: it lets the child use the all-pass fallback even though root states are
-    # suppressed.
+    # to prove the two flags are honored independently. The child uses its own all-pass
+    # fallback even though root states are suppressed.
     output_only = Samplers.SamplingDirective(;
         log_states = false,
         log_outputs = true,
-        log_models = true,
     )
     policy = LoggingPolicies.RegexLoggingPolicy(
         [r"^/$" => output_only],
@@ -676,8 +710,7 @@ end
     # are appended correctly without relying on in-memory vector behavior.
     policy = LoggingPolicies.RegexLoggingPolicy(
         [
-            r"^/$" => Samplers.RegularSampler(1//2),
-            r"^/" => Samplers.CompleteSampler(),
+            r"^/" => Samplers.RegularSampler(1//2),
         ],
     )
     mktempdir() do directory

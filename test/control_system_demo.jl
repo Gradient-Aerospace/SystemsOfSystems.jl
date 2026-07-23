@@ -546,21 +546,16 @@ end
 
 Returns a sensible default log for the closed-loop system.
 
-Here, the log's logging policy demonstrates hierarchical sampling: the root model allows
-logging at 0.1-second intervals, and every descendant logs completely whenever traversal
-reaches it.
+Here, one broad logging-policy rule assigns the same 0.1-second sampler to the root model
+and every descendant.
 """
 function default_log()
     return Logs.BasicLogOptions(;
         logging_policy = LoggingPolicies.RegexLoggingPolicy(
             [
-                # Let the root control all logging.
-                r"^/$" => LoggingPolicies.ModelLoggingPolicy(;
-                    sampler = Samplers.RegularSampler(1//10),
-                ),
-                # For everything else, when the root allows logging, log everything.
+                # Assign one shared logging rate to the entire model hierarchy.
                 r"^/" => LoggingPolicies.ModelLoggingPolicy(;
-                    sampler = Samplers.CompleteSampler(),
+                    sampler = Samplers.RegularSampler(1//10),
                 ),
             ],
         ),
@@ -573,9 +568,8 @@ end
 Run the closed-loop control demo for 10s. Sensible defaults are included for `system_specs`,
 `log`, and `solver`.
 
-By default, the log configuration demonstrates hierarchical sampling: the root model allows
-logging at 0.1-second intervals, and every descendant logs completely whenever traversal
-reaches it.
+By default, one broad logging-policy rule assigns the same 0.1-second sampler to the root
+model and every descendant.
 """
 function simulate_closed_loop_system(;
     system_specs = default_closed_loop_system_specs(),

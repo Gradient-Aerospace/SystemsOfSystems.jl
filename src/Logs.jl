@@ -11,6 +11,62 @@ using ..LoggingPolicies: AbstractLoggingPolicy, get_model_logging_policy,
     get_sampler, get_variable_set, is_variable_in_set,
     AllPassLoggingPolicy
 
+###################
+# Sampling Groups #
+###################
+
+# Models assigned the same sampler share one of these mutable decisions. The sampler is
+# evaluated once at each logging opportunity, after which every model can read plain
+# booleans without repeating the trigger calculation.
+mutable struct SamplingGroup{ST <: Samplers.AbstractSampler}
+    sampler::ST
+    log_states::Bool
+    snapshot_states::Bool
+    log_outputs::Bool
+end
+
+SamplingGroup(sampler::Samplers.AbstractSampler) =
+    SamplingGroup(sampler, false, false, false)
+
+function update_sampling_group!(t, group::SamplingGroup)
+    directive = Samplers.get_sampling_directive(t, group.sampler)
+    group.log_states = Samplers.should_log_states(directive)
+    group.snapshot_states = Samplers.should_snapshot_states(directive)
+    group.log_outputs = Samplers.should_log_outputs(directive)
+    return nothing
+end
+
+function get_sampling_group!(sampling_groups, sampler)
+
+    for group in sampling_groups
+        if group.sampler === sampler
+            return group
+        end
+    end
+
+    group = SamplingGroup(sampler)
+    push!(sampling_groups, group)
+    return group
+
+end
+
+function collect_sampling_groups_in_subtree(sampling_group, models)
+
+    # Begin with this model's group, then append each distinct group used below it. Identity
+    # is appropriate because get_sampling_group! has already canonicalized shared samplers.
+    sampling_groups = (sampling_group,)
+    for model in models
+        for group in model.sampling_groups_in_subtree
+            if !any(existing === group for existing in sampling_groups)
+                sampling_groups = (sampling_groups..., group)
+            end
+        end
+    end
+
+    return sampling_groups
+
+end
+
 ################
 # ModelHistory #
 ################
@@ -22,8 +78,7 @@ Store the history and logging configuration for one model.
 
 The named-tuple fields contain the model's constants, state and output time series, and
 recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
-decides which simulation-loop samples record this model and whether logging continues into
-its submodels.
+decides which simulation-loop samples record this model.
 
 A model logging policy may omit constants and time-series fields from these named tuples.
 
@@ -31,9 +86,10 @@ A model logging policy may omit constants and time-series fields from these name
 semantics. Its fields are established during log construction and are not normally
 reassigned; samples are appended to the contained time series.
 
-`may_snapshot_states_in_subtree` caches whether a sampler in this subtree can request state
-snapshots. It lets sparse update logging avoid traversing complete or null subtrees that
-have no current update.
+The internal `sampling_group` stores this model's current sampling decision. Models with
+the same sampler share a group, so its trigger is evaluated once per logging opportunity.
+`sampling_groups_in_subtree` lets the recursive logger reject inactive subtrees without
+giving a parent sampler semantic control over its children.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -42,7 +98,9 @@ have no current update.
     YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
-    ST <: Samplers.AbstractSampler,
+    ST   <: Samplers.AbstractSampler,
+    SGT,
+    SGST <: Tuple,
 }
     type::Type
     path::String
@@ -53,7 +111,8 @@ have no current update.
     discrete_outputs::YDT
     models::MT
     sampler::ST = Samplers.CompleteSampler()
-    may_snapshot_states_in_subtree::Bool = false
+    sampling_group::SGT = nothing
+    sampling_groups_in_subtree::SGST = ()
 end
 
 function Base.keys(mh::ModelHistory)
@@ -206,6 +265,7 @@ function create_time_series_for_model!(
     md::ModelDescription,
     time_dimension,
     logging_policy::AbstractLoggingPolicy,
+    sampling_groups = Any[],
 )
 
     # Form this model's path.
@@ -215,9 +275,22 @@ function create_time_series_for_model!(
     model_logging_policy = get_model_logging_policy(logging_policy, model_path)
     variable_set = get_variable_set(model_logging_policy)
     sampler = get_sampler(model_logging_policy)
+    sampling_group = get_sampling_group!(sampling_groups, sampler)
 
     # Record any extra stuff.
     record_model_description(log, breadcrumbs, md, variable_set)
+
+    # Build the child histories first so this model can cache every distinct sampling group
+    # used in its subtree.
+    models = NamedTuple(
+        f => create_time_series_for_model!(
+            log, vcat(breadcrumbs, string(f)), m,
+            time_dimension, logging_policy, sampling_groups,
+        )
+        for (f, m) in pairs(md.models)
+    )
+    sampling_groups_in_subtree =
+        collect_sampling_groups_in_subtree(sampling_group, models)
 
     # Create the time histories.
     mh = ModelHistory(;
@@ -241,18 +314,11 @@ function create_time_series_for_model!(
             log, breadcrumbs, md.discrete_outputs, variable_set, time_dimension;
             discrete = true,
         ),
-        models = NamedTuple(
-            f => create_time_series_for_model!(
-                log, vcat(breadcrumbs, string(f)), m,
-                time_dimension, logging_policy,
-            )
-            for (f, m) in pairs(md.models)
-        ),
+        models,
         sampler = sampler,
+        sampling_group,
+        sampling_groups_in_subtree,
     )
-    mh.may_snapshot_states_in_subtree =
-        Samplers.may_snapshot_states(sampler) ||
-        any(model.may_snapshot_states_in_subtree for model in mh.models)
 
     # Put it in the dictionary of time histories.
     log[model_path] = mh
