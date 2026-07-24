@@ -4,11 +4,11 @@
 This module contains types and functions for describing what to log in the simulation and
 when to log it.
 
-At the top level, many log types (`BasicLogOptions`, `HDF5LogOptions`) have a field for a
-_logging policy_. This policy is responsible for assigning a _model logging policy_ to each
-model, according to the model's path (e.g., "/car/drivetrain/engine"). The model logging
-policy describes which constants, states, and outputs are to be stored, as well as a
-sampling rule for when the states and outputs are to be recorded.
+The `BasicLogOptions` and `HDF5LogOptions` log types have a field for a _logging policy_.
+This policy is responsible for assigning a _model logging policy_ to each model, according
+to the model's path (e.g., "/car/drivetrain/engine"). The model logging policy describes
+which constants, states, and outputs are to be stored, as well as a sampling rule for when
+the states and outputs are to be recorded.
 
 Here is a simple example:
 
@@ -31,13 +31,7 @@ using SystemsOfSystems: LoggingPolicies, Logs, Samplers
 log = Logs.BasicLogOptions(;
     logging_policy = LoggingPolicies.RegexLoggingPolicy(
         [
-            # Sample the root model every 0.1s.
-            r"^/\$" => LoggingPolicies.ModelLoggingPolicy(;
-                sampler = Samplers.RegularSampler(;
-                    period = 1//10,
-                ),
-            ),
-            # Sample the children of some_model more coarsely (1s).
+            # Sample the descendants of some_model coarsely (1s).
             r"^/some_model/" => LoggingPolicies.ModelLoggingPolicy(;
                 sampler = Samplers.RegularSampler(;
                     period = 1//1,
@@ -45,38 +39,41 @@ log = Logs.BasicLogOptions(;
             ),
             # This one model has some variables that we don't want logged.
             r"^/path/to/some_weird_model\$" => LoggingPolicies.ModelLoggingPolicy(;
-                sampler = Samplers.CompleteSampler(), # Log all samples of this model.
+                sampler = Samplers.CompleteSampler(),
                 variable_set = LoggingPolicies.VariableExclusionList(
                     [
-                        "my_pointer", # But don't log these variables.
+                        "my_pointer",
                         "my_enormous_state_variable",
                     ]
                 ),
             ),
         ],
-        default = LoggingPolicies.AllPassModelLoggingPolicy(),
+        # For models not matching any of the above, log all variables at 10Hz.
+        default = LoggingPolicies.ModelLoggingPolicy(;
+            sampler = Samplers.RegularSampler(;
+                period = 1//10,
+            ),
+        ),
     ),
 )
 ```
 
 Let's break that apart. The `RegexLoggingPolicy` uses regular expressions to map model paths
 to model logging policies. The first "hit" in the vector is used. In this case, the first
-rule is `r"^/\$"`, which will only match exactly `"/"`. Therefore, the root model will
-sample at 10 Hz (or rather, it will sample at all simulation times that align with a 0.1s
-step). Its sampler affects only the root model.
+rule is `r"^/some_model/"`, which will match any descendant model of `"/some_model"` but not
+`"/some_model"` itself. Those models will all end up logging with a 1s period.
 
-The next item matches any model path starting with `"/some_model/"`, so all of the children
-of `"/some_model"`, and samples them more slowly. A model's sampler never controls its
-children; each model independently uses the first matching rule or the policy's default.
+The next item only matches models with an exact name (that `^` at the beginning means "from
+the beginning of the string" and the `\$` at the end means "until the end"). For that model,
+we'll drop two variables from the logs.
 
-The next item matches exactly one model by complete name, and it excludes certain variables
-from logging.
+Any other models receive the default, which we've set here to log all variables and sample
+at 10Hz. More precisely, sampling will trigger on all times that line up with a 10s
+period. It will not force the simulation to take steps that align with the sampling grid.
+Logging does not influence the steps that the simulation takes in any way.
 
-If a model path matches none of the rules, then the default is used.
-
-Logging policies do not alter the simulation scheduler. A regular sampler records only the
-matching times among samples already accepted because of solver steps, model schedules,
-model requests, or user-provided times.
+A model's discrete outputs are only logged when they line up with the sampler's sampling
+times. That is, there is no sample-and-hold behavior for discrete outputs.
 """
 module LoggingPolicies
 
@@ -324,9 +321,9 @@ LoggingPolicies.RegexLoggingPolicy(;
 )
 ```
 
-Here, exactly `/my_model` will be logged at 0.1 s intervals, while descendants of
-`/my_other_model` will be logged at 1 s intervals, and all other models will be logged
-completely.
+Here, exactly `/my_model` will be logged on any steps that align with a 0.1s grid, while
+descendants of `/my_other_model` will be logged on any steps that align with a 1s grid, and
+all other models will be logged completely.
 """
 struct RegexLoggingPolicy <: AbstractLoggingPolicy
     rules::Vector{RegexLoggingPolicyRule}
