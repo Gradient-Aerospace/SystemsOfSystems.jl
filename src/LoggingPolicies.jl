@@ -29,8 +29,8 @@ they are logged:
 using SystemsOfSystems: LoggingPolicies, Logs, Samplers
 
 log = Logs.BasicLogOptions(;
-    logging_policy = LoggingPolicies.RegexLoggingPolicy(
-        [
+    logging_policy = LoggingPolicies.RegexLoggingPolicy(;
+        rules = [
             # Sample the descendants of some_model coarsely (1s).
             r"^/some_model/" => LoggingPolicies.ModelLoggingPolicy(;
                 sampler = Samplers.RegularSampler(;
@@ -68,7 +68,7 @@ the beginning of the string" and the `\$` at the end means "until the end"). For
 we'll drop two variables from the logs.
 
 Any other models receive the default, which we've set here to log all variables and sample
-at 10Hz. More precisely, sampling will trigger on all times that line up with a 10s
+at 10Hz. More precisely, sampling will trigger on all times that line up with a 0.1s
 period. It will not force the simulation to take steps that align with the sampling grid.
 Logging does not influence the steps that the simulation takes in any way.
 
