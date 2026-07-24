@@ -223,10 +223,10 @@ end
 function log_discrete_stuff!(
     ::ExactTime, ::Float64,
     ::Nothing,
-    ::UpdatesOutput,
+    ::Union{Nothing, UpdatesOutput},
     ::ModelStateDescription,
     ::ModelStateDescription,
-    include_updated_continuous_states::Bool
+    include_updated_continuous_states::Bool,
 )
 end
 
@@ -261,6 +261,18 @@ function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
 end
 
 function log_discrete_event_model! end
+
+# A present parent UpdatesOutput may explicitly contain `nothing` for a child that produced
+# no updates or outputs. There is no event to record for that child; snapshot traversal is
+# handled separately from the complete post-update model state.
+function log_discrete_event_model!(
+    ::Float64,
+    ::Logs.ModelHistory,
+    ::Nothing,
+    ::ModelStateDescription,
+    ::Bool,
+)
+end
 
 # As in continuous logging, generate only the direct field routing needed to preserve each
 # heterogeneous child type. Event traversal follows only the models present in the current
@@ -415,7 +427,7 @@ end
 function log_discrete_stuff!(
     t::ExactTime, t_f::Float64,
     mh::Logs.ModelHistory,
-    uo::UpdatesOutput,
+    uo::Union{Nothing, UpdatesOutput},
     prior::ModelStateDescription,
     updated::ModelStateDescription,
     include_updated_continuous_states::Bool,
@@ -424,10 +436,10 @@ function log_discrete_stuff!(
     sampling_groups = mh.sampling_groups_in_subtree
     update_sampling_groups!(t, sampling_groups)
 
-    # Event logging sees the sparse update result and pre-update continuous states. Snapshot
-    # groups still participate because their discrete outputs and continuous-state
-    # discontinuities remain events.
-    if sampling_groups_log_sample(sampling_groups)
+    # Event logging sees the sparse update result and pre-update continuous states. A
+    # top-level `nothing` means that no event exists, but it does not suppress the separate
+    # state snapshot opportunity below.
+    if !isnothing(uo) && sampling_groups_log_sample(sampling_groups)
         log_discrete_event_model!(
             t_f, mh, uo, prior, include_updated_continuous_states,
         )

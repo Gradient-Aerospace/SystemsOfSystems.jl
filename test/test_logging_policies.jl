@@ -200,10 +200,18 @@ end
 
 function sparse_updates(t, model)
 
+    # At the first selected time after the change, provide a parent UpdatesOutput whose
+    # child explicitly returns `nothing`. This exercises the nested no-event path while the
+    # separate snapshot traversal records both models' current states.
+    if t == 1//2 && hasproperty(model, :child)
+        return UpdatesOutput(; models = (; child = nothing,))
+    end
+
     # Emit exactly one state change and output event, halfway between the regular sampler's
-    # selected times. Later update results omit both variables and the child model entirely.
+    # selected times. All other opportunities return `nothing`, including the final selected
+    # time. This verifies that no event is required for a regular state snapshot.
     if t != 1//4
-        return UpdatesOutput()
+        return nothing
     end
 
     models = if hasproperty(model, :child)
