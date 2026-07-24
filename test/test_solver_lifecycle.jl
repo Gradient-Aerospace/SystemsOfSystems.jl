@@ -30,7 +30,7 @@ using SystemsOfSystems: Solvers
         updates_fcn = (t, model) -> if t == 1
             UpdatesOutput(; updates = (; x = 10.,),)
         else
-            UpdatesOutput()
+            nothing
         end,
         options = SimOptions(;
             solver = Solvers.RungeKutta4Options(; dt = 1),
@@ -229,6 +229,31 @@ end
 
     @test stop isa SystemsOfSystems.ModelRequestedStop
     @test stop.model_path == "/models/outer_model/models/inner_model"
+
+end
+
+@testset "stop traversal handles wide model hierarchies" begin
+
+    # Wide named tuples caused the recursive Base.tail implementation to specialize on a
+    # long chain of successively shorter tuple types. Put the only stop in the final field
+    # so the generated implementation must visit every emitted child expression.
+    n_models = 64
+    names = ntuple(index -> Symbol("model_$index"), Val(n_models))
+    models = NamedTuple{names}(
+        ntuple(Val(n_models)) do index
+            RatesOutput(; stop = index == n_models)
+        end,
+    )
+
+    stop = @inferred(
+        Union{Nothing, SystemsOfSystems.ModelRequestedStop},
+        SystemsOfSystems.find_model_requested_stop(
+            RatesOutput(; models),
+        ),
+    )
+
+    @test stop isa SystemsOfSystems.ModelRequestedStop
+    @test stop.model_path == "/models/model_64"
 
 end
 

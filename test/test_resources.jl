@@ -42,7 +42,7 @@ end
 
 function my_updates_fcn(t, model)
     println(model.io, "$(float(t)), $(model.x)")
-    return UpdatesOutput()
+    return nothing
 end
 
 @testset "OutputFile" begin
@@ -121,7 +121,7 @@ end
 
 function my_updates_fcn2(t, model)
     println(model.io[2], "$(float(t)), $(model.x)")
-    return UpdatesOutput()
+    return nothing
 end
 
 @testset "Resource" begin
@@ -294,7 +294,7 @@ end
             if t > 0.5
                 error("Expected")
             end
-            UpdatesOutput()
+            nothing
         end,
     )
 

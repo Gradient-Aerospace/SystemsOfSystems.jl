@@ -4,7 +4,7 @@ using Test
 using HDF5: h5open, Group
 using HDF5Vectors
 using SystemsOfSystems: SystemsOfSystems,
-    ModelDescription, VariableDescription, UpdatesOutput, BranchingSeed,
+    ModelDescription, VariableDescription, BranchingSeed,
     RegularSchedule,
     Logs, SimOptions, Solvers, TimeSeries, initialize, simulate
 
@@ -135,15 +135,15 @@ end
     # Our rates function should be type stable.
     @inferred ControlSystemDemo.rates(t, system)
 
-    # Our `updataes` is not type stable; on "off" samples, the UpdatesOutput will be empty,
-    # which is a different type. Can't do this: @inferred updates(t, system).
-    empty_updates_output = UpdatesOutput()
+    # Our `updates` is not type stable; on "off" samples, scheduled submodels return
+    # `nothing`, which differs from their triggering UpdatesOutput type. We can nevertheless
+    # verify that each off-sample call infers the narrow `Nothing` result.
     command = 0.
     meas = ControlSystemDemo.get_measurement(t, system.sensor, 0.)
-    @inferred typeof(empty_updates_output) ControlSystemDemo.updates(
+    @inferred Nothing ControlSystemDemo.updates(
         t, system.sensor, meas,
     )
-    @inferred typeof(empty_updates_output) ControlSystemDemo.updates(
+    @inferred Nothing ControlSystemDemo.updates(
         t, system.controller, meas, command,
     )
 
