@@ -57,9 +57,10 @@ Return whether every current state should be logged for this sample, including s
 from the current update result.
 
 At a discrete update opportunity, snapshots are read from the authoritative post-update
-model state. When this is false, only explicitly updated discrete states are recorded.
-Continuous states are always obtained from the current model state when state logging is
-enabled. Custom directives retain sparse behavior unless they implement this method.
+model state. This directive is ignored when `should_log_states` is false. When snapshotting
+is false, only explicitly updated discrete states are recorded. Continuous states are
+always obtained from the current model state when state logging is enabled. Custom
+directives retain sparse behavior unless they implement this method.
 """
 @inline should_snapshot_states(::Any) = false
 

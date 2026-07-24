@@ -818,6 +818,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 
 # These are all of our recursive logging functions.
 
+# A group is active when its model may contribute either kind of logged value at the
+# current opportunity. Snapshot state logging is a narrower condition used by the separate
+# discrete snapshot traversal below.
 @inline function sampling_group_logs_sample(group)
     return group.log_states || group.log_outputs
 end
@@ -833,10 +836,14 @@ end
 end
 
 function update_sampling_groups!(t, groups)
+
+    # The tuple contains each distinct group exactly once, even when many model histories
+    # share it. Updating here therefore evaluates each sampler once before tree traversal.
     for group in groups
         Logs.update_sampling_group!(t, group)
     end
     return nothing
+
 end
 
 function log_continuous_stuff!(
@@ -939,8 +946,8 @@ function log_continuous_stuff!(
 
 end
 
-# Discrete stuff is logged during initialization. This works differently than logging the
-# results of update_fcn.
+# Initial values have neither an update event nor a prior state. Record them once directly
+# from the typed model description, while still honoring the sampler's initial decision.
 
 function log_initial_discrete_stuff!(t, mh::Nothing, md::TypedModelDescription)
 end
@@ -1092,16 +1099,19 @@ function log_discrete_event_model!(
     # The compiled group contains this model's independently evaluated sampling decision.
     sampling_group = mh.sampling_group
 
-    # This can update either discrete states or continuous states. If it's discrete, go
-    # ahead and log the update. If it's continuous, log the *prior* value at `t`, because
-    # log_continuous_stuff! will take care of logging the updated value at the beginning of
-    # its next step, which starts at `t` (`t` will be in the log twice). If there won't be
-    # a next sample, then `include_updated_continuous_states` should be true, and we'll go
-    # ahead and log the updated continuous-time state too.
+    # A discrete state has exactly one owner at this opportunity. Sparse samplers record its
+    # UpdatesOutput change here. Snapshot samplers deliberately skip it here because the
+    # later snapshot pass records its post-update value; doing both would duplicate the
+    # timestamp and value.
     if sampling_group.log_states
         if !sampling_group.snapshot_states
             log_discrete_state_changes!(t_f, mh.discrete_states, uo.updates)
         end
+
+        # Continuous state changes are discontinuity events rather than discrete snapshots.
+        # Record the *prior* value at `t`; log_continuous_stuff! records the updated value at
+        # the beginning of the next step, which also starts at `t`. At the terminal sample,
+        # include_updated_continuous_states requests the right-hand value immediately.
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
             include_updated_continuous_states,
@@ -1160,6 +1170,8 @@ function log_discrete_snapshot_model!(
     updated::ModelStateDescription,
 )
 
+    # Only this model's group decides whether its states are recorded. The generated child
+    # traversal independently follows branches containing another active snapshot group.
     if mh.sampling_group.snapshot_states
         log_discrete_state_snapshot!(
             t_f, mh.discrete_states, updated.discrete_states,
@@ -1182,7 +1194,9 @@ function log_discrete_stuff!(
     sampling_groups = mh.sampling_groups_in_subtree
     update_sampling_groups!(t, sampling_groups)
 
-    # Event logging sees the sparse update result and pre-update continuous states.
+    # Event logging sees the sparse update result and pre-update continuous states. Snapshot
+    # groups still participate because their discrete outputs and continuous-state
+    # discontinuities remain events.
     if sampling_groups_log_sample(sampling_groups)
         log_discrete_event_model!(
             t_f, mh, uo, prior, include_updated_continuous_states,

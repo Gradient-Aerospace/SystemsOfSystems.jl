@@ -652,6 +652,24 @@ end
     @test !isempty(history["/child"]["keep_continuous_state"].time)
     @test !isempty(history["/child"]["keep_discrete_state"].time)
 
+    # Snapshotting refines state logging rather than enabling it. A custom directive may
+    # technically request a snapshot while disabling states; the compiled decision must
+    # treat that combination as no state logging instead of letting the snapshot pass
+    # bypass the primary flag.
+    disabled_snapshot = Samplers.SamplingDirective(;
+        log_states = false,
+        snapshot_states = true,
+        log_outputs = false,
+    )
+    disabled_snapshot_policy = LoggingPolicies.RegexLoggingPolicy(
+        [
+            r"^/$" => disabled_snapshot,
+        ],
+    )
+    disabled_snapshot_history = run_logging_simulation(disabled_snapshot_policy)
+    @test isempty(disabled_snapshot_history["/"]["keep_continuous_state"].time)
+    @test isempty(disabled_snapshot_history["/"]["keep_discrete_state"].time)
+
 end
 
 @testset "filtered HDF5 logs" begin

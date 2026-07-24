@@ -15,13 +15,13 @@ using ..LoggingPolicies: AbstractLoggingPolicy, get_model_logging_policy,
 # Sampling Groups #
 ###################
 
-# Models assigned the same sampler share one of these mutable decisions. The sampler is
-# evaluated once at each logging opportunity, after which every model can read plain
-# booleans without repeating the trigger calculation.
+# Models assigned the same sampler share one of these mutable decisions. The root logging
+# entry point evaluates the sampler once at each opportunity, after which every matching
+# model reads these plain booleans without repeating the trigger calculation.
 mutable struct SamplingGroup{ST <: Samplers.AbstractSampler}
     sampler::ST
     log_states::Bool
-    snapshot_states::Bool
+    snapshot_states::Bool # Log every state, rather than only sparse state changes.
     log_outputs::Bool
 end
 
@@ -29,15 +29,23 @@ SamplingGroup(sampler::Samplers.AbstractSampler) =
     SamplingGroup(sampler, false, false, false)
 
 function update_sampling_group!(t, group::SamplingGroup)
+
+    # Snapshotting refines state logging; it cannot independently enable state logging when
+    # a custom directive has disabled it.
     directive = Samplers.get_sampling_directive(t, group.sampler)
     group.log_states = Samplers.should_log_states(directive)
-    group.snapshot_states = Samplers.should_snapshot_states(directive)
+    group.snapshot_states =
+        group.log_states && Samplers.should_snapshot_states(directive)
     group.log_outputs = Samplers.should_log_outputs(directive)
     return nothing
+
 end
 
 function get_sampling_group!(sampling_groups, sampler)
 
+    # Broad regex rules return the same sampler for many model paths. Immutable built-in
+    # samplers with identical fields are also `===`, while mutable custom samplers share a
+    # decision only when the user supplies the same object.
     for group in sampling_groups
         if group.sampler === sampler
             return group
@@ -54,16 +62,20 @@ function collect_sampling_groups_in_subtree(sampling_group, models)
 
     # Begin with this model's group, then append each distinct group used below it. Identity
     # is appropriate because get_sampling_group! has already canonicalized shared samplers.
-    sampling_groups = (sampling_group,)
+    #
+    # This is setup-time work, so use a growable array rather than repeatedly constructing
+    # longer tuple types in the loop. The final splat recovers a concretely typed tuple for
+    # allocation-free iteration in the simulation loop.
+    sampling_groups = Any[sampling_group]
     for model in models
         for group in model.sampling_groups_in_subtree
             if !any(existing === group for existing in sampling_groups)
-                sampling_groups = (sampling_groups..., group)
+                push!(sampling_groups, group)
             end
         end
     end
 
-    return sampling_groups
+    return tuple(sampling_groups...)
 
 end
 
@@ -111,8 +123,8 @@ giving a parent sampler semantic control over its children.
     discrete_outputs::YDT
     models::MT
     sampler::ST = Samplers.CompleteSampler()
-    sampling_group::SGT = nothing
-    sampling_groups_in_subtree::SGST = ()
+    sampling_group::SGT = nothing # Shared current decision for this model.
+    sampling_groups_in_subtree::SGST = () # Distinct decisions at or below this model.
 end
 
 function Base.keys(mh::ModelHistory)
