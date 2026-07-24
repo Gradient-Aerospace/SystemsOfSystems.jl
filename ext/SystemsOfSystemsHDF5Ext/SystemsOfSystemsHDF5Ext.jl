@@ -137,7 +137,7 @@ function record_model_description(
         catch err
             p = join("/" * el for el in breadcrumbs) * "/$k"
             @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
-            HDF5.delete_group(constant_group)
+            HDF5.delete_object(constant_group)
         end
     end
 
@@ -329,7 +329,7 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
         catch
             p = join("/" * el for el in breadcrumbs) * "/$name"
             @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
-            HDF5.delete_group(constant_group)
+            HDF5.delete_object(constant_group)
         end
     end
     fid["$this_path/names/constants"] = saved_constants
