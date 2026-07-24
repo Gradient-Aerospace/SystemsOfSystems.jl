@@ -1,11 +1,83 @@
 """
-This module contains the different log types: `BasicLog` (the default), `NullLog` (doesn't
-log), and `HDF5Log` (import HDF5 for this one to work).
+This module contains the different log types: `BasicLog` (the default), `NullLog` (which
+disables logging), and `HDF5Log` (available after importing HDF5Vectors).
 """
 module Logs
 
-using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
 using OrderedCollections: OrderedDict
+using ..SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription,
+    Samplers
+using ..LoggingPolicies: AbstractLoggingPolicy, get_model_logging_policy,
+    get_sampler, get_variable_set, is_variable_in_set,
+    AllPassLoggingPolicy
+
+###################
+# Sampling Groups #
+###################
+
+# Models assigned the same sampler share one of these mutable decisions. The root logging
+# entry point evaluates the sampler once at each opportunity, after which every matching
+# model reads these plain booleans without repeating the trigger calculation.
+mutable struct SamplingGroup{ST <: Samplers.AbstractSampler}
+    sampler::ST
+    log_states::Bool
+    snapshot_states::Bool # Log every state, rather than only sparse state changes.
+    log_outputs::Bool
+end
+
+SamplingGroup(sampler::Samplers.AbstractSampler) =
+    SamplingGroup(sampler, false, false, false)
+
+function update_sampling_group!(t, group::SamplingGroup)
+
+    # Snapshotting refines state logging; it cannot independently enable state logging when
+    # a custom directive has disabled it.
+    directive = Samplers.get_sampling_directive(t, group.sampler)
+    group.log_states = Samplers.should_log_states(directive)
+    group.snapshot_states =
+        group.log_states && Samplers.should_snapshot_states(directive)
+    group.log_outputs = Samplers.should_log_outputs(directive)
+    return nothing
+
+end
+
+function get_sampling_group!(sampling_groups, sampler)
+
+    # Broad regex rules return the same sampler for many model paths. Immutable built-in
+    # samplers with identical fields are also `===`, while mutable custom samplers share a
+    # decision only when the user supplies the same object.
+    for group in sampling_groups
+        if group.sampler === sampler
+            return group
+        end
+    end
+
+    group = SamplingGroup(sampler)
+    push!(sampling_groups, group)
+    return group
+
+end
+
+function collect_sampling_groups_in_subtree(sampling_group, models)
+
+    # Begin with this model's group, then append each distinct group used below it. Identity
+    # is appropriate because get_sampling_group! has already canonicalized shared samplers.
+    #
+    # This is setup-time work, so use a growable array rather than repeatedly constructing
+    # longer tuple types in the loop. The final splat recovers a concretely typed tuple for
+    # allocation-free iteration in the simulation loop.
+    sampling_groups = Any[sampling_group]
+    for model in models
+        for group in model.sampling_groups_in_subtree
+            if !any(existing === group for existing in sampling_groups)
+                push!(sampling_groups, group)
+            end
+        end
+    end
+
+    return tuple(sampling_groups...)
+
+end
 
 ################
 # ModelHistory #
@@ -14,9 +86,22 @@ using OrderedCollections: OrderedDict
 """
     ModelHistory
 
-This stores the time history of a single model, including its discrete and continuous states
-and outputs, as well as constants, the "path" to this model, and the model histories for its
-sub-models.
+Store the history and logging configuration for one model.
+
+The named-tuple fields contain the model's constants, state and output time series, and
+recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
+decides which simulation-loop samples record this model.
+
+A model logging policy may omit constants and time-series fields from these named tuples.
+
+`ModelHistory` is mutable to give large, recursively parameterized histories reference
+semantics. Its fields are established during log construction and are not normally
+reassigned; samples are appended to the contained time series.
+
+The internal `sampling_group` stores this model's current sampling decision. Models with
+the same sampler share a group, so its trigger is evaluated once per logging opportunity.
+`sampling_groups_in_subtree` lets the recursive logger reject inactive subtrees without
+giving a parent sampler semantic control over its children.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -25,6 +110,9 @@ sub-models.
     YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
+    ST   <: Samplers.AbstractSampler,
+    SGT,
+    SGST <: Tuple,
 }
     type::Type
     path::String
@@ -34,6 +122,9 @@ sub-models.
     continuous_outputs::YCT
     discrete_outputs::YDT
     models::MT
+    sampler::ST = Samplers.CompleteSampler()
+    sampling_group::SGT = nothing # Shared current decision for this model.
+    sampling_groups_in_subtree::SGST = () # Distinct decisions at or below this model.
 end
 
 function Base.keys(mh::ModelHistory)
@@ -151,13 +242,22 @@ Functions:
 abstract type AbstractLog end
 
 # This isn't used by the BasicLog, but it lets the HDF5Log record extra details.
-function record_model_description(log::AbstractLog, breadcrumbs, md)
+function record_model_description(log::AbstractLog, breadcrumbs, md, variable_set)
     nothing
+end
+
+# TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators
+# for the TimeSeries, below?
+function store_constants(constants, variable_set)
+    return NamedTuple(
+        f => v
+        for (f, v) in pairs(constants) if is_variable_in_set(f, variable_set)
+    )
 end
 
 # "Sets" include continuous states, discrete outputs, etc.
 function create_time_series_for_set(
-    log::AbstractLog, breadcrumbs, set, time_dimension;
+    log::AbstractLog, breadcrumbs, set, variable_set, time_dimension;
     discrete = true,
 )
 
@@ -166,7 +266,7 @@ function create_time_series_for_set(
         f => create_time_series_for_var(
             log, breadcrumbs, string(f), v, time_dimension; discrete,
         )
-        for (f, v) in pairs(set)
+        for (f, v) in pairs(set) if is_variable_in_set(f, variable_set)
     )
 
 end
@@ -176,32 +276,64 @@ function create_time_series_for_model!(
     breadcrumbs,
     md::ModelDescription,
     time_dimension,
+    logging_policy::AbstractLoggingPolicy,
+    sampling_groups = Any[],
 )
 
     # Form this model's path.
-    path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
+    model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
+
+    # See what should be logged (variable set) and when it should be logged (sampler).
+    model_logging_policy = get_model_logging_policy(logging_policy, model_path)
+    variable_set = get_variable_set(model_logging_policy)
+    sampler = get_sampler(model_logging_policy)
+    sampling_group = get_sampling_group!(sampling_groups, sampler)
 
     # Record any extra stuff.
-    record_model_description(log, breadcrumbs, md)
+    record_model_description(log, breadcrumbs, md, variable_set)
+
+    # Build the child histories first so this model can cache every distinct sampling group
+    # used in its subtree.
+    models = NamedTuple(
+        f => create_time_series_for_model!(
+            log, vcat(breadcrumbs, string(f)), m,
+            time_dimension, logging_policy, sampling_groups,
+        )
+        for (f, m) in pairs(md.models)
+    )
+    sampling_groups_in_subtree =
+        collect_sampling_groups_in_subtree(sampling_group, models)
 
     # Create the time histories.
     mh = ModelHistory(;
         type = md.type,
-        path = path,
-        constants = md.constants, # TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators for the TimeSeries, below?
-        continuous_states = create_time_series_for_set(log, breadcrumbs, md.continuous_states, time_dimension; discrete = false),
+        path = model_path,
+        constants = store_constants(md.constants, variable_set),
+        continuous_states = create_time_series_for_set(
+            log, breadcrumbs, md.continuous_states, variable_set, time_dimension;
+            discrete = false,
+        ),
         # TODO: Record derivatives too.
-        discrete_states = create_time_series_for_set(log, breadcrumbs, md.discrete_states, time_dimension; discrete = true),
-        continuous_outputs = create_time_series_for_set(log, breadcrumbs, md.continuous_outputs, time_dimension; discrete = false),
-        discrete_outputs = create_time_series_for_set(log, breadcrumbs, md.discrete_outputs, time_dimension; discrete = true),
-        models = NamedTuple(
-            f => create_time_series_for_model!(log, vcat(breadcrumbs, string(f)), m, time_dimension)
-            for (f, m) in pairs(md.models)
-        )
+        discrete_states = create_time_series_for_set(
+            log, breadcrumbs, md.discrete_states, variable_set, time_dimension;
+            discrete = true,
+        ),
+        continuous_outputs = create_time_series_for_set(
+            log, breadcrumbs, md.continuous_outputs, variable_set, time_dimension;
+            discrete = false,
+        ),
+        discrete_outputs = create_time_series_for_set(
+            log, breadcrumbs, md.discrete_outputs, variable_set, time_dimension;
+            discrete = true,
+        ),
+        models,
+        sampler = sampler,
+        sampling_group,
+        sampling_groups_in_subtree,
     )
 
     # Put it in the dictionary of time histories.
-    log[path] = mh
+    log[model_path] = mh
 
     return mh
 
@@ -244,15 +376,22 @@ end
 export BasicLogOptions
 
 """
-There are no options for a `BasicLog`, so this is an empty structure.
+    BasicLogOptions(; logging_policy = AllPassLoggingPolicy())
+
+Configure an in-memory `BasicLog`.
+
+`logging_policy` assigns a model logging policy to every model, by path. The default
+`AllPassLoggingPolicy` logs all variables of all models on all samples.
 """
-struct BasicLogOptions <: AbstractLogOptions end
+@kwdef struct BasicLogOptions <: AbstractLogOptions
+    logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
+end
 
 """
     BasicLog
 
-This logs all sim results in arrays. It's the simplest and fastest log, but for sims with
-too much output to fit in RAM, a disk-based log (like HDF5Log) is a better choice.
+Stores time histories for model variables in arrays. This is the simplest and fastest log,
+but an HDF5 log is a better choice when the selected history is too large to fit in RAM.
 """
 struct BasicLog <: AbstractLog
     model_history_dict::OrderedDict{String, ModelHistory}
@@ -312,10 +451,14 @@ function create_time_series_for_var(
 
 end
 
-function create_log(::BasicLogOptions, model_description, time_dimension)
+function create_log(options::BasicLogOptions, model_description, time_dimension)
     log = BasicLog(OrderedDict{String, ModelHistory}())
+    logging_policy = options.logging_policy
     breadcrumbs = String[]
-    mh = create_time_series_for_model!(log, breadcrumbs, model_description, time_dimension)
+    mh = create_time_series_for_model!(
+        log, breadcrumbs, model_description,
+        time_dimension, logging_policy,
+    )
     return (log, mh)
 end
 
@@ -357,21 +500,28 @@ end
 export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
 
 """
-    HDF5LogOptions(; filename)
+    HDF5LogOptions(; filename, logging_policy)
+    HDF5LogOptions(filename)
 
-The HDF5Log acts like a BasicLog (stores all the same continuous and discrete states and
-outputs, as well as constants and metadata), but the underlying storage is an HDF5 file.
-This prevents the need for logs to be stored on disk -- critical for very long simulations.
-Note, however, that this is much slower than BasicLog.
+Configure an HDF5-backed log written to `filename`.
 
-This structure contains the options for the HDF5Log, consisting only of a filename.
+`logging_policy` assigns a model logging policy to every model, by path. The default
+`AllPassLoggingPolicy` logs all variables of all models on all samples.
 
-If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
-use `save_log_to_hdf5` when the simulation is over.
+An HDF5 log records the same selected continuous and discrete states, outputs, constants,
+and metadata as a `BasicLog`, but stores time-series data on disk. This supports histories
+that would not fit in RAM, at the cost of slower logging.
+
+If the selected history fits in memory and only the final artifact needs to be HDF5, it is
+faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
+    logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
 end
+
+# For backwards compatibility.
+HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 
 """
     load_hdf5_log(filename)

@@ -12,7 +12,8 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
     RatesOutput, UpdatesOutput,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     RegularSchedule, is_triggering, on_triggering,
-    Logs, SimOptions, Solvers, TimeSeries, simulate
+    Logs, SimOptions, Solvers, TimeSeries, Samplers, LoggingPolicies,
+    simulate
 
 #########
 # Plant #
@@ -498,6 +499,91 @@ function updates(t, system::ClosedLoopSystem)
         ),
     )
 
+end
+
+##############
+# Simulation #
+##############
+
+"""
+    default_closed_loop_system_specs()
+
+Returns a useful default `ClosedLoopSystemSpecs`.
+"""
+function default_closed_loop_system_specs()
+    return ClosedLoopSystemSpecs(
+        plant = PlantSpecs(
+            mass = 1.,
+            initial_position = 0.,
+            initial_velocity = 0.,
+            acceleration_noise_sigma = 0.1,
+        ),
+        sensor = SensorSpecs(
+            schedule = RegularSchedule(0.1),
+            sigma_noise = 0.,
+            sigma_bias = 0.,
+        ),
+        target = ConstantTargetSpecs(
+            constant_position = 1.,
+        ),
+        controller = PDControllerSpecs(
+            schedule = RegularSchedule(0.1),
+            p = 8.,
+            d = 4.,
+            initial_position = 0.,
+            initial_command = 0.,
+        ),
+        actuator = ActuatorSpecs(
+            time_constant = 0.2,
+            initial_command = 0.,
+            initial_response = 0.,
+        ),
+    )
+end
+
+"""
+    default_log()
+
+Returns a sensible default log for the closed-loop system.
+
+Here, one broad logging-policy rule assigns the same 0.1-second sampler to the root model
+and every descendant.
+"""
+function default_log()
+    return Logs.BasicLogOptions(;
+        logging_policy = LoggingPolicies.RegexLoggingPolicy(
+            [
+                # Assign one shared logging rate to the entire model hierarchy.
+                r"^/" => LoggingPolicies.ModelLoggingPolicy(;
+                    sampler = Samplers.RegularSampler(1//10),
+                ),
+            ],
+        ),
+    )
+end
+
+"""
+    simulate_closed_loop_system(; system_specs, log, solver)
+
+Run the closed-loop control demo for 10s. Sensible defaults are included for `system_specs`,
+`log`, and `solver`.
+
+By default, one broad logging-policy rule assigns the same 0.1-second sampler to the root
+model and every descendant.
+"""
+function simulate_closed_loop_system(;
+    system_specs = default_closed_loop_system_specs(),
+    log = default_log(),
+    solver = Solvers.DormandPrince54Options(),
+)
+    return simulate(
+        system_specs;
+        init_fcn = ControlSystemDemo.init,
+        rates_fcn = ControlSystemDemo.rates,
+        updates_fcn = ControlSystemDemo.updates,
+        t = (0, 10),
+        options = SimOptions(; log, solver, time_dimension = "Time" => "s"),
+    )
 end
 
 end

@@ -52,47 +52,11 @@ end
     end
 
     # Set the parameters for all of the models.
-    system_specs = ClosedLoopSystemSpecs(
-        plant = PlantSpecs(
-            mass = 1.,
-            initial_position = 0.,
-            initial_velocity = 0.,
-            acceleration_noise_sigma = 0.1,
-        ),
-        sensor = SensorSpecs(
-            schedule = RegularSchedule(0.1),
-            sigma_noise = 0.,
-            sigma_bias = 0.,
-        ),
-        target = ConstantTargetSpecs(
-            constant_position = 1.,
-        ),
-        controller = PDControllerSpecs(
-            schedule = RegularSchedule(0.1),
-            p = 8.,
-            d = 4.,
-            initial_position = 0.,
-            initial_command = 0.,
-        ),
-        actuator = ActuatorSpecs(
-            time_constant = 0.2,
-            initial_command = 0.,
-            initial_response = 0.,
-        ),
-    )
+    system_specs = ControlSystemDemo.default_closed_loop_system_specs()
 
     # Run the sim.
-    history, t, system = simulate(
-        system_specs;
-        init_fcn = ControlSystemDemo.init,
-        rates_fcn = ControlSystemDemo.rates,
-        updates_fcn = ControlSystemDemo.updates,
-        t = (0, 10),
-        options = SimOptions(;
-            solver,
-            log,
-            time_dimension = "Time" => "s",
-        ),
+    history, t, system = ControlSystemDemo.simulate_closed_loop_system(;
+        system_specs, log, solver,
     )
 
     dt_sensor = system_specs.sensor.schedule.period

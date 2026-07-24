@@ -5,6 +5,7 @@ module RunTests
 include("test_step_triggering.jl")
 include("test_simulation_times.jl")
 include("test_schedules.jl")
+include("test_logging_policies.jl")
 include("test_time_series.jl")
 include("test_basic_simulations.jl")
 include("test_solver_options.jl")
