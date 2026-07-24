@@ -986,26 +986,37 @@ function log_initial_discrete_stuff!(
 
 end
 
-# This logs the results of updates_fcn and any state snapshots requested at that time.
+# Discrete logging has two distinct sources:
+#
+# * Events come from UpdatesOutput. CompleteSampler records sparse state changes and
+#   discrete outputs this way.
+# * Snapshots come from the post-update ModelStateDescription. RegularSampler records every
+#   selected discrete state this way, whether or not it changed in the current update.
 
 function log_discrete_stuff!(
     ::ExactTime, ::Float64,
     ::Nothing,
     ::UpdatesOutput,
     ::ModelStateDescription,
+    ::ModelStateDescription,
     include_updated_continuous_states::Bool
 )
 end
 
-function log_discrete_states!(t_f, mh_xd, uo_updates, prior_xd, snapshot_states)
+function log_discrete_state_changes!(t_f, mh_xd, uo_updates)
     for fn in fieldnames(typeof(mh_xd))
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xd[fn], t_f, uo_updates[fn])
-        elseif snapshot_states
-            push!(mh_xd[fn], t_f, prior_xd[fn])
         end
     end
 end
+
+function log_discrete_state_snapshot!(t_f, mh_xd, updated_xd)
+    for fn in fieldnames(typeof(mh_xd))
+        push!(mh_xd[fn], t_f, updated_xd[fn])
+    end
+end
+
 function log_continuous_state_updates!(
     t_f, mh_xc, uo_updates, prior_xc,
     include_updated_continuous_states,
@@ -1027,13 +1038,13 @@ function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
     end
 end
 
-function log_discrete_model! end
+function log_discrete_event_model! end
 
 # As in continuous logging, generate only the direct field routing needed to preserve each
-# heterogeneous child type. Missing update branches are emitted only when a sampler in that
-# child's subtree can request a state snapshot.
-@generated function log_discrete_models!(
-    t, t_f,
+# heterogeneous child type. Event traversal follows only the models present in the current
+# UpdatesOutput; missing branches contain no state changes or outputs to record.
+@generated function log_discrete_event_models!(
+    t_f,
     mh_models::MHT,
     uo_models::UOT,
     prior_models::PT,
@@ -1050,8 +1061,8 @@ function log_discrete_model! end
             return quote
                 model_history = getfield(mh_models, $field)
                 if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
-                    log_discrete_model!(
-                        t, t_f,
+                    log_discrete_event_model!(
+                        t_f,
                         model_history, getfield(uo_models, $field),
                         getfield(prior_models, $field),
                         include_updated_continuous_states,
@@ -1059,18 +1070,7 @@ function log_discrete_model! end
                 end
             end
         else
-            return quote
-                model_history = getfield(mh_models, $field)
-                if sampling_groups_snapshot_states(
-                    model_history.sampling_groups_in_subtree,
-                )
-                    log_discrete_model!(
-                        t, t_f,
-                        model_history, UpdatesOutput(), getfield(prior_models, $field),
-                        include_updated_continuous_states,
-                    )
-                end
-            end
+            return nothing
         end
     end
     return quote
@@ -1080,9 +1080,9 @@ function log_discrete_model! end
 
 end
 
-# This is called recursively right after updating.
-function log_discrete_model!(
-    t::ExactTime, t_f::Float64,
+# This is called recursively for the current update event tree.
+function log_discrete_event_model!(
+    t_f::Float64,
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
@@ -1099,10 +1099,9 @@ function log_discrete_model!(
     # a next sample, then `include_updated_continuous_states` should be true, and we'll go
     # ahead and log the updated continuous-time state too.
     if sampling_group.log_states
-        log_discrete_states!(
-            t_f, mh.discrete_states, uo.updates, prior.discrete_states,
-            sampling_group.snapshot_states,
-        )
+        if !sampling_group.snapshot_states
+            log_discrete_state_changes!(t_f, mh.discrete_states, uo.updates)
+        end
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
             include_updated_continuous_states,
@@ -1114,12 +1113,59 @@ function log_discrete_model!(
         log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
     end
 
-    # Each child follows its own sampling group. A missing update subtree only needs to be
-    # visited when one of its active groups requests a state snapshot.
-    log_discrete_models!(
-        t, t_f, mh.models, uo.models, prior.models,
+    log_discrete_event_models!(
+        t_f, mh.models, uo.models, prior.models,
         include_updated_continuous_states,
     )
+
+end
+
+function log_discrete_snapshot_model! end
+
+# Snapshot traversal follows the fixed model-state hierarchy rather than the sparse update
+# tree. Direct field routing keeps independently sampled descendants type-stable.
+@generated function log_discrete_snapshot_models!(
+    t_f,
+    mh_models::MHT,
+    updated_models::UMT,
+) where {
+    MHT <: NamedTuple,
+    UMT <: NamedTuple,
+}
+
+    statements = map(fieldnames(MHT)) do fn
+        field = QuoteNode(fn)
+        return quote
+            model_history = getfield(mh_models, $field)
+            if sampling_groups_snapshot_states(
+                model_history.sampling_groups_in_subtree,
+            )
+                log_discrete_snapshot_model!(
+                    t_f,
+                    model_history, getfield(updated_models, $field),
+                )
+            end
+        end
+    end
+    return quote
+        $(statements...)
+        nothing
+    end
+
+end
+
+function log_discrete_snapshot_model!(
+    t_f::Float64,
+    mh::Logs.ModelHistory,
+    updated::ModelStateDescription,
+)
+
+    if mh.sampling_group.snapshot_states
+        log_discrete_state_snapshot!(
+            t_f, mh.discrete_states, updated.discrete_states,
+        )
+    end
+    log_discrete_snapshot_models!(t_f, mh.models, updated.models)
 
 end
 
@@ -1129,15 +1175,24 @@ function log_discrete_stuff!(
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
+    updated::ModelStateDescription,
     include_updated_continuous_states::Bool,
 )
 
     sampling_groups = mh.sampling_groups_in_subtree
     update_sampling_groups!(t, sampling_groups)
+
+    # Event logging sees the sparse update result and pre-update continuous states.
     if sampling_groups_log_sample(sampling_groups)
-        log_discrete_model!(
-            t, t_f, mh, uo, prior, include_updated_continuous_states,
+        log_discrete_event_model!(
+            t_f, mh, uo, prior, include_updated_continuous_states,
         )
+    end
+
+    # Snapshot logging sees the authoritative post-update state and does not inspect the
+    # sparse UpdatesOutput at all.
+    if sampling_groups_snapshot_states(sampling_groups)
+        log_discrete_snapshot_model!(t_f, mh, updated)
     end
 
 end
@@ -1428,16 +1483,25 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # or hook has not already supplied the reason for this sample to be the last.
     stop = first_stop(stop, find_model_requested_stop(updates))
 
-    # Log the updated values.
+    # Construct the authoritative post-update model state before logging. Sparse event
+    # logging still receives `msd` so it can record the pre-update side of continuous-state
+    # discontinuities, while snapshot logging reads complete discrete states from
+    # `updated_msd`.
+    updated_msd = update(msd, updates)
+
+    # Log the update events and any state snapshots selected at this time.
     #
     # If a discrete update changes continuous state, this records the pre-update side of the
     # discontinuity. The next accepted rates sample, or the explicit terminal sample below,
     # records the post-update side together with matching continuous outputs.
     #
-    log_discrete_stuff!(t_next, float(t_next), mh, updates, msd, false)
+    log_discrete_stuff!(
+        t_next, float(t_next), mh,
+        updates, msd, updated_msd, false,
+    )
 
     # Now accept the update.
-    msd = update(msd, updates)
+    msd = updated_msd
 
     return (t_next, msd, isnothing(stop) ? UnknownStopReason() : stop)
 

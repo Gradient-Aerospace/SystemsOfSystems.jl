@@ -518,10 +518,12 @@ end
     independent_history = run_logging_simulation(independent_policy)
     @test independent_history["/"]["keep_continuous_state"].time == [0.25, 0.75]
     @test independent_history["/"]["keep_discrete_state"].time == [0.25, 0.75]
+    @test independent_history["/"]["keep_discrete_state"].data == [1, 3]
     @test independent_history["/child"]["keep_continuous_state"].time ==
         [0.0, 0.25, 0.5, 0.75, 1.0]
     @test independent_history["/child"]["keep_discrete_state"].time ==
         [0.0, 0.25, 0.5, 0.75, 1.0]
+    @test independent_history["/child"]["keep_discrete_state"].data == [0, 1, 2, 3, 4]
     @test independent_history["/"].sampling_group !==
         independent_history["/child"].sampling_group
     @test length(independent_history["/"].sampling_groups_in_subtree) == 2
@@ -558,6 +560,7 @@ end
         @test model_history["keep_continuous_state"].time == [0.25, 0.75]
         @test model_history["keep_continuous_output"].time == [0.25, 0.75]
         @test model_history["keep_discrete_state"].time == [0.25, 0.75]
+        @test model_history["keep_discrete_state"].data == [1, 3]
         @test model_history["keep_discrete_output"].time == [0.25, 0.75]
     end
     @test shared_root.sampling_group === shared_child.sampling_group

@@ -56,9 +56,10 @@ function should_log_states end
 Return whether every current state should be logged for this sample, including states absent
 from the current update result.
 
-When this is false, only explicitly updated discrete states are recorded. Continuous states
-are always obtained from the current model state when state logging is enabled. Custom
-directives retain sparse behavior unless they implement this method.
+At a discrete update opportunity, snapshots are read from the authoritative post-update
+model state. When this is false, only explicitly updated discrete states are recorded.
+Continuous states are always obtained from the current model state when state logging is
+enabled. Custom directives retain sparse behavior unless they implement this method.
 """
 @inline should_snapshot_states(::Any) = false
 
@@ -134,8 +135,9 @@ end
 
 Log the model's states and outputs at times in the sequence `offset + n * period`, for
 nonnegative integer `n`. Every selected state is snapshotted at those times, including
-discrete states absent from the current update result. Discrete outputs remain event-like
-and are recorded only when the current update result supplies them.
+discrete states absent from the current update result. Discrete snapshots reflect the
+post-update model state. Discrete outputs remain event-like and are recorded only when the
+current update result supplies them.
 
 `period` and `offset` are converted to exact simulation times. `period` must be finite and
 strictly positive, and `offset` must be finite. A sampler does not add times to the
