@@ -1,6 +1,6 @@
 # SystemsOfSystems Documentation
 
-SystemsOfSystems is a simulation engine for models that contain models that contain models, etc., where each model can have both continuous and discrete dynamics, outputs, and random variables. Given a top-level model and the dynamics for the model, it will simulate it (and its sub-models) over time, producing a time history of states and outputs for all models.
+SystemsOfSystems is a simulation engine for models that contain models that contain models, etc., where each model can have both continuous and discrete dynamics, outputs, and random variables. Given a top-level model and its dynamics, SystemsOfSystems will simulate it (and its sub-models) over time, producing a time history of states and outputs for all models.
 
 ## Models
 
@@ -15,7 +15,7 @@ A model is made up of the following kinds of things:
 * resources (like open files that must be closed at the end of the simulation)
 * models
 
-A model is expected to have at three key functions:
+A model is expected to have three key functions:
 
 * an initialization function that describes the model
 * a continuous dynamics function that returns the derivatives of the continuous states, as well as any continuous outputs, plus the results of its sub-models' continuous dynamics
@@ -79,7 +79,7 @@ function my_init_fcn(t, user_data, seed)
 end
 
 # This describes the derivatives of each part of the state. Because of our
-# model description, above, `model` here will contain a field for `x` and
+# model description above, `model` here will contain a field for `x` and
 # a field for `x_dot` and nothing else.
 function my_rates_fcn(t, model)
     return RatesOutput(;
@@ -120,11 +120,11 @@ using GLMakie # For the plot
 plot_ts(history["/"]["x"])
 ```
 
-This is only the simplest possible demo. See the [Control System Example](@ref) for discrete states, making models of models, and adding outputs and random variables.
+This is only the simplest possible demo. See the [Control System Example](@ref) for examples of discrete states, nested models, outputs, and random variables.
 
 ## Options
 
-The simulation has many different kinds of options. The `simulate` function accepts an `options` keyword that should be a `SimOptions` type. All of the fields of `SimOptions` have defaults, but here's an example of setting everything:
+The simulation has many different kinds of options. The `simulate` function accepts an `options` keyword that should be a `SimOptions`. All of the fields of `SimOptions` have defaults, but here's an example of setting everything:
 
 ```
 simulate(
@@ -136,12 +136,12 @@ simulate(
         hooks = [
             Hooks.ProgressBarOptions(),
         ],
-        # Let's specify an fixed-step solver.
+        # Let's specify a fixed-step solver.
         solver = Solvers.RungeKutta4Options(; dt = 0.1),
         # We almost always want a "basic" log, but we can add a lot of options
         # to a basic log (see logging policies, below).
         log = Logs.BasicLogOptions(),
-        # The time dimension is only used for the x axis of generated plots.
+        # The time dimension is only used for the x-axis of generated plots.
         # It has nothing to do with how the sim runs.
         time_dimension = "Time" => "s",
     ),
@@ -164,11 +164,11 @@ Users can implement their own solvers according to the solver interface.
 
 ### Hooks
 
-The simulation has an option to "hook into" it loop. It exportrs a `Hook` module with the following built-in hook types.
+The simulation has an option to "hook into" its loop. It exports a `Hooks` module with the following built-in hook types.
 
 * `ProgressBarOptions`: Configures a hook to display a progress bar in stdout
 * `SimTimeoutOptions`: Configures a hook to end the sim after a certain timeout (useful if something is hanging)
-* `ClockSyncOptions`: Configures a hook to synchronize the loop with soft real time using the system clock
+* `ClockSyncOptions`: Configures a hook to synchronize the loop with soft real-time using the system clock
 
 Users can implement their own hooks according to the hook interface.
 
@@ -178,7 +178,7 @@ There are three types of logs today:
 
 * `BasicLogOptions`: Logs states and outputs in regular Julia arrays. By default, everything is logged.
 * `NullLogOptions`: Logs nothing. This is good for speed when all you care about is the final state of the models.
-* `HDF5LogOptions`: Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interacting with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
+* `HDF5LogOptions`: Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
 
 Users can implement their own logs according to the log interface.
 

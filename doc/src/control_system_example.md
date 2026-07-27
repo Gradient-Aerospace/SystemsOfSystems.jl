@@ -3,10 +3,10 @@
 In this example, we're going to develop a closed-loop control system that features:
 
 * A "plant", the system whose dynamics we want to control
-* A sensor that make noisy measurements of the plant
+* A sensor that makes noisy measurements of the plant
 * An actuator that provides an input to the plant
 * A target generator that produces the target state we want to drive the plant to
-* And a control system the uses the sensor and sends commands to the actuator to drive the plant to the target state.
+* A control system that uses the sensor and sends commands to the actuator to drive the plant to the target state
 
 ```
 +-- Closed-Loop System ---------------------------------------------------+
@@ -31,7 +31,7 @@ In this example, we're going to develop a closed-loop control system that featur
 +-------------------------------------------------------------------------+
 ```
 
-To do this, we'll see several different ways to model using SystemsOfSystems, including:
+To do this, we'll see several different ways to build models using SystemsOfSystems, including:
 
 * Continuous systems
 * Discrete systems
@@ -39,9 +39,9 @@ To do this, we'll see several different ways to model using SystemsOfSystems, in
 * Schedules
 * Models that contain sub-models
 
-This is a working example. The the outputs and plots and generated as part of generating this documentation. One can copy all of this into a script and product the exact same results.
+This is a working example. The outputs and plots are generated as part of building this documentation. One can copy all of this into a script and produce the exact same results.
 
-(Quick note: Nothing about SystemsOfSystems is specific to control theory or closed-loop systems. It's simply a common simulation pattern that we can implement with general simulation engine like SystemsOfSystems.)
+(Quick note: Nothing about SystemsOfSystems is specific to control theory or closed-loop systems. It's simply a common simulation pattern that we can implement with a general simulation engine like SystemsOfSystems.)
 
 ## Imports
 
@@ -56,7 +56,7 @@ import GLMakie # The plotting package we'll use
 
 ## Plant
 
-We'll start with a very simple plant. The dynamics as as follows:
+We'll start with a very simple plant. The dynamics are as follows:
 
 ```math
 \ddot{x} = \frac{1}{m} \left( -x + f_a + \nu \right)
@@ -66,7 +66,7 @@ where ``x`` is the plant state (position), ``m`` is the mass, ``f_a`` is the for
 
 ### Plant Implementation
 
-First, we want a way to parameterize this system, to set the constants and initial conditions. Let's make a quick type for that.
+First, we want a way to parameterize this system so that we can set the constants and initial conditions. Let's make a quick type for that.
 
 ```@example controls
 # This is how the system is parameterized.
@@ -79,7 +79,7 @@ end
 ;
 ```
 
-(In case you're new to Julia, the `@kwdef` here says, "Make me a constructor that has keyword arguments for this, so we can call `PlantSpecs(; mass = 1., initial_position = 2., ...)`, etc.)
+(In case you're new to Julia, the `@kwdef` here creates a constructor with keyword arguments, so we can call `PlantSpecs(; mass = 1., initial_position = 2., ...)`, etc.)
 
 At any given moment while the plant is running in the sim, we want to be able to access its mass, position, velocity, and noise input, so let's make the "model" form:
 
@@ -94,7 +94,7 @@ end
 ;
 ```
 
-We need a function that tells the sim what constants our model should have, what states, the random variables, and also any other outputs we want logged. The input to this function will be time, our `PlantSpecs from above, and a seed that we can use for random initial conditions.
+We need a function that tells the sim what constants, states, and random variables our model should have, as well as any other outputs we want logged. The inputs to this function will be time, our `PlantSpecs` from above, and a seed that we can use for random initial conditions.
 
 ```@example controls
 # This turns the specs into a description of the model.
@@ -149,11 +149,11 @@ end
 ;
 ```
 
-The describes all of the variables that the plant cares about. (We don't _need_ to use `VariableDescriptions` here; we could just use raw numbers/structs, but the descriptions show up nicely in plots, so we'll use them in this example.)
+This describes all of the variables that the plant cares about. (We don't _need_ to use `VariableDescription` here; we could just use raw numbers/structs, but the descriptions show up nicely in plots, so we'll use them in this example.)
 
 TODO: branching
 
-The plant has only continuous-time dynamics. Let's write a function that takes in the current time, plant model, and actuator force and returns the derivatives of the state variables, plus the extra output we said we wanted logged. Of
+The plant has only continuous-time dynamics. Let's write a function that takes in the current time, plant model, and actuator force and returns the derivatives of the state variables, plus the extra output we said we wanted logged.
 
 ```@example controls
 # This is where we implement the model's dynamics -- functions that say how the model
@@ -176,7 +176,7 @@ end
 
 Note: We called our functions `init` and `rates`, but the names are arbitrary. We can choose whatever names we like.
 
-Finally, other models will need the plants position (the sensor will, in order to take a measurement of it), so let's provide a function that returns the position so that the sensor model doesn't have to access the plant's state directly.
+Finally, other models will need the plant's position (the sensor will need it in order to take a measurement), so let's provide a function that returns the position so that the sensor model doesn't have to access the plant's state directly.
 
 ```@example controls
 get_position(plant::Plant) = plant.position
@@ -184,7 +184,7 @@ get_position(plant::Plant) = plant.position
 
 ### Plant Simulation
 
-Before we move on with our example, we can pause here and simulate the plant by itself, to make sure things are working. We'll need to do one extra thing: wrap our `rates` function with a function that supplies the non-existant actuator force (0 for this example).
+Before we move on with our example, we can pause here and simulate the plant by itself to make sure things are working. We'll need to do one extra thing: wrap our `rates` function with a function that supplies the nonexistent actuator force (0 for this example).
 
 ```@example controls
 plant_specs = PlantSpecs(;
@@ -221,13 +221,13 @@ And, while we're here, let's plot it.
 SystemsOfSystems.plot_ts(history["/"]["position"])
 ```
 
-In fact, let's run 15 simulations, returning the `position` time series from each and then plot them all. Here, we'll write a loop that generates an array of 15 time histories of position.
+In fact, let's run 15 simulations, returning the `position` time series from each, and then plot them all. Here, we'll write a loop that generates an array of 15 time histories of position.
 
 ```@example controls
 # Make an array of position histories, one for each seed.
 position_histories = map(1:15) do seed
 
-    # Run the sim for this see.
+    # Run the sim for this seed.
     history, t, plant = SystemsOfSystems.simulate(
         plant_specs;
         t = (0, 10),
@@ -246,7 +246,7 @@ end
 SystemsOfSystems.plot_ts(position_histories)
 ```
 
-We can see the sinusoidal motion we'd expect to result for a system like this, driven by noise. At this point, we can have some faith that our plant model is doing what we intend. Let's continue with the remaining systems.
+We can see the sinusoidal motion we'd expect from a system like this, driven by noise. At this point, we can have some faith that our plant model is doing what we intend. Let's continue with the remaining systems.
 
 ## Sensor
 
@@ -262,7 +262,7 @@ We start with the specifications (options, parameters, whatever).
 end
 ```
 
-The sensor will product a specific, structured type, so let's implement that type.
+The sensor will produce a specific structured type, so let's implement that type.
 
 ```@example controls
 struct SensorMeasurement
@@ -271,7 +271,7 @@ struct SensorMeasurement
 end
 ```
 
-The measurement itself will be stateful. Once the measurement is generated, it will be help constant until the next measurement is made. Hence, the measurement is part of the `Sensor` model:
+The measurement itself will be stateful. Once the measurement is generated, it will be held constant until the next measurement is made. Hence, the measurement is part of the `Sensor` model:
 
 ```@example controls
 # Everything the sensor needs while running.
@@ -330,7 +330,7 @@ function init(t, specs::SensorSpecs, seed)
 end
 ```
 
-Since we're using the `SensorMeasurement` struct as state, and since we want plots of the states, we need to tell SystemsOfSystems how to break this down into the different dimensions (the different lines in the plot). SystemsOfSystems will look to the Dimensions package for this behavior, so we use the Dimension method for saying, "The `SensorMeasurement` has two dimension, and those dimensions are its two fields -- a very normal interpretation of "dimensions" for a struct."
+Since we're using the `SensorMeasurement` struct as a state and want to plot that state, we need to tell SystemsOfSystems how to break it down into individual dimensions (the different lines in the plot). SystemsOfSystems looks to the Dimensions package for this behavior, so we use `Dimensions.dimstyle` to say that `SensorMeasurement` has two dimensions: its two fields, a very normal interpretation of "dimensions" for a struct.
 
 ```@example controls
 # This helps the plotting make sense of this structured type. It will automatically be able
@@ -356,7 +356,7 @@ function get_measurement(t, sensor::Sensor, true_position)
 end
 ```
 
-Now we specify the discrete dynamics. This is very simple. When triggering, we record the new measurement. (Otherwise, we do nothing.) The measurement will be an _input_ to this function. It will be generated with the above function. We'll see how this all comes together in the closed-loop top model that routes everything together.
+Now we specify the discrete dynamics. This is very simple. When the schedule triggers, we record the new measurement. Otherwise, we do nothing. The measurement will be an _input_ to this function. It will be generated with the above function. We'll see how this all comes together in the closed-loop top model that routes everything together.
 
 ```@example controls
 # This says how the discrete states update on this sample.
@@ -376,7 +376,7 @@ end
 
 ## Actuator
 
-On the other side of the plant is the actuator. That model is both continuous and discrete. Its discrete state is the incoming command from the controller. Its continuous state is its reponse to that command. We'll allow this to be a simple, first-order system.
+On the other side of the plant is the actuator. That model is both continuous and discrete. Its discrete state is the incoming command from the controller. Its continuous state is its response to that command. We'll allow this to be a simple first-order system.
 
 The pattern of writing a model's specifications and "model form" should be familiar by now. There's nothing new here, so we'll write a bit more all at once:
 
@@ -429,7 +429,7 @@ function rates(t, actuator::Actuator)
     )
 end
 
-# For the discrete-time dynamics, this records its command as state that it will use
+# For the discrete-time dynamics, this records its command as a state that it will use
 # throughout its continuous-time dynamics. (We don't use a sample period here. We assume
 # this updates on _any_ sample.)
 function updates(t, actuator::Actuator, command)
@@ -440,7 +440,7 @@ function updates(t, actuator::Actuator, command)
     )
 end
 
-# An accessor that outside models can use:
+# An accessor that other models can use:
 get_actuator_response(t, actuator) = actuator.response
 ```
 
@@ -554,7 +554,7 @@ function init(t, specs::PIDControllerSpecs, seed)
             ),
         ),
         schedules = (;
-            # Tell the sim that this controller acts on a regular period.
+            # Tell the sim that this controller acts at a regular interval.
             schedule = SystemsOfSystems.VariableDescription(
                 specs.schedule;
                 title = "Controller Schedule",
@@ -591,8 +591,7 @@ function get_command(t, controller::PIDController, target_position, meas)
 
 end
 
-# Records what states should be updated. This holds the most recent command and position
-# measurement.
+# Record the most recent command, position measurement, and integral as states.
 function updates(t, controller::PIDController, target, measurement, command)
 
     SystemsOfSystems.on_triggering(controller.schedule, t) do
@@ -617,7 +616,7 @@ end
 
 ## Closed-Loop System
 
-Finally, we're ready to bring all of those systems together, essentially routing from one to the other. The closed-loop system will be the top-level system in our simulation (will have no inputs from outside or outputs going to anything else). It will also have no state. Its only job is to contain/route the sub-models.
+Finally, we're ready to bring all of those systems together, essentially routing from one to the other. The closed-loop system will be the top-level system in our simulation (it will have no inputs from outside or outputs going to anything else). It will also have no state. Its only job is to contain/route the sub-models.
 
 The specifications for a closed-loop system are simply the set of specifications for the sub-models.
 
@@ -631,9 +630,9 @@ The specifications for a closed-loop system are simply the set of specifications
 end
 ```
 
-We don't specify types for the above because there's no point, and because we might want to swap out one model type for another, compatible model type.
+We don't specify types for the above because there's no point, and because we might want to swap out one model type for another compatible model type.
 
-Similar, the "model form" itself just holds the other model forms.
+Similarly, the "model form" itself just holds the other model forms.
 
 ```@example controls
 @kwdef struct ClosedLoopSystem
@@ -645,7 +644,7 @@ Similar, the "model form" itself just holds the other model forms.
 end
 ```
 
-When we initialize this model, that will just consist of initializing the sub-models. We'll also declare one output variable: the control error.
+Initializing this model merely consists of initializing the sub-models. We'll also declare one output variable: the control error.
 
 ```@example controls
 function init(t, specs::ClosedLoopSystemSpecs, seed)
@@ -672,11 +671,11 @@ function init(t, specs::ClosedLoopSystemSpecs, seed)
 end
 ```
 
-There is no `control_error` on the initial sample; hence, we have a `missing` there, and we declare that this will, when its available, be a `Float64`.
+There is no `control_error` on the initial sample; hence, we have a `missing` there, and we declare that this will, when it's available, be a `Float64`.
 
 Note that we "branch" the seed here for each sub-model. This means that, if the plant and sensor both take draws, they won't be taking the same draws, and their draws won't interact with each other. They will have totally separate (but predictable) streams.
 
-Just like the `init` function, the job of this model's `rates` function is to gather up the `RatesOutputs` for its sub-models. The plant's `rates` function depends on the actuator force input, so we get that from the actuator. Now, finally, we start to see where we use those accessors we made.
+Just like the `init` function, the job of this model's `rates` function is to gather up the `RatesOutput` for each of its sub-models. The plant's `rates` function depends on the actuator force input, so we get that from the actuator. Now, finally, we start to see where we use those accessors we made.
 
 ```@example controls
 function rates(t, system::ClosedLoopSystem)
@@ -787,9 +786,9 @@ Let's see if we're driving down the control error.
 SystemsOfSystems.plot_ts(history["/"]["control_error"])
 ```
 
-Note that this is the true control error, the target position minus the truth position. There's a steady-state offset because our sensor has a bias.
+Note that this is the true control error, the target position minus the true position. There's a steady-state offset because our sensor has a bias.
 
-Let's make a more involved plot. Let's plot the target position, measured position, and the truth all together, and let's put the integral term beneath it.
+Let's make a more involved plot. Let's plot the target position, measured position, and true position all together, and let's put the integral term beneath it.
 
 ```@example controls
 SystemsOfSystems.plot_ts(
@@ -815,3 +814,5 @@ Let's take a look at `final_system`, the complete model form at the end of the s
 ```@example controls
 dump(final_system)
 ```
+
+In there, we see the sensor bias that results in the steady-state bias of the result.
