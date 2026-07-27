@@ -5,18 +5,18 @@ export initialize, simulate, SimOptions, Schedules, Solvers, Hooks, Logs, Resour
 
 # Model descriptions
 export ModelDescription, VariableDescription, RandomVariableDescription,
-    RatesOutput, UpdatesOutput, on_triggering,
+    RatesOutput, UpdatesOutput,
     OutputFile, Resource
 
 # Utilities
-export Dimension, TimeSeries,
+export Dimension,
     BranchingSeed, branch,
-    AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation,
+    TimeSeries, AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation, plot_ts,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
-    is_triggering, next_trigger_time,
+    on_triggering, is_triggering, next_trigger_time, next_regular_time,
     KEEP_T_NEXT, NO_T_NEXT,
-    is_regular_step_triggering, next_regular_time,
+    is_regular_step_triggering, # backward compatibility
     Samplers, LoggingPolicies
 
 using Random: Xoshiro, randn
