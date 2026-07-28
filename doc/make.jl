@@ -5,8 +5,8 @@ makedocs(;
     pages = [
         "Introduction" => "index.md",
         "Control System Example" => "control_system_example.md",
-        # "Modeling" => "modeling.md",
-        # "Sim Options" => "options.md",
+        "Modeling" => "modeling.md",
+        "Options" => "options.md",
     ],
 )
 

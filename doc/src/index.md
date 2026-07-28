@@ -126,7 +126,7 @@ This is only the simplest possible demo. See the [Control System Example](@ref) 
 
 The simulation has many different kinds of options. The `simulate` function accepts an `options` keyword that should be a `SimOptions`. All of the fields of `SimOptions` have defaults, but here's an example of setting everything:
 
-```
+```julia
 simulate(
     ...;
     options = SimOptions(;
