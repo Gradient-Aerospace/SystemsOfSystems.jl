@@ -14,6 +14,6 @@ makedocs(;
 )
 
 # To deploy the docs to GitHub Pages:
-# deploydocs(
-#     repo = "github.com/Gradient-Aerospace/HDF5Vectors.jl.git",
-# )
+deploydocs(
+    repo = "github.com/Gradient-Aerospace/SystemsOfSystems.jl.git",
+)
