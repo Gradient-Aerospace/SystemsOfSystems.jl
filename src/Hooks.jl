@@ -173,7 +173,7 @@ end
     ClockSyncOptions
 
 Stores the options for a `ClockSync`, which stalls in order to keep the simulation loop from
-running faster than realtime. If the amount of desired stall time is larger than
+running faster than real time. If the amount of desired stall time is larger than
 `sleep_margin` (s), it will sleep until `sleep_margin` before the next trigger time. After
 that, it enters a tight loop using `time_ns()` to determine when it's time to continue with
 the simulation.
@@ -189,9 +189,9 @@ platform.
 Julia's `sleep` function has a minimum duration of 1ms. The default `sleep_margin` is 2ms to
 allow the model to enter the "tight timing loop" after sleeping.
 
-This type uses UInt64 for storage of the start and current times in nanoseconds. This means
-that real-time synchronization be sustained for ~584 years and is unlikely to limit the
-duration of the simulation.
+This type uses `UInt64` to store the start and current times in nanoseconds. This means that
+real-time synchronization can be sustained for approximately 584 years and is unlikely to
+limit the duration of the simulation.
 """
 @kwdef struct ClockSyncOptions <: AbstractHookOptions
     sleep_margin::Float64 = 0.002

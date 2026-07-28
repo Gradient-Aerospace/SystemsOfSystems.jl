@@ -55,13 +55,13 @@ using .LoggingPolicies
 This is the output expected from the `init_fcn` provided to `simulate`. It describes the
 elements of the model, including:
 
-* `type::Type`: The type that should be used when constructing the model (or Nothing to use
-  a named tuple. The type should accept keyword arguments for the variables, below.
+* `type::Type`: The type that should be used when constructing the model, or `Nothing` to
+  use a named tuple. The type should accept keyword arguments for the variables below.
 * `constants`: A named tuple of each constant the model should hold
 * `continuous_states`: A named tuple of each of the continuous states in the model
 * `discrete_states`: A named tuple of each of the discrete states in the model
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
-* `discrete_outputs`: A named tuple of each of the continuous outputs in the model
+* `discrete_outputs`: A named tuple of each of the discrete outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
    the model. Each element can be a function mapping `(rng, t_last, t_next)` to a value, or
    a `RandomVariableDescription`.
@@ -221,7 +221,7 @@ Describes a model's continuous-time derivatives and outputs.
   contains the rate of change of that continuous variable.
 * `outputs`: A named tuple of continuous-time outputs (must match the original
   `ModelDescription`).
-* `models`: A named tuple contains the `RatesOutput` for each submodel.
+* `models`: A named tuple containing the `RatesOutput` for each submodel.
 * `stop`: Set to true to request that the simulation stop after this accepted sample
   completes. Stop requests from rejected solver attempts and intermediate Runge-Kutta
   stages are ignored.
@@ -289,8 +289,8 @@ end
 end
 
 """
-These can be used to decorate the variables in a `ModelDescription`. The decorations become
-part of the `TimeSeries` for that variable. Example:
+`VariableDescription` can be used to decorate variables in a `ModelDescription`. The
+decorations become part of the `TimeSeries` for that variable. Example:
 
 ```
 VariableDescription(
@@ -756,7 +756,7 @@ A set of options for the `simulate` function, with keyword arguments for:
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
 * `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
-* `time_dimension`: A `Dimension` for the time unit (e.g., `["time" => "s"]`).
+* `time_dimension`: A `Dimension` for the time unit (e.g., `"time" => "s"`).
 """
 @kwdef struct SimOptions
     outdir::Union{Nothing, String} = nothing

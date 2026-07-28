@@ -75,12 +75,12 @@ end
 """
     OutputFile
 
-Describes an output file that SystemsOfSystems should open after initialzation and close
+Describes an output file that SystemsOfSystems should open after initialization and close
 after simulation.
 
 After `init_fcn` has run, this will create the requested file `name`. If `name` is an
 absolute path, that file will be created. If it is a relative path, the file will be stored
-in the `outdir` provided to the `simulate` as `<outdir>/model/submodel/subsubmodel/<name>`
+in the `outdir` provided to `simulate` as `<outdir>/model/submodel/subsubmodel/<name>`
 when `scoped == true` and `<outdir>/<name>` otherwise.
 """
 @kwdef struct OutputFile <: AbstractResource

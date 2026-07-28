@@ -1,6 +1,6 @@
 # SystemsOfSystems Documentation
 
-SystemsOfSystems is a simulation engine for models that contain models that contain models, etc., where each model can have both continuous and discrete dynamics, outputs, and random variables. Given a top-level model and its dynamics, SystemsOfSystems will simulate it (and its sub-models) over time, producing a time history of states and outputs for all models.
+SystemsOfSystems is a simulation engine for models that contain models that contain models, etc., where each model can have both continuous and discrete dynamics, outputs, and random variables. Given a top-level model and its dynamics, SystemsOfSystems will simulate it (and its sub-models) over time, producing a time history of states and outputs for all models. Further, the simulation engine allows different solvers, methods for logging and sub-sampling the data, and "hooks" into the simulation loop for integrating processes outside of the models, like showing a progress bar.
 
 ## Models
 
@@ -21,7 +21,7 @@ A model is expected to have three key functions:
 * a continuous dynamics function that returns the derivatives of the continuous states, as well as any continuous outputs, plus the results of its sub-models' continuous dynamics
 * a discrete dynamics function that returns updates to the discrete states, as well as any discrete outputs, plus the results of its sub-models' discrete dynamics
 
-A model can be any type, or even no type at all (it will default to a named tuple). Models are never mutated in SystemsOfSystems (and should not mutate themselves). Rather, they are always constructed "fresh" from their constants, states, random variables, etc.
+A model can be any type, or even no type at all (it will default to a named tuple). Models are never mutated in SystemsOfSystems and should not mutate themselves. Rather, they are always constructed "fresh" from their constants, states, random variables, etc.
 
 ## Simulation
 
@@ -101,7 +101,7 @@ history, final_time, final_model = simulate(
 history
 ```
 
-Now, we can look at the histories that were generated. Here are the time histories available in the "root" model (the only model in this example):
+Now, we can look at the histories that were generated. Here are the time histories available in the "root" model, which is the only model in this example:
 
 ```@example quick_example
 history["/"]
@@ -155,20 +155,18 @@ Each of those modules is introduced below.
 
 The following solvers exist today:
 
-* `RungeKutta4Options`: 4th-order Runge-Kutta method, useful when the user can directly provide a step size that will work throughout the simulation
-* `DormandPrince54Options`: Dormand-Prince 5th-order adaptive-step method with a 4th-order embedded solution for step size control, useful when the step size needs to vary during the simulation automatically
+* [`RungeKutta4Options`](@ref): 4th-order Runge-Kutta method, useful when the user can directly provide a step size that will work throughout the simulation
+* [`DormandPrince54Options`](@ref): Dormand-Prince 5th-order adaptive-step method with a 4th-order embedded solution for step size control, useful when the step size needs to vary during the simulation automatically
 
-More solvers are expected soon.
-
-Users can implement their own solvers according to the solver interface.
+Users can implement their own solvers according to the solver interface, and more solvers will be available soon.
 
 ### Hooks
 
 The simulation has an option to "hook into" its loop. It exports a `Hooks` module with the following built-in hook types.
 
-* `ProgressBarOptions`: Configures a hook to display a progress bar in stdout
-* `SimTimeoutOptions`: Configures a hook to end the sim after a certain timeout (useful if something is hanging)
-* `ClockSyncOptions`: Configures a hook to synchronize the loop with soft real-time using the system clock
+* [`ProgressBarOptions`](@ref): Configures a hook to display a progress bar in stdout
+* [`SimTimeoutOptions`](@ref): Configures a hook to end the sim after a certain real-world timeout (useful if something is hanging)
+* [`ClockSyncOptions`](@ref): Configures a hook to synchronize the loop with soft real-time using the system clock
 
 Users can implement their own hooks according to the hook interface.
 
@@ -176,9 +174,9 @@ Users can implement their own hooks according to the hook interface.
 
 There are three types of logs today:
 
-* `BasicLogOptions`: Logs states and outputs in regular Julia arrays. By default, everything is logged.
-* `NullLogOptions`: Logs nothing. This is good for speed when all you care about is the final state of the models.
-* `HDF5LogOptions`: Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
+* [`BasicLogOptions`](@ref): Logs states and outputs in regular Julia arrays. By default, everything is logged.
+* [`NullLogOptions`](@ref): Logs nothing. This is good for speed when all that's needed from the sim is the final state of the models.
+* [`HDF5LogOptions`](@ref): Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
 
 Users can implement their own logs according to the log interface.
 

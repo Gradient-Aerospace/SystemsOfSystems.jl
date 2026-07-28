@@ -469,7 +469,9 @@ end
 export NullLogOptions
 
 """
-There are no options for a `NullLog`, so this is an empty structure.
+    NullLogOptions()
+
+Configure a `NullLog`, which disables history logging. There are no fields to set.
 """
 struct NullLogOptions <: AbstractLogOptions end
 

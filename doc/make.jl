@@ -5,8 +5,11 @@ makedocs(;
     pages = [
         "Introduction" => "index.md",
         "Control System Example" => "control_system_example.md",
+        "Simulation" => "simulation.md",
         "Modeling" => "modeling.md",
         "Options" => "options.md",
+        "Initialization" => "initialization.md",
+        "Time" => "time.md",
     ],
 )
 
