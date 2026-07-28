@@ -40,7 +40,7 @@ abstract type AbstractSchedule end
 """
     is_triggering(schedule::AbstractSchedule, t)
 
-Return whether `schedule` has an occurrence at official simulation time `t`.
+Returns whether `schedule` has an occurrence at official simulation time `t`.
 
 Implementations should use exact-time comparisons. The simulation calls every model's
 update function after every accepted step, so models use this predicate to distinguish
@@ -51,7 +51,8 @@ function is_triggering end
 """
     next_trigger_time(schedule::AbstractSchedule, t)
 
-Return the first occurrence of `schedule` strictly later than official simulation time `t`.
+Returns the first occurrence of `schedule` strictly later than official simulation time
+`t`.
 
 The strict inequality is part of the interface: initialization establishes the model at
 `t_start` without performing a discrete update there. A finite schedule may return
@@ -116,7 +117,7 @@ Dimensions.dimstyle(::Type{OffsetRegularSchedule}) = Dimensions.StructDimensionS
 """
     next_regular_time(t, period, offset = 0//1)
 
-Return the first time in `offset + n * period`, for nonnegative integer `n`, that is
+Returns the first time in `offset + n * period`, for nonnegative integer `n`, that is
 strictly later than `t`.
 
 This function is intentionally not inclusive: `init_fcn` establishes the model at the
@@ -152,7 +153,7 @@ end
 """
     is_regular_step_triggering(t, period, offset = 0//1)
 
-Return whether exact time `t` belongs to the periodic sequence `offset + n * period`.
+Returns whether exact time `t` belongs to the periodic sequence `offset + n * period`.
 
 A zero period retains the existing convention of triggering at every accepted sample. For a
 positive period, widened exact arithmetic avoids floating-point tolerances and bounded
@@ -193,7 +194,7 @@ next_trigger_time(schedule::OffsetRegularSchedule, t) =
 """
     find_soonest_time(schedules, t_last)
 
-Return the first declared schedule occurrence strictly later than `t_last`.
+Returns the first declared schedule occurrence strictly later than `t_last`.
 
 Tuple mapping preserves specialization for every concrete schedule type and produces a
 tuple of exact next times. This is intentionally simple for the initial architecture; very

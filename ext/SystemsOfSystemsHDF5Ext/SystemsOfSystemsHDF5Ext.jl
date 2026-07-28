@@ -16,10 +16,10 @@ import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
 """
     HDF5Log(; fid, model_history_dict)
 
-This acts like a BasicLog (stores all the same continuous and discrete states and outputs,
-as well as constants and metadata), but the underlying storage is an HDF5 file. This
-prevents the need for logs to be stored on disk -- critical for very long simulations. Note,
-however, that this is much slower than BasicLog.
+A container for the same continuous and discrete states, outputs, constants, and metadata as
+a `BasicLog`, with an HDF5 file as the underlying storage. This prevents the complete log
+from being stored in RAM, which is critical for very long simulations. However, it is much
+slower than a `BasicLog`.
 
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
 use `save_log_to_hdf5` when the simulation is over.

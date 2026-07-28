@@ -5,7 +5,8 @@ export AbstractResource, OutputFile, Resource, ResourceInputs, open_resource, cl
 """
     ResourceInputs
 
-Stores a set of inputs that an `AbstractResource` can use in its `open_resource` method.
+A container for the inputs that an `AbstractResource` can use in its `open_resource`
+method.
 
 Fields:
 
@@ -75,12 +76,12 @@ end
 """
     OutputFile
 
-Describes an output file that SystemsOfSystems should open after initialzation and close
+A description of an output file that SystemsOfSystems opens after initialization and closes
 after simulation.
 
 After `init_fcn` has run, this will create the requested file `name`. If `name` is an
 absolute path, that file will be created. If it is a relative path, the file will be stored
-in the `outdir` provided to the `simulate` as `<outdir>/model/submodel/subsubmodel/<name>`
+in the `outdir` provided to `simulate` as `<outdir>/model/submodel/subsubmodel/<name>`
 when `scoped == true` and `<outdir>/<name>` otherwise.
 """
 @kwdef struct OutputFile <: AbstractResource

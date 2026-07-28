@@ -20,7 +20,8 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
 #########
 
 # This models a second-order continuous-time system for position and velocity. Its input
-# is an external force that drives the plant model.
+# is an external force that drives the plant model. There is also a white noise disturbance
+# force.
 
 # This is how the system is parameterized.
 @kwdef struct PlantSpecs
@@ -76,7 +77,7 @@ function init(t, specs::PlantSpecs, seed)
 end
 
 # We'll make an accessor for the plant's position. (Maybe we'll have other plant models some
-# day that don't have a position field but that still need to report their positions. This
+# day that operate differently but that still need a way to report their positions. This
 # makes that easy.)
 get_position(plant::Plant) = plant.position
 
@@ -232,10 +233,6 @@ function init(t, specs::ConstantTargetSpecs, seed)
     )
 end
 
-function get_target_position(t, target::ConstantTarget)
-    return target.constant_position
-end
-
 function updates(t, target::ConstantTarget, target_position)
     return UpdatesOutput(;
         outputs = (;
@@ -243,6 +240,8 @@ function updates(t, target::ConstantTarget, target_position)
         ),
     )
 end
+
+get_target_position(t, target::ConstantTarget) = target.constant_position
 
 ################
 # PDController #

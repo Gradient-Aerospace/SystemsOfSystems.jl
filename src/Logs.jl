@@ -86,7 +86,7 @@ end
 """
     ModelHistory
 
-Store the history and logging configuration for one model.
+A container for the history and logging configuration of one model.
 
 The named-tuple fields contain the model's constants, state and output time series, and
 recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
@@ -378,7 +378,7 @@ export BasicLogOptions
 """
     BasicLogOptions(; logging_policy = AllPassLoggingPolicy())
 
-Configure an in-memory `BasicLog`.
+A container for in-memory `BasicLog` options.
 
 `logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
@@ -390,8 +390,9 @@ end
 """
     BasicLog
 
-Stores time histories for model variables in arrays. This is the simplest and fastest log,
-but an HDF5 log is a better choice when the selected history is too large to fit in RAM.
+A container for model-variable time histories stored in arrays. This is the simplest and
+fastest log, but an HDF5 log is a better choice when the selected history is too large to
+fit in RAM.
 """
 struct BasicLog <: AbstractLog
     model_history_dict::OrderedDict{String, ModelHistory}
@@ -469,14 +470,16 @@ end
 export NullLogOptions
 
 """
-There are no options for a `NullLog`, so this is an empty structure.
+    NullLogOptions()
+
+An empty container for `NullLog` options, which disable history logging.
 """
 struct NullLogOptions <: AbstractLogOptions end
 
 """
     NullLog
 
-This doesn't log anything. It's how you turn logging off.
+A log that stores no simulation history.
 """
 struct NullLog <: AbstractLog end
 
@@ -503,7 +506,7 @@ export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
     HDF5LogOptions(; filename, logging_policy)
     HDF5LogOptions(filename)
 
-Configure an HDF5-backed log written to `filename`.
+A container for HDF5-backed log options, where `filename` is the output file.
 
 `logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.

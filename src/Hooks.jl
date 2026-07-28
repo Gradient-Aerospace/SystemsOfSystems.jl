@@ -36,7 +36,8 @@ abstract type AbstractHook end
 """
     HookOutputs
 
-The output type for `update_hook!`, allowing the hook to communicate to the sim loop.
+A container for the output of `update_hook!`, allowing the hook to communicate with the
+simulation loop.
 
 Fields:
 
@@ -83,9 +84,8 @@ end
 """
     ProgressBarOptions
 
-Stores the options for a command-line progress bar, including `update_interval` for how
-often the progress bar should update (seconds) and `description` to use for the progress
-bar's text.
+A container for command-line progress bar options, including `update_interval` for how
+often the progress bar updates (seconds) and `description` for the progress bar's text.
 """
 @kwdef struct ProgressBarOptions <: AbstractHookOptions
     update_interval::Float64 = 1.0
@@ -95,7 +95,7 @@ end
 """
     ProgressBar
 
-See `ProgressBarOptions`.
+A runtime command-line progress-bar hook created from `ProgressBarOptions`.
 """
 struct ProgressBar <: AbstractHook
     progress::Progress
@@ -131,7 +131,7 @@ end
 """
     SimTimeoutOptions
 
-Stores the options for a `SimTimeout`, which will end the simulation if it takes too long.
+A container for `SimTimeout` options, which can end a simulation that takes too long.
 
 Fields:
 
@@ -144,7 +144,7 @@ end
 """
     SimTimeout
 
-See `SimTimeoutOptions`.
+A runtime simulation-timeout hook created from `SimTimeoutOptions`.
 """
 @kwdef struct SimTimeout <: AbstractHook
     max_run_time_ns::UInt64
@@ -172,8 +172,8 @@ end
 """
     ClockSyncOptions
 
-Stores the options for a `ClockSync`, which stalls in order to keep the simulation loop from
-running faster than realtime. If the amount of desired stall time is larger than
+A container for `ClockSync` options, which keep the simulation loop from running faster
+than real time. If the amount of desired stall time is larger than
 `sleep_margin` (s), it will sleep until `sleep_margin` before the next trigger time. After
 that, it enters a tight loop using `time_ns()` to determine when it's time to continue with
 the simulation.
@@ -182,16 +182,15 @@ Since `time_ns()` is used for timing, it is unaffected by system clock updates, 
 updates continuously. This value ultimately comes from the operating system, the computer's
 oscillator, and time synchronization sources, which are only used to determine how many
 oscillations occur per externally-referenced unit of time. On Linux and macOS, the external
-corrections prevent most drift. Before using a `ClockSync` hook for long-running sims with
-high precision requirements on timing, test the performance of `ClockSync` on the target
-platform.
+corrections prevent most drift. Its timing performance can vary by target platform,
+especially for long-running simulations with high precision requirements.
 
 Julia's `sleep` function has a minimum duration of 1ms. The default `sleep_margin` is 2ms to
 allow the model to enter the "tight timing loop" after sleeping.
 
-This type uses UInt64 for storage of the start and current times in nanoseconds. This means
-that real-time synchronization be sustained for ~584 years and is unlikely to limit the
-duration of the simulation.
+This type uses `UInt64` to store the start and current times in nanoseconds. This means that
+real-time synchronization can be sustained for approximately 584 years and is unlikely to
+limit the duration of the simulation.
 """
 @kwdef struct ClockSyncOptions <: AbstractHookOptions
     sleep_margin::Float64 = 0.002
@@ -200,7 +199,7 @@ end
 """
     ClockSync
 
-See `ClockSyncOptions`.
+A runtime wall-clock synchronization hook created from `ClockSyncOptions`.
 """
 @kwdef struct ClockSync <: AbstractHook
     t_start::ExactTime

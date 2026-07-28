@@ -98,7 +98,7 @@ abstract type AbstractVariableSet end
 """
     is_variable_in_set(variable::Symbol, set::AbstractVariableSet)
 
-Return whether the named constant, state, or output should be stored for a model assigned
+Returns whether the named constant, state, or output should be stored for a model assigned
 `set`. Custom variable sets implement this method.
 """
 function is_variable_in_set end
@@ -106,7 +106,7 @@ function is_variable_in_set end
 """
     AllVariables()
 
-Select all of the model's constants, states, and outputs.
+A variable set that selects all of the model's constants, states, and outputs.
 """
 @kwdef struct AllVariables <: AbstractVariableSet end
 is_variable_in_set(variable::Symbol, ::AllVariables) = true
@@ -114,7 +114,7 @@ is_variable_in_set(variable::Symbol, ::AllVariables) = true
 """
     NoVariables()
 
-Select none of the model's constants, states, or outputs.
+A variable set that selects none of the model's constants, states, or outputs.
 """
 @kwdef struct NoVariables <: AbstractVariableSet end
 is_variable_in_set(variable::Symbol, ::NoVariables) = false
@@ -123,7 +123,8 @@ is_variable_in_set(variable::Symbol, ::NoVariables) = false
     VariableList(list)
     VariableList(; list)
 
-Select the model variables whose names are in `list`. Names may be strings or symbols.
+A variable set that selects the model variables whose names are in `list`. Names may be
+strings or symbols.
 """
 struct VariableList <: AbstractVariableSet
     list::Vector{Symbol}
@@ -136,8 +137,8 @@ is_variable_in_set(variable::Symbol, set::VariableList) = in(variable, set.list)
     VariableExclusionList(list)
     VariableExclusionList(; list)
 
-Select all model variables except those whose names are in `list`. Names may be strings or
-symbols.
+A variable set that selects all model variables except those whose names are in `list`.
+Names may be strings or symbols.
 """
 struct VariableExclusionList <: AbstractVariableSet
     list::Vector{Symbol}
@@ -233,7 +234,7 @@ abstract type AbstractLoggingPolicy end
 """
     get_model_logging_policy(policy::AbstractLoggingPolicy, model_path::String)
 
-Return the `AbstractModelLoggingPolicy` assigned by `policy` to `model_path`.
+Returns the `AbstractModelLoggingPolicy` assigned by `policy` to `model_path`.
 
 Custom `AbstractLoggingPolicy` implementations must define this method.
 """
@@ -242,8 +243,8 @@ function get_model_logging_policy end
 """
     AllPassLoggingPolicy()
 
-Assign an `AllPassModelLoggingPolicy` to every model. This is the default policy for
-`BasicLog` and `HDF5Log`.
+A logging policy that assigns an `AllPassModelLoggingPolicy` to every model. This is the
+default policy for `BasicLog` and `HDF5Log`.
 """
 @kwdef struct AllPassLoggingPolicy <: AbstractLoggingPolicy
 end
@@ -253,7 +254,7 @@ get_model_logging_policy(::AllPassLoggingPolicy, ::String) = AllPassModelLogging
     UniformLoggingPolicy(policy::AbstractModelLoggingPolicy)
     UniformLoggingPolicy(; policy::AbstractModelLoggingPolicy)
 
-Assign the same model logging policy to every model.
+A logging policy that assigns the same model logging policy to every model.
 """
 @kwdef struct UniformLoggingPolicy <: AbstractLoggingPolicy
     policy::AbstractModelLoggingPolicy
@@ -265,9 +266,9 @@ get_model_logging_policy(policy::UniformLoggingPolicy, ::String) = policy.policy
     RegexLoggingPolicyRule(expression, policy)
     RegexLoggingPolicyRule(expression => policy)
 
-Associate a regular `expression` with a model logging `policy`. A string expression is
-compiled to a `Regex`. An `AbstractSampler` may be supplied as shorthand for a
-`ModelLoggingPolicy` that selects all variables.
+A container associating a regular `expression` with a model logging `policy`. A string
+expression is compiled to a `Regex`. An `AbstractSampler` may be supplied as shorthand for
+a `ModelLoggingPolicy` that selects all variables.
 """
 struct RegexLoggingPolicyRule
     expression::Regex
@@ -301,9 +302,9 @@ end
     RegexLoggingPolicy(; rules, default)
     RegexLoggingPolicy(rules, default)
 
-Contains `rules`, a vector of `RegexLoggingPolicyRule`. Each model will be given the model
-logging policy from the first entry whose regular expression occurs in the model path.
-Rules can be provided as `RegexLoggingPolicyRule`, `expression => policy`, or
+A logging policy containing `rules`, a vector of `RegexLoggingPolicyRule`. Each model is
+given the model logging policy from the first entry whose regular expression occurs in the
+model path. Rules can be provided as `RegexLoggingPolicyRule`, `expression => policy`, or
 `expression => sampler` pairs. A model that matches no rule receives `default`, which is a
 `NullModelLoggingPolicy` by default. The first matching rule wins.
 

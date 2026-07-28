@@ -21,7 +21,8 @@ using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
 """
     ContinuousProblem(description, rates_fcn)
 
-The continuous-time portion of a SystemsOfSystems simulation.
+A container adapting the continuous-time portion of a SystemsOfSystems simulation to the
+solver interface.
 
 `typed_description` contains the initialized description needed to prepare random variables.
 `rates_fcn` is the user's continuous-time model function. `error_policy` is a concrete
@@ -49,7 +50,7 @@ ContinuousProblem(typed_description, rates_fcn) =
 """
     prepare_attempt(problem, t_start, t_end, dt, state)
 
-Prepare the beginning state for one numerical attempt over the official interval
+Prepares the beginning state for one numerical attempt over the official interval
 `[t_start, t_end]`.
 
 At present, preparation draws every continuous random variable for the proposed interval.
@@ -137,7 +138,7 @@ end
 """
     propagate(state, gain, rates)
 
-Return a copy of `state` whose continuous states have been advanced by `gain * rates`.
+Returns a copy of `state` whose continuous states have been advanced by `gain * rates`.
 Everything that is not continuous state is preserved exactly.
 
 This operation is useful for algorithms or sparse tableaus that need only one derivative.
@@ -252,7 +253,7 @@ end
 """
     propagate(state, gains, rates_at_stages)
 
-Return a copy of `state` advanced by the linear combination of `rates_at_stages` described
+Returns a copy of `state` advanced by the linear combination of `rates_at_stages` described
 by `gains`.
 
 The stage tuple is expected to have a stable derivative structure: if the first stage omits
@@ -312,7 +313,7 @@ end
 """
     normalized_error(problem, state, embedded_state, absolute_tolerance, relative_tolerance)
 
-Return the largest fraction of its allowable local error used by any continuous-state
+Returns the largest fraction of its allowable local error used by any continuous-state
 component. A value no greater than one is acceptable to the default adaptive controller.
 
 The problem's error policy can eventually contain the concrete hierarchy of custom
