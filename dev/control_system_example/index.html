@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Control System Example · SystemsOfSystems Documentation</title><meta name="title" content="Control System Example · SystemsOfSystems Documentation"/><meta property="og:title" content="Control System Example · SystemsOfSystems Documentation"/><meta property="twitter:title" content="Control System Example · SystemsOfSystems Documentation"/><meta name="description" content="Documentation for SystemsOfSystems Documentation."/><meta property="og:description" content="Documentation for SystemsOfSystems Documentation."/><meta property="twitter:description" content="Documentation for SystemsOfSystems Documentation."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">SystemsOfSystems Documentation</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Introduction</a></li><li class="is-active"><a class="tocitem" href>Control System Example</a><ul class="internal"><li><a class="tocitem" href="#Imports"><span>Imports</span></a></li><li><a class="tocitem" href="#Plant"><span>Plant</span></a></li><li><a class="tocitem" href="#Sensor"><span>Sensor</span></a></li><li><a class="tocitem" href="#Actuator"><span>Actuator</span></a></li><li><a class="tocitem" href="#Target"><span>Target</span></a></li><li><a class="tocitem" href="#Controller"><span>Controller</span></a></li><li><a class="tocitem" href="#Closed-Loop-System"><span>Closed-Loop System</span></a></li><li><a class="tocitem" href="#Simulation"><span>Simulation</span></a></li><li><a class="tocitem" href="#Swapping-Models"><span>Swapping Models</span></a></li><li><a class="tocitem" href="#Next-Steps"><span>Next Steps</span></a></li></ul></li><li><a class="tocitem" href="../simulation/">Simulation</a></li><li><a class="tocitem" href="../modeling/">Modeling</a></li><li><a class="tocitem" href="../options/">Options</a></li><li><a class="tocitem" href="../initialization/">Initialization</a></li><li><a class="tocitem" href="../time/">Time</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Control System Example</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Control System Example</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/Gradient-Aerospace/SystemsOfSystems.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/Gradient-Aerospace/SystemsOfSystems.jl/blob/main/doc/src/control_system_example.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Control-System-Example"><a class="docs-heading-anchor" href="#Control-System-Example">Control System Example</a><a id="Control-System-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Control-System-Example" title="Permalink"></a></h1><p>In this example, we&#39;re going to develop a closed-loop control system that features:</p><ul><li>A &quot;plant&quot;, the system whose dynamics we want to control</li><li>A sensor that makes noisy measurements of the plant</li><li>An actuator that provides an input to the plant</li><li>A target generator that produces the target state we want to drive the plant to</li><li>A control system that uses the sensor and sends commands to the actuator to drive the plant to the target state</li></ul><pre><code class="nohighlight hljs">+-- Closed-Loop System ---------------------------------------------------+
+|                                                                         |
+|  +-------------+                                                        |
+|  |   Target    |                                                        |
+|  |  Generator  |                                                        |
+|  +-----+-------+                                                        |
+|        |                                                                |
+|        | Target                                                         |
+|        v                                                                |
+|  +-----+-----+              +------------+            +--------------+  |
+|  |  Control  |---Command---&gt;|  Actuator  |---Input---&gt;|    Plant     |  |
+|  |  System   |              +------------+            |  (Dynamics)  |  |
+|  +-----+-----+                                        +------+-------+  |
+|        ^                                                     |          |
+|        |                          +-----------+              |          |
+|        |                          |  Sensor   |              |          |
+|        +---------Measurement------|  (Noisy)  |&lt;-------------+          |
+|                                   +-----------+                         |
+|                                                                         |
++-------------------------------------------------------------------------+</code></pre><p>To do this, we&#39;ll see several different ways to build models using SystemsOfSystems, including:</p><ul><li>Continuous systems</li><li>Discrete systems</li><li>Random variables</li><li>Schedules</li><li>Models that contain sub-models</li></ul><p>This is a working example. The outputs and plots are generated as part of building this documentation. One can copy all of this into a script and produce the exact same results.</p><p>(Quick note: Nothing about SystemsOfSystems is specific to control theory or closed-loop systems. It&#39;s simply a common simulation pattern that we can implement with a general simulation engine like SystemsOfSystems.)</p><h2 id="Imports"><a class="docs-heading-anchor" href="#Imports">Imports</a><a id="Imports-1"></a><a class="docs-heading-anchor-permalink" href="#Imports" title="Permalink"></a></h2><p>Since this is a working example, we&#39;ll import everything we need up front:</p><pre><code class="language-julia hljs">import Random
+import SystemsOfSystems
+import Dimensions # We&#39;ll want this to label our sensor measurement
+import CairoMakie # The plotting package we&#39;ll use</code></pre><h2 id="Plant"><a class="docs-heading-anchor" href="#Plant">Plant</a><a id="Plant-1"></a><a class="docs-heading-anchor-permalink" href="#Plant" title="Permalink"></a></h2><p>We&#39;ll start with a very simple plant. The dynamics are as follows:</p><p class="math-container">\[\ddot{x} = \frac{1}{m} \left( -x + f_a + \nu \right)\]</p><p>where <span>$x$</span> is the plant state (position), <span>$m$</span> is the mass, <span>$f_a$</span> is the force from the actuator, and <span>$\nu$</span> is white noise.</p><h3 id="Plant-Implementation"><a class="docs-heading-anchor" href="#Plant-Implementation">Plant Implementation</a><a id="Plant-Implementation-1"></a><a class="docs-heading-anchor-permalink" href="#Plant-Implementation" title="Permalink"></a></h3><p>First, we want a way to parameterize this system so that we can set the constants and initial conditions. Let&#39;s make a quick type for that.</p><pre><code class="language-julia hljs"># This is how the system is parameterized.
+@kwdef struct PlantSpecs
+    mass::Float64
+    initial_position::Float64
+    initial_velocity::Float64
+    sigma_noise::Float64
+end
+;</code></pre><p>(In case you&#39;re new to Julia, the <code>@kwdef</code> here creates a constructor with keyword arguments, so we can call <code>PlantSpecs(; mass = 1., initial_position = 2., ...)</code>, etc.)</p><p>At any given moment while the plant is running in the sim, we want to be able to access its mass, position, velocity, and noise input, so let&#39;s make the &quot;model&quot; form:</p><pre><code class="language-julia hljs"># This contains everything the model needs while running.
+@kwdef struct Plant
+    mass::Float64
+    position::Float64
+    velocity::Float64
+    noise::Float64
+end
+;</code></pre><p>We need a function that tells the sim what constants, states, and random variables our model should have, as well as any other outputs we want logged. The inputs to this function will be time, our <code>PlantSpecs</code> from above, and a seed that we can use for random initial conditions.</p><pre><code class="language-julia hljs"># This turns the specs into a description of the model.
+function init(t, specs::PlantSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        # This is what tells the sim to build a Plant with this stuff.
+        type = Plant,
+        # Constants we&#39;ll need while running
+        constants = (;
+            # We can describe each variable in detail for plots and human output.
+            mass = SystemsOfSystems.VariableDescription(
+                specs.mass;
+                title = &quot;Mass&quot;,
+                dimensions = [&quot;mass&quot; =&gt; &quot;kg&quot;,],
+            ),
+        ),
+        # We treat position and velocity as two state variables, since this is
+        # a 2nd-order system.
+        continuous_states = (;
+            position = SystemsOfSystems.VariableDescription(
+                specs.initial_position;
+                title = &quot;Plant Position&quot;,
+                dimensions = [&quot;position&quot; =&gt; &quot;m&quot;,],
+            ),
+            velocity = SystemsOfSystems.VariableDescription(
+                specs.initial_velocity;
+                title = &quot;Plant Velocity&quot;,
+                dimensions = [&quot;velocity&quot; =&gt; &quot;m/s&quot;],
+            )
+        ),
+        # We can ask for a continuous white noise source. This will all be handled
+        # properly by the integrator.
+        continuous_random_variables = (;
+            noise = SystemsOfSystems.RandomVariableDescription{Float64}(
+                SystemsOfSystems.ContinuousWhiteNoise(specs.sigma_noise);
+                title = &quot;Continuous White Noise Force Input&quot;,
+                dimensions = [&quot;noise&quot; =&gt; &quot;N&quot;,],
+                seed = seed / &quot;noise&quot;,
+            ),
+        ),
+        # Further, we have pieces that aren&#39;t part of the Plant but that are things
+        # we want logged as byproducts of our calculations.
+        continuous_outputs = (;
+            forces = SystemsOfSystems.VariableDescription(
+                0.;
+                title = &quot;Total Forces on the Plant&quot;,
+                dimensions = [&quot;forces&quot; =&gt; &quot;N&quot;,],
+            )
+        ),
+    )
+end
+;</code></pre><p>This describes all of the variables that the plant cares about. (We don&#39;t <em>need</em> to use <code>VariableDescription</code> here; we could just use raw numbers/structs, but the descriptions show up nicely in plots, so we&#39;ll use them in this example.)</p><p>What about that <code>seed / &quot;noise&quot;</code> line? The <code>seed</code>, here is a <code>SystemsOfSystems.BranchingSeed</code> type, and <code>/</code> means &quot;branch&quot; (we could also call <code>branch(seed, &quot;noise&quot;)</code>). When we branch a seed, it means that we spin off a new seed derived from the given seed using the given string. With branching seeds, SystemsOfSystems makes it very easy to create independent random number streams that nonetheless all change when the top-level seed changes. Basically every single random variable and every use of <code>seed</code> to draw during initialization should use its own unique branch. Having independent streams keeps things tidy when adding random variables or changing the order of models, etc.</p><p>The plant has only continuous-time dynamics. Let&#39;s write a function that takes in the current time, plant model, and actuator force and returns the derivatives of the state variables, plus the extra output we said we wanted logged.</p><pre><code class="language-julia hljs"># This is where we implement the model&#39;s dynamics -- functions that say how the model
+# changes over time based on the inputs.
+function rates(t, plant::Plant, actuator_force)
+    forces = -plant.position + actuator_force + plant.noise
+    acceleration = forces / plant.mass
+    return SystemsOfSystems.RatesOutput(;
+        rates = (; # Derivatives of our continuous states
+            position = plant.velocity,
+            velocity = acceleration,
+        ),
+        outputs = (;
+            forces = forces,
+        ),
+    )
+end
+;</code></pre><p>Note: We called our functions <code>init</code> and <code>rates</code>, but the names are arbitrary. We can choose whatever names we like.</p><p>Finally, other models will need the plant&#39;s position (the sensor will need it in order to take a measurement), so let&#39;s provide a function that returns the position so that the sensor model doesn&#39;t have to access the plant&#39;s state directly.</p><pre><code class="language-julia hljs">get_position(plant::Plant) = plant.position</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">get_position (generic function with 1 method)</code></pre><h3 id="Plant-Simulation"><a class="docs-heading-anchor" href="#Plant-Simulation">Plant Simulation</a><a id="Plant-Simulation-1"></a><a class="docs-heading-anchor-permalink" href="#Plant-Simulation" title="Permalink"></a></h3><p>Before we move on with our example, we can pause here and simulate the plant by itself to make sure things are working. We&#39;ll need to do one extra thing: wrap our <code>rates</code> function with a function that supplies the nonexistent actuator force (0 for this example).</p><pre><code class="language-julia hljs">plant_specs = PlantSpecs(;
+    mass = 1.,
+    initial_position = 0.,
+    initial_velocity = 0.,
+    sigma_noise = 1.,
+)
+history, t, plant = SystemsOfSystems.simulate(
+    plant_specs;
+    t = (0, 10),
+    init_fcn = init,
+    rates_fcn = (t, plant) -&gt; rates(t, plant, 0.),
+)
+
+history</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Simulation History:
+  Stop Reason: The sim reached the specified end time of 10.0.
+  Model Histories:
+    /
+</code></pre><p>Let&#39;s take a look at the time history of the root model (the plant, of course):</p><pre><code class="language-julia hljs">history[&quot;/&quot;]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">ModelHistory for / with the following contents:
+  type: Main.Plant
+  constants:
+    mass =&gt; VariableDescription{Float64}
+  continuous_states:
+    position =&gt; TimeSeries{Vector{Float64}, Vector{Float64}, LinearInterpolation}
+    velocity =&gt; TimeSeries{Vector{Float64}, Vector{Float64}, LinearInterpolation}
+  continuous_outputs:
+    forces =&gt; TimeSeries{Vector{Float64}, Vector{Float64}, LinearInterpolation}
+</code></pre><p>We can access the position itself as:</p><pre><code class="language-julia hljs">history[&quot;/&quot;][&quot;position&quot;]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">14-element TimeSeries of Float64 elements
+  title: Plant Position
+  time: Float64[0.0, ... 10.0]
+  data: Float64[0.0, ... -0.5891770891581465]
+  time_dimension: &quot;time&quot; =&gt; &quot;s&quot;
+  dimensions:
+    1: &quot;position&quot; =&gt; &quot;m&quot;
+  path: 
+  discrete: false
+  interpolator: LinearInterpolation
+  groups:
+    position: [&quot;position&quot;]
+</code></pre><p>And, while we&#39;re here, let&#39;s plot it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;position&quot;])</code></pre><img src="5e264221.png" alt="Example block output"/><p>In fact, let&#39;s run 15 simulations, returning the <code>position</code> time series from each, and then plot them all. Here, we&#39;ll write a loop that generates an array of 15 time histories of position.</p><pre><code class="language-julia hljs"># Make an array of position histories, one for each seed.
+position_histories = map(1:15) do seed
+
+    # Run the sim for this seed.
+    history, t, plant = SystemsOfSystems.simulate(
+        plant_specs;
+        t = (0, 10),
+        init_fcn = init,
+        rates_fcn = (t, plant) -&gt; rates(t, plant, 0.),
+        seed = seed,
+    )
+
+    # Pull out the position history. Also, give it a label for
+    # the plot.
+    return &quot;Run $seed&quot; =&gt; history[&quot;/&quot;][&quot;position&quot;]
+
+end
+
+# Plot all of those as separate lines with the given labels.
+SystemsOfSystems.plot_ts(position_histories)</code></pre><img src="dc0cc793.png" alt="Example block output"/><p>We can see the sinusoidal motion we&#39;d expect from a system like this, driven by noise. At this point, we can have some faith that our plant model is doing what we intend. Let&#39;s continue with the remaining systems.</p><h2 id="Sensor"><a class="docs-heading-anchor" href="#Sensor">Sensor</a><a id="Sensor-1"></a><a class="docs-heading-anchor-permalink" href="#Sensor" title="Permalink"></a></h2><p>The sensor will be a discrete system, with discrete state and discrete noise. It will also be triggered at a regular rate. Here&#39;s how we can implement that.</p><p>We start with the specifications (options, parameters, whatever).</p><pre><code class="language-julia hljs">@kwdef struct SensorSpecs
+    schedule::SystemsOfSystems.RegularSchedule # Defines the sample period
+    sigma_noise::Float64 # Standard deviation of noise to add to the measurement
+    sigma_bias::Float64 # Standard deviation of the measurement bias
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.SensorSpecs</code></pre><p>The sensor will produce a specific structured type, so let&#39;s implement that type.</p><pre><code class="language-julia hljs">struct SensorMeasurement
+    t::Float64 # Time at which measurement was made
+    position::Float64 # The measured position (with noise and bias in it)
+end</code></pre><p>The measurement itself will be stateful. Once the measurement is generated, it will be held constant until the next measurement is made. Hence, the measurement is part of the <code>Sensor</code> model:</p><pre><code class="language-julia hljs"># Everything the sensor needs while running.
+@kwdef struct Sensor
+    schedule::SystemsOfSystems.RegularSchedule
+    bias::Float64 # Constant
+    noise::Float64 # A random input on each step
+    measurement::SensorMeasurement # The most recent measurement
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.Sensor</code></pre><p>Let&#39;s put together the initialization function and model description.</p><pre><code class="language-julia hljs"># Describe all of the variables in the sensor model, with their initial conditions.
+function init(t, specs::SensorSpecs, seed)
+
+    # Draw the bias. Here we see branching again to create this random
+    # number generator.
+    rng = Random.Xoshiro(seed / &quot;bias&quot;)
+    bias = specs.sigma_bias * Random.randn(rng)
+
+    return SystemsOfSystems.ModelDescription(;
+        type = Sensor,
+        constants = (;
+            bias = SystemsOfSystems.VariableDescription(
+                bias;
+                title = &quot;Sensor Bias&quot;,
+                dimensions = [&quot;bias&quot; =&gt; &quot;m&quot;,],
+            ),
+        ),
+        discrete_random_variables = (;
+            noise = SystemsOfSystems.RandomVariableDescription{Float64}(
+                SystemsOfSystems.DiscreteWhiteNoise(specs.sigma_noise);
+                title = &quot;Measurement Noise&quot;,
+                dimensions = [&quot;noise&quot; =&gt; &quot;m&quot;,],
+                seed = seed / &quot;noise&quot;,
+            ),
+        ),
+        discrete_states = (;
+            measurement = SystemsOfSystems.VariableDescription(
+                SensorMeasurement(0., 0.);
+                title = &quot;Sensor Measurement&quot;,
+                dimensions = [&quot;time&quot; =&gt; &quot;s&quot;, &quot;position&quot; =&gt; &quot;m&quot;,],
+            )
+        ),
+        schedules = (;
+            # Tell the sim that this sensor needs a step on exactly its sample times.
+            schedule = SystemsOfSystems.VariableDescription(
+                specs.schedule;
+                title = &quot;Sensor Measurement Schedule&quot;,
+                dimensions = [&quot;period&quot; =&gt; &quot;s&quot;,],
+            ),
+        ),
+    )
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">init (generic function with 2 methods)</code></pre><p>Since we&#39;re using the <code>SensorMeasurement</code> struct as a state and want to plot that state, we need to tell SystemsOfSystems how to break it down into individual dimensions (the different lines in the plot). SystemsOfSystems looks to the Dimensions package for this behavior, so we use <code>Dimensions.dimstyle</code> to say that <code>SensorMeasurement</code> has two dimensions: its two fields, a very normal interpretation of &quot;dimensions&quot; for a struct.</p><pre><code class="language-julia hljs"># This helps the plotting make sense of this structured type. It will automatically be able
+# to plot SensorMeasurements over time thanks to this little function.
+Dimensions.dimstyle(::Type{SensorMeasurement}) = Dimensions.StructDimensionStyle()</code></pre><p>Let&#39;s provide a function so that other models can ask the sensor for its measurement at a given time.</p><pre><code class="language-julia hljs"># Given the time and true position, this returns the most recent measurement.
+# When it&#39;s time for a new measurement, it will make one. Otherwise, it will
+# return the prior measurement (its `measurement` state).
+function get_measurement(t, sensor::Sensor, true_position)
+
+    # Our schedule triggers at t = 0, period, 2 * period, 3 * period, etc.
+    if SystemsOfSystems.is_triggering(sensor.schedule, t)
+        return SensorMeasurement(t, true_position + sensor.noise + sensor.bias)
+    else
+        return sensor.measurement
+    end
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">get_measurement (generic function with 1 method)</code></pre><p>Now we specify the discrete dynamics. This is very simple. When the schedule triggers, we record the new measurement. Otherwise, we do nothing. The measurement will be an <em>input</em> to this function. It will be generated with the above function. We&#39;ll see how this all comes together in the closed-loop top model that routes everything together.</p><pre><code class="language-julia hljs"># This says how the discrete states update on this sample.
+function updates(t, sensor::Sensor, meas)
+
+    # Only update when triggering.
+    SystemsOfSystems.on_triggering(sensor.schedule, t) do
+        return SystemsOfSystems.UpdatesOutput(;
+            updates = (;
+                measurement = meas, # Record our measurement (it&#39;s stateful).
+            ),
+        )
+    end
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">updates (generic function with 1 method)</code></pre><h2 id="Actuator"><a class="docs-heading-anchor" href="#Actuator">Actuator</a><a id="Actuator-1"></a><a class="docs-heading-anchor-permalink" href="#Actuator" title="Permalink"></a></h2><p>On the other side of the plant is the actuator. That model is both continuous and discrete. Its discrete state is the incoming command from the controller. Its continuous state is its response to that command. We&#39;ll allow this to be a simple first-order system.</p><p>The pattern of writing a model&#39;s specifications and &quot;model form&quot; should be familiar by now. There&#39;s nothing new here, so we&#39;ll write a bit more all at once:</p><pre><code class="language-julia hljs">@kwdef struct ActuatorSpecs
+    time_constant::Float64
+    initial_command::Float64
+    initial_response::Float64
+end
+
+@kwdef struct Actuator
+    time_constant::Float64
+    command::Float64
+    response::Float64
+end
+
+function init(t, specs::ActuatorSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        type = Actuator,
+        constants = (;
+            time_constant = SystemsOfSystems.VariableDescription(
+                specs.time_constant;
+                title = &quot;First-Order Actuator Response Time Constant&quot;,
+                dimensions = [&quot;time_constant&quot; =&gt; &quot;s&quot;]
+            ),
+        ),
+        continuous_states = (;
+            response = SystemsOfSystems.VariableDescription(
+                specs.initial_response;
+                title = &quot;First-Order Actuator Response&quot;,
+                dimensions = [&quot;response&quot; =&gt; &quot;&quot;],
+            ),
+        ),
+        discrete_states = (;
+            command = SystemsOfSystems.VariableDescription(
+                specs.initial_command;
+                title = &quot;Actuator Command&quot;,
+                dimensions = [&quot;command&quot; =&gt; &quot;&quot;],
+            ),
+        ),
+    )
+end
+
+# For the continuous-time dynamics, the response rises to the command.
+function rates(t, actuator::Actuator)
+    return SystemsOfSystems.RatesOutput(;
+        rates = (;
+            response = 1/actuator.time_constant * (actuator.command - actuator.response),
+        ),
+    )
+end
+
+# For the discrete-time dynamics, this records its command as a state that it will use
+# throughout its continuous-time dynamics. (We don&#39;t use a sample period here. We assume
+# this updates on _any_ sample.)
+function updates(t, actuator::Actuator, command)
+    return SystemsOfSystems.UpdatesOutput(;
+        updates = (;
+            command = command,
+        ),
+    )
+end
+
+# An accessor that other models can use:
+get_actuator_response(t, actuator) = actuator.response</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">get_actuator_response (generic function with 1 method)</code></pre><h2 id="Target"><a class="docs-heading-anchor" href="#Target">Target</a><a id="Target-1"></a><a class="docs-heading-anchor-permalink" href="#Target" title="Permalink"></a></h2><p>Before we write the controller, let&#39;s make something that generates the target that the controller will track.</p><p>We&#39;ll start with a simple target generator: a constant target.</p><pre><code class="language-julia hljs">@kwdef struct ConstantTargetSpecs
+    constant_position::Float64
+end
+
+@kwdef struct ConstantTarget
+    constant_position::Float64
+end
+
+# Since the target for this model is stateless, let&#39;s log it as an output.
+function init(t, specs::ConstantTargetSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        type = ConstantTarget,
+        constants = (;
+            constant_position = SystemsOfSystems.VariableDescription(
+                specs.constant_position;
+                title = &quot;Target Position&quot;,
+                dimensions = [&quot;target&quot; =&gt; &quot;m&quot;,],
+            ),
+        ),
+        discrete_outputs = (;
+            target = SystemsOfSystems.VariableDescription(
+                specs.constant_position;
+                title = &quot;Target Position&quot;,
+                dimensions = [&quot;target&quot; =&gt; &quot;m&quot;,],
+            ),
+        ),
+    )
+end
+
+function updates(t, target::ConstantTarget, target_position)
+    return SystemsOfSystems.UpdatesOutput(;
+        outputs = (;
+            target = target_position,
+        ),
+    )
+end
+
+get_target_position(t, target::ConstantTarget) = target.constant_position</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">get_target_position (generic function with 1 method)</code></pre><h2 id="Controller"><a class="docs-heading-anchor" href="#Controller">Controller</a><a id="Controller-1"></a><a class="docs-heading-anchor-permalink" href="#Controller" title="Permalink"></a></h2><p>Now we can integrate all of these systems with the controller. We&#39;ll use a typical PID for this.</p><pre><code class="language-julia hljs">@kwdef struct PIDControllerSpecs
+    schedule::SystemsOfSystems.RegularSchedule
+    k_p::Float64 # Proportional gain
+    k_i::Float64 # Integral gain
+    k_d::Float64 # Derivative gain
+    initial_position::Float64 # Initial value of position state
+    initial_command::Float64 # Initial command output
+    initial_integral::Float64
+end
+
+@kwdef struct PIDController
+    schedule::SystemsOfSystems.RegularSchedule
+    k_p::Float64 # Proportional gain
+    k_i::Float64 # Integral gain
+    k_d::Float64 # Derivative gain
+    position::Float64 # Last position measurement
+    command::Float64 # Last command output
+    integral::Float64
+end
+
+function init(t, specs::PIDControllerSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        type = PIDController,
+        constants =  (;
+            k_p = SystemsOfSystems.VariableDescription(
+                specs.k_p;
+                title = &quot;Position Gain&quot;,
+                dimensions = [&quot;p&quot; =&gt; &quot;N / m&quot;,],
+            ),
+            k_i = SystemsOfSystems.VariableDescription(
+                specs.k_i;
+                title = &quot;Integral Gain&quot;,
+                dimensions = [&quot;i&quot; =&gt; &quot;N / (m s)&quot;,],
+            ),
+            k_d = SystemsOfSystems.VariableDescription(
+                specs.k_d;
+                title = &quot;Velocity Gain&quot;,
+                dimensions = [&quot;d&quot; =&gt; &quot;N / (m/s)&quot;,],
+            ),
+        ),
+        discrete_states = (;
+            position = SystemsOfSystems.VariableDescription(
+                specs.initial_position;
+                title = &quot;Position State&quot;,
+                dimensions = [&quot;position&quot; =&gt; &quot;m&quot;,],
+            ),
+            command = SystemsOfSystems.VariableDescription(
+                specs.initial_command;
+                title = &quot;Command State&quot;,
+                dimensions = [&quot;command&quot; =&gt; &quot;N&quot;,],
+            ),
+            integral = SystemsOfSystems.VariableDescription(
+                specs.initial_integral;
+                title = &quot;Integral State&quot;,
+                dimensions = [&quot;integral&quot; =&gt; &quot;m s&quot;,],
+            ),
+        ),
+        schedules = (;
+            # Tell the sim that this controller acts at a regular interval.
+            schedule = SystemsOfSystems.VariableDescription(
+                specs.schedule;
+                title = &quot;Controller Schedule&quot;,
+                dimensions = [&quot;period&quot; =&gt; &quot;s&quot;,],
+            ),
+        ),
+    )
+end
+
+# Returns a fresh command or holds the last one.
+function get_command(t, controller::PIDController, target_position, meas)
+
+    if SystemsOfSystems.is_triggering(controller.schedule, t)
+
+        # Divide the difference between the current and last measured
+        # position to get an approximation of velocity.
+        dt = controller.schedule.period
+        velocity = (meas.position - controller.position) / dt
+
+        # Now make the command from the three different parts.
+        position_error = target_position - meas.position
+        command = (
+            controller.k_p * position_error
+            + controller.k_i * controller.integral
+            - controller.k_d * velocity
+        )
+        return command
+
+    else
+
+        return controller.command
+
+    end
+
+end
+
+# Record the most recent command, position measurement, and integral as states.
+function updates(t, controller::PIDController, target, measurement, command)
+
+    SystemsOfSystems.on_triggering(controller.schedule, t) do
+
+        # Update the integral.
+        dt = controller.schedule.period
+        integral = controller.integral + (target - measurement.position) * dt
+
+        # Record the command, latest measurement, and updated integral.
+        return SystemsOfSystems.UpdatesOutput(;
+            updates = (;
+                command = command,
+                position = measurement.position,
+                integral = integral,
+            ),
+        )
+
+    end
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">updates (generic function with 4 methods)</code></pre><h2 id="Closed-Loop-System"><a class="docs-heading-anchor" href="#Closed-Loop-System">Closed-Loop System</a><a id="Closed-Loop-System-1"></a><a class="docs-heading-anchor-permalink" href="#Closed-Loop-System" title="Permalink"></a></h2><p>Finally, we&#39;re ready to bring all of those systems together, essentially routing from one to the other. The closed-loop system will be the top-level system in our simulation (it will have no inputs from outside or outputs going to anything else). It will also have no state. Its only job is to contain/route the sub-models.</p><p>The specifications for a closed-loop system are simply the set of specifications for the sub-models.</p><pre><code class="language-julia hljs">@kwdef struct ClosedLoopSystemSpecs
+    plant       # Specs for the plant model
+    sensor      # and for the sensor model
+    actuator    # etc.
+    target
+    controller
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.ClosedLoopSystemSpecs</code></pre><p>We don&#39;t specify types for the above because there&#39;s no point, and because we might want to swap out one model type for another compatible model type.</p><p>Similarly, the &quot;model form&quot; itself just holds the other model forms.</p><pre><code class="language-julia hljs">@kwdef struct ClosedLoopSystem
+    plant
+    sensor
+    actuator
+    target
+    controller
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.ClosedLoopSystem</code></pre><p>Initializing this model merely consists of initializing the sub-models. We&#39;ll also declare one output variable: the control error.</p><pre><code class="language-julia hljs">function init(t, specs::ClosedLoopSystemSpecs, seed)
+
+    # Initialize each submodel, as well as this model&#39;s own outputs.
+    return SystemsOfSystems.ModelDescription(;
+        type = ClosedLoopSystem,
+        models = (;
+            plant = init(t, specs.plant, seed / &quot;plant&quot;),
+            sensor = init(t, specs.sensor, seed / &quot;sensor&quot;),
+            target = init(t, specs.target, seed / &quot;target&quot;),
+            controller = init(t, specs.controller, seed / &quot;controller&quot;),
+            actuator = init(t, specs.actuator, seed / &quot;actuator&quot;),
+        ),
+        discrete_outputs = (;
+            control_error = SystemsOfSystems.VariableDescription{Float64}(
+                missing;
+                title = &quot;Control Error (Target - True Position)&quot;,
+                dimensions = [&quot;error&quot; =&gt; &quot;m&quot;,],
+            ),
+        ),
+    )
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">init (generic function with 6 methods)</code></pre><p>There is no <code>control_error</code> on the initial sample; hence, we have a <code>missing</code> there, and we declare that this will, when it&#39;s available, be a <code>Float64</code>.</p><p>Note that we branch the seed here for each sub-model. This means that, if the plant and sensor both take draws, they won&#39;t be taking the same draws, and their draws won&#39;t interact with each other. They will have totally separate (but predictable) streams.</p><p>Just like the <code>init</code> function, the job of this model&#39;s <code>rates</code> function is to gather up the <code>RatesOutput</code> for each of its sub-models. The plant&#39;s <code>rates</code> function depends on the actuator force input, so we get that from the actuator. Now, finally, we start to see where we use those accessors we made.</p><pre><code class="language-julia hljs">function rates(t, system::ClosedLoopSystem)
+
+    # Calculate the things we&#39;ll need for the dynamics.
+    actuator_force = get_actuator_response(t, system.actuator)
+
+    # Run the continuous-time dynamics.
+    return SystemsOfSystems.RatesOutput(;
+        models = (;
+            plant = rates(t, system.plant, actuator_force),
+            actuator = rates(t, system.actuator),
+        ),
+    )
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">rates (generic function with 3 methods)</code></pre><p>The <code>updates</code> function involves more routing, using our remaining accessors.</p><pre><code class="language-julia hljs"># This specifies how the discrete process unfolds and allows all submodels to say how they
+# should update on this sample.
+function updates(t, system::ClosedLoopSystem)
+
+    # Here, we figure out everything that happens on this step, and then, below, we let each
+    # model describe how that turns into its update.
+
+    # First, measure the sensor.
+    true_position = get_position(system.plant)
+    meas = get_measurement(t, system.sensor, true_position)
+
+    # Now figure out the command from the controller to the actuator.
+    target_position = get_target_position(t, system.target)
+    command = get_command(t, system.controller, target_position, meas)
+
+    # This is the only model that knows both the target and the true position, so we&#39;ll
+    # build the error signal here.
+    control_error = target_position - true_position
+
+    # Now that we have everything necessary to update the models, let them describe their
+    # updates.
+    return SystemsOfSystems.UpdatesOutput(;
+        models = (;
+            sensor = updates(t, system.sensor, meas),
+            target = updates(t, system.target, target_position),
+            controller = updates(t, system.controller, target_position, meas, command),
+            actuator = updates(t, system.actuator, command),
+        ),
+        outputs = (;
+            control_error,
+        ),
+    )
+
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">updates (generic function with 5 methods)</code></pre><h2 id="Simulation"><a class="docs-heading-anchor" href="#Simulation">Simulation</a><a id="Simulation-1"></a><a class="docs-heading-anchor-permalink" href="#Simulation" title="Permalink"></a></h2><p>Now we&#39;re ready to simulate the complete system.</p><pre><code class="language-julia hljs">system_specs = ClosedLoopSystemSpecs(
+    plant = PlantSpecs(
+        mass = 1.,
+        initial_position = 0.,
+        initial_velocity = 0.,
+        sigma_noise = 0.1,
+    ),
+    sensor = SensorSpecs(
+        schedule = SystemsOfSystems.RegularSchedule(0.05),
+        sigma_noise = 0.01,
+        sigma_bias = 0.1,
+    ),
+    target = ConstantTargetSpecs(
+        constant_position = 1.,
+    ),
+    controller = PIDControllerSpecs(
+        schedule = SystemsOfSystems.RegularSchedule(0.05),
+        k_p = 11.,
+        k_i = 8.,
+        k_d = 6.,
+        initial_position = 0.,
+        initial_command = 0.,
+        initial_integral = 0.,
+    ),
+    actuator = ActuatorSpecs(
+        time_constant = 0.04,
+        initial_command = 0.,
+        initial_response = 0.,
+    ),
+)
+
+history, final_time, final_system = SystemsOfSystems.simulate(
+    system_specs;
+    t = (0, 10),
+    init_fcn = init,
+    rates_fcn = rates,
+    updates_fcn = updates,
+)
+
+history</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Simulation History:
+  Stop Reason: The sim reached the specified end time of 10.0.
+  Model Histories:
+    /
+    /actuator
+    /controller
+    /plant
+    /sensor
+    /target
+</code></pre><p>Let&#39;s see if we&#39;re driving down the control error.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;control_error&quot;])</code></pre><img src="0850e009.png" alt="Example block output"/><p>Note that this is the true control error, the target position minus the true position. There&#39;s a steady-state offset because our sensor has a bias.</p><p>Let&#39;s make a more involved plot. Let&#39;s plot the target position, measured position, and true position all together, and let&#39;s put the integral term beneath it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(
+    [
+        [
+            &quot;plant&quot; =&gt; history[&quot;/plant&quot;][&quot;position&quot;],
+            &quot;measured&quot; =&gt; history[&quot;/controller&quot;][&quot;position&quot;],
+            &quot;target&quot; =&gt; history[&quot;/target&quot;][&quot;target&quot;],
+        ],
+        history[&quot;/controller&quot;][&quot;integral&quot;]
+    ]
+)</code></pre><img src="dfdee030.png" alt="Example block output"/><p>Clearly, the controller is driving the <em>measurement</em> to the target; that&#39;s all this simple controller can really do in this situation.</p><p>The performance certainly appears to be correct.</p><p>Note the difference between lines for continuous-time variables and points for discrete variables.</p><p>Let&#39;s take a look at <code>final_system</code>, the complete model form at the end of the simulation:</p><pre><code class="language-julia hljs">dump(final_system)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.ClosedLoopSystem
+  plant: Main.Plant
+    mass: Float64 1.0
+    position: Float64 0.8865297323871117
+    velocity: Float64 -0.0028431166765735642
+    noise: Float64 0.5333615068519236
+  sensor: Main.Sensor
+    schedule: RegularSchedule
+      period: Rational{Int64}
+        num: Int64 1
+        den: Int64 20
+    bias: Float64 0.14133402616487242
+    noise: Float64 0.0032644838085590473
+    measurement: Main.SensorMeasurement
+      t: Float64 10.0
+      position: Float64 1.0311282423605432
+  actuator: Main.Actuator
+    time_constant: Float64 0.04
+    command: Float64 0.5598492561200789
+    response: Float64 -0.9049393126102729
+  target: Main.ConstantTarget
+    constant_position: Float64 1.0
+  controller: Main.PIDController
+    schedule: RegularSchedule
+      period: Rational{Int64}
+        num: Int64 1
+        den: Int64 20
+    k_p: Float64 11.0
+    k_i: Float64 8.0
+    k_d: Float64 6.0
+    position: Float64 1.0311282423605432
+    command: Float64 0.5598492561200789
+    integral: Float64 0.10768788177786234</code></pre><p>In there, we see the sensor bias that results in the steady-state bias of the result.</p><p>We could continue to explore our results using plots and the REPL.</p><h2 id="Swapping-Models"><a class="docs-heading-anchor" href="#Swapping-Models">Swapping Models</a><a id="Swapping-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Swapping-Models" title="Permalink"></a></h2><p>A lot of the power of SystemsOfSystems comes from being able to swap one model for another. Let&#39;s give that a try by developing a <code>RampTarget</code> that has the same interface as the <code>ConstantTarget</code>. Then, we ought to be able to just use our new type in our <code>ClosedLoopSystemSpecs</code>.</p><pre><code class="language-julia hljs">@kwdef struct RampTargetSpecs
+    slope::Float64
+end
+
+@kwdef struct RampTarget
+    slope::Float64
+end
+
+# Since the target for this model is stateless, let&#39;s log it as an output.
+function init(t, specs::RampTargetSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        type = RampTarget,
+        constants = (;
+            slope = SystemsOfSystems.VariableDescription(
+                specs.slope;
+                title = &quot;Slope&quot;,
+                dimensions = [&quot;slope&quot; =&gt; &quot;m / s&quot;,],
+            ),
+        ),
+        discrete_outputs = (;
+            target = SystemsOfSystems.VariableDescription(
+                specs.slope * t;
+                title = &quot;Target Position&quot;,
+                dimensions = [&quot;target&quot; =&gt; &quot;m&quot;,],
+            ),
+        ),
+    )
+end
+
+function updates(t, target::RampTarget, target_position)
+    return SystemsOfSystems.UpdatesOutput(;
+        outputs = (;
+            target = target_position,
+        ),
+    )
+end
+
+get_target_position(t, target::RampTarget) = target.slope * t</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">get_target_position (generic function with 2 methods)</code></pre><p>Now let&#39;s run a sim, reusing everythinng from our last <code>system_specs</code> but using the new target.</p><pre><code class="language-julia hljs">ramp_system_specs = ClosedLoopSystemSpecs(
+    plant = system_specs.plant,
+    sensor = system_specs.sensor,
+    target = RampTargetSpecs(; slope = 0.25),
+    controller = system_specs.controller,
+    actuator = system_specs.actuator,
+)
+
+ramp_history, = SystemsOfSystems.simulate(
+    ramp_system_specs;
+    t = (0, 10),
+    init_fcn = init,
+    rates_fcn = rates,
+    updates_fcn = updates,
+)
+
+SystemsOfSystems.plot_ts(
+    [
+        [
+            &quot;plant&quot; =&gt; ramp_history[&quot;/plant&quot;][&quot;position&quot;],
+            &quot;measured&quot; =&gt; ramp_history[&quot;/controller&quot;][&quot;position&quot;],
+            &quot;target&quot; =&gt; ramp_history[&quot;/target&quot;][&quot;target&quot;],
+        ],
+        history[&quot;/&quot;][&quot;control_error&quot;],
+    ]
+)</code></pre><img src="7322a430.png" alt="Example block output"/><p>Nothing in this section introduces anything new in SystemsOfSystems. It&#39;s simply an example of a useful design pattern in the systems-of-systems space. By designing careful, explicit interfaces for different models, one can create excellently re-usable, composable systems, allowing simulations to grow quite large without getting bogged down in code complexity.</p><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>This example certainly has a lot that we could add. Next, we could make a new controller that observes the rate of change of the target input, or we could add a disturbance input to the plant that starts at some trigger time, or we could break the controller into sub-models so that new controllers could be built from common pieces. And we could quickly put together Monte-Carlo runs for different targets and different initial conditions. For now, however, we&#39;ll wrap up this introductory example.</p><p>Please see the other sections for more on modeling features, simulation options, how to build a model without actually running a simulation, and how time is handled in the simulation.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Introduction</a><a class="docs-footer-nextpage" href="../simulation/">Simulation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 28 July 2026 17:46">Tuesday 28 July 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
