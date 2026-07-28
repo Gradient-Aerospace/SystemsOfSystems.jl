@@ -45,11 +45,12 @@ const NO_T_NEXT = 1//0
 """
     exact_time(t)
 
-Convert a user- or model-provided time to the official exact representation.
+Converts a user- or model-provided time to the official exact representation.
 
 Rational inputs retain their mathematical value. Floating-point inputs use Julia's normal
 `rationalize` semantics, which intentionally recover simple values such as `0.1 == 1//10`.
-When exact scheduling matters, callers should provide a rational explicitly.
+An explicitly rational input is available for cases where the event time must be stated
+exactly.
 """
 exact_time(t::ExactTime) = t
 exact_time(t::Real) = rationalize(Int64, t)
@@ -57,7 +58,7 @@ exact_time(t::Real) = rationalize(Int64, t)
 """
     time_isless(a, b)
 
-Compare two official times using `Int128` intermediates.
+Compares two official times using `Int128` intermediates.
 
 Julia's ordinary bounded rational arithmetic may overflow while cross-multiplying unrelated
 denominators. Widening here keeps exact scheduler comparisons allocation-free for all
@@ -96,14 +97,14 @@ end
 """
     earlier_time(a, b)
 
-Return the earlier of two official simulation times using overflow-resistant comparison.
+Returns the earlier of two official simulation times using overflow-resistant comparison.
 """
 earlier_time(a::ExactTime, b::ExactTime) = time_isless(a, b) ? a : b
 
 """
     float_duration(t_start, t_end)
 
-Convert the exact interval from `t_start` to `t_end` into a floating-point numerical
+Converts the exact interval from `t_start` to `t_end` into a floating-point numerical
 duration without first constructing `t_end - t_start`.
 
 The whole and fractional portions are differenced separately using `Int128` intermediates.
@@ -135,7 +136,7 @@ end
 """
     solver_time(t)
 
-Convert a floating-point solver-selected endpoint to the official time representation.
+Converts a floating-point solver-selected endpoint to the official time representation.
 
 Unlike an exact hard event, this endpoint has no independent claim to mathematical
 exactness. `rationalize` supplies a scheduler label for the floating-point instant without
@@ -151,7 +152,7 @@ end
 """
     wide_time(t)
 
-Widen an official time before compound exact arithmetic. Consumers can then use Julia's
+Widens an official time before compound exact arithmetic. Consumers can then use Julia's
 ordinary `Rational` operations without overflowing an `Int64` intermediate.
 """
 wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
@@ -159,7 +160,7 @@ wide_time(t::ExactTime) = Int128(numerator(t)) // Int128(denominator(t))
 """
     narrow_time(value)
 
-Return a widened calculation to the official time representation.
+Returns a widened calculation to the official time representation.
 
 This check distinguishes an unrepresentable final time from an avoidable overflow in an
 intermediate calculation. Consumers should narrow only the final result of a widened

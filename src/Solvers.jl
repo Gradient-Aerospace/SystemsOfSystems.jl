@@ -49,8 +49,9 @@ const AbstractSolver = AbstractIntegrator
 """
     StepRequest(t_start, t_bound, state)
 
-Request one accepted continuous-time step beginning at the official rational time
-`t_start`. The integrator may choose any rational endpoint no later than `t_bound`.
+A container for one accepted continuous-time step request beginning at the official
+rational time `t_start`. The integrator may choose any rational endpoint no later than
+`t_bound`.
 
 `t_bound` is selected by the simulation scheduler from user-requested times,
 model-requested times, and the overall end time. It is a hard boundary: no numerical stage
@@ -91,7 +92,7 @@ end
 """
     SolverFailure(time, reason)
 
-Report that no acceptable numerical step could be produced from `time`.
+A result indicating that no acceptable numerical step could be produced from `time`.
 
 A solver failure is not a model stop request. Keeping it as a distinct result prevents the
 normal accepted-step path from carrying an abstract stop field and makes it impossible for
@@ -243,14 +244,16 @@ const DORMAND_PRINCE_54_TABLEAU = ExplicitRungeKuttaTableau(
 #########################
 
 """
-Use the same floating-point step duration after every accepted step.
+A step-size controller that uses the same floating-point duration after every accepted
+step.
 """
 struct FixedStepController
     dt::Float64
 end
 
 """
-Control an embedded Runge-Kutta method using a scalar normalized local-error estimate.
+An adaptive step-size controller for an embedded Runge-Kutta method using a scalar
+normalized local-error estimate.
 
 The controller is mutable because `next_dt` is runtime history belonging to one simulation.
 The remaining fields define policy: maximum duration, absolute and relative tolerances,
@@ -283,8 +286,9 @@ end
 """
     RungeKutta4Options(; dt)
 
-Configure the classical fourth-order Runge-Kutta method with fixed official step spacing
-`dt`. Scheduled user and model times remain hard bounds and may shorten an individual step.
+A container for the classical fourth-order Runge-Kutta solver options, where `dt` is the
+fixed official step spacing. Scheduled user and model times remain hard bounds and may
+shorten an individual step.
 """
 struct RungeKutta4Options <: AbstractSolverOptions
     dt::ExactTime
@@ -299,8 +303,9 @@ end
 """
     DormandPrince54Options(; initial_dt, max_dt, abs_tol, rel_tol)
 
-Configure the embedded Dormand-Prince 5(4) method. The fifth-order solution advances the
-model, while the fourth-order solution estimates local error for adaptive step control.
+A container for the embedded Dormand-Prince 5(4) solver options. The fifth-order solution
+advances the model, while the fourth-order solution estimates local error for adaptive step
+control.
 """
 struct DormandPrince54Options <: AbstractSolverOptions
     initial_dt::ExactTime
@@ -334,7 +339,7 @@ end
 """
     create_integrator(options, problem, initial_state)
 
-Create runtime solver state for one simulation. `problem` and `initial_state` are accepted
+Creates runtime solver state for one simulation. `problem` and `initial_state` are accepted
 by the interface even when a particular method does not yet require initialization caches.
 """
 function create_integrator(
@@ -371,7 +376,7 @@ end
 #############################
 
 """
-Convert a controller's floating-point duration into one official numerical interval.
+Converts a controller's floating-point duration into one official numerical interval.
 
 The returned endpoint is rational and never crosses `t_bound`. A hard-bound interval derives
 its numerical duration from the exact rational event times. A soft solver-selected interval
@@ -466,7 +471,7 @@ function stage_count(
 end
 
 """
-Evaluate every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`.
+Evaluates every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`.
 
 The beginning state is prepared exactly once for this attempt. If an adaptive controller
 rejects the result, its next attempt calls this function again and obtains new continuous
@@ -507,7 +512,8 @@ end
 """
     step!(integrator, problem, request)
 
-Attempt and return exactly one accepted numerical step without crossing `request.t_bound`.
+Attempts and returns exactly one accepted numerical step without crossing
+`request.t_bound`.
 The fixed and adaptive overloads below form the complete simulation-facing solver protocol.
 """
 function step!(

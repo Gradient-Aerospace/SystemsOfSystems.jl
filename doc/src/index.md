@@ -155,8 +155,8 @@ Each of those modules is introduced below.
 
 The following solvers exist today:
 
-* [`RungeKutta4Options`](@ref): 4th-order Runge-Kutta method, useful when the user can directly provide a step size that will work throughout the simulation
-* [`DormandPrince54Options`](@ref): Dormand-Prince 5th-order adaptive-step method with a 4th-order embedded solution for step size control, useful when the step size needs to vary during the simulation automatically
+* [`RungeKutta4Options`](@ref SystemsOfSystems.Solvers.RungeKutta4Options): 4th-order Runge-Kutta method, useful when the user can directly provide a step size that will work throughout the simulation
+* [`DormandPrince54Options`](@ref SystemsOfSystems.Solvers.DormandPrince54Options): Dormand-Prince 5th-order adaptive-step method with a 4th-order embedded solution for step size control, useful when the step size needs to vary during the simulation automatically
 
 Users can implement their own solvers according to the solver interface, and more solvers will be available soon.
 
@@ -164,9 +164,9 @@ Users can implement their own solvers according to the solver interface, and mor
 
 The simulation has an option to "hook into" its loop. It exports a `Hooks` module with the following built-in hook types.
 
-* [`ProgressBarOptions`](@ref): Configures a hook to display a progress bar in stdout
-* [`SimTimeoutOptions`](@ref): Configures a hook to end the sim after a certain real-world timeout (useful if something is hanging)
-* [`ClockSyncOptions`](@ref): Configures a hook to synchronize the loop with soft real-time using the system clock
+* [`ProgressBarOptions`](@ref SystemsOfSystems.Hooks.ProgressBarOptions): Configures a hook to display a progress bar in stdout
+* [`SimTimeoutOptions`](@ref SystemsOfSystems.Hooks.SimTimeoutOptions): Configures a hook to end the sim after a certain real-world timeout (useful if something is hanging)
+* [`ClockSyncOptions`](@ref SystemsOfSystems.Hooks.ClockSyncOptions): Configures a hook to synchronize the loop with soft real-time using the system clock
 
 Users can implement their own hooks according to the hook interface.
 
@@ -174,9 +174,9 @@ Users can implement their own hooks according to the hook interface.
 
 There are three types of logs today:
 
-* [`BasicLogOptions`](@ref): Logs states and outputs in regular Julia arrays. By default, everything is logged.
-* [`NullLogOptions`](@ref): Logs nothing. This is good for speed when all that's needed from the sim is the final state of the models.
-* [`HDF5LogOptions`](@ref): Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
+* [`BasicLogOptions`](@ref SystemsOfSystems.Logs.BasicLogOptions): Logs states and outputs in regular Julia arrays. By default, everything is logged.
+* [`NullLogOptions`](@ref SystemsOfSystems.Logs.NullLogOptions): Logs nothing. This is good for speed when all that's needed from the sim is the final state of the models.
+* [`HDF5LogOptions`](@ref SystemsOfSystems.Logs.HDF5LogOptions): Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
 
 Users can implement their own logs according to the log interface.
 

@@ -7,9 +7,9 @@ import Random
 """
     BranchingSeed
 
-This type is useful for making a tree of random seeds that trace back to a single top-level
-seed. Here's an example of creating a `BranchingSeed` and creating a random number generator
-from it:
+A seed that can form a tree of reproducible random processes tracing back to a single
+top-level seed. Here's an example of creating a `BranchingSeed` and creating a random number
+generator from it:
 
 ```
 seed = BranchingSeed(0, "")

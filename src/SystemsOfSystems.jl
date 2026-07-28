@@ -52,8 +52,8 @@ using .LoggingPolicies
 #########################
 
 """
-This is the output expected from the `init_fcn` provided to `simulate`. It describes the
-elements of the model, including:
+A description of the model structure returned by the `init_fcn` provided to `simulate`. It
+contains:
 
 * `type::Type`: The type that should be used when constructing the model, or `Nothing` to
   use a named tuple. The type should accept keyword arguments for the variables below.
@@ -128,7 +128,7 @@ ModelDescription(;
 """
     validate_model_schedules(description, model_path = "/")
 
-Validate every declared schedule before simulation resources are opened.
+Validates every declared schedule before simulation resources are opened.
 
 Schedules must implement `AbstractSchedule`, and their names must not collide with another
 member exposed on the same constructed model. Detecting those mistakes during initialization
@@ -182,7 +182,7 @@ end
 """
     collect_schedules!(schedules, description)
 
-Append every schedule in `description` and its submodels to an initialization-time working
+Appends every schedule in `description` and its submodels to an initialization-time working
 vector. The abstract element type is acceptable here because this collection is discarded
 after initialization; the runtime scheduler receives a concrete tuple.
 """
@@ -201,7 +201,7 @@ end
 """
     collect_unique_schedules(description)
 
-Return one tuple containing the distinct schedules declared throughout a model hierarchy.
+Returns one tuple containing the distinct schedules declared throughout a model hierarchy.
 
 Collection and deduplication occur once during initialization. The simulation loop receives
 the resulting concrete tuple, allowing dispatch to specialize for built-in and user-defined
@@ -215,7 +215,7 @@ function collect_unique_schedules(description::ModelDescription)
 end
 
 """
-Describes a model's continuous-time derivatives and outputs.
+A container for a model's continuous-time derivatives and outputs.
 
 * `rates`: A named tuple corresponding with the continuous variables, where each field
   contains the rate of change of that continuous variable.
@@ -240,9 +240,9 @@ RatesOutput(;
 ) = RatesOutput(rates, outputs, models, stop)
 
 """
-Describes a model's discrete-time updates and outputs. A model that has no updates, outputs,
-replacement `t_next`, or stop request at a sample may return `nothing` instead of an empty
-`UpdatesOutput()`.
+A container for a model's discrete-time updates and outputs. A model that has no updates,
+outputs, replacement `t_next`, or stop request at a sample may return `nothing` instead of
+an empty `UpdatesOutput()`.
 
 * `updates`: A named tuple mapping state name (can be a continuous or discrete state) to the
    updated value
@@ -271,8 +271,8 @@ UpdatesOutput(;
 """
     on_triggering(f, schedule::AbstractSchedule, t)
 
-Run `f` and return its result when `schedule` is triggering at official time `t`; otherwise,
-return `nothing` without evaluating `f`.
+Runs `f` and returns its result when `schedule` is triggering at official time `t`;
+otherwise, returns `nothing` without evaluating `f`.
 
 The function argument comes first so model update code can use Julia's `do` syntax:
 
@@ -289,8 +289,9 @@ end
 end
 
 """
-`VariableDescription` can be used to decorate variables in a `ModelDescription`. The
-decorations become part of the `TimeSeries` for that variable. Example:
+A container for a variable's initial value and optional logging metadata in a
+`ModelDescription`. The metadata becomes part of the `TimeSeries` for that variable.
+Example:
 
 ```
 VariableDescription(
@@ -343,12 +344,13 @@ end
 """
     RandomVariableDescription{T}
 
-Describes a random variable of type `T`. The `f` field should be a function or type
-satisfying `f(rng, t)::T` for a discrete random variable or `f(rng, t_last, t_next)::T` for
-a continuous random variable. It also stores a `seed::BranchingSeed` for its own random
-number generator, which is useful when a model description needs to reproduce the same draw
-outside of its usual parent model. The remaining fields, `title`, `dimensions`, and
-`groups`, are the same as for `VariableDescription`.
+A container for a random variable of type `T`. The `f` field is a function or callable type
+satisfying `f(rng, t)::T` for a discrete random variable or
+`f(rng, t_last, t_next)::T` for a continuous random variable. It also stores a
+`seed::BranchingSeed` for its own random number generator, which is useful when a model
+description needs to reproduce the same draw outside of its usual parent model. The
+remaining fields, `title`, `dimensions`, and `groups`, are the same as for
+`VariableDescription`.
 """
 struct RandomVariableDescription{T}
     f::Any
@@ -371,8 +373,8 @@ end
 """
     RandomVariable{F, T}
 
-Stores a function to take draws from `f::F` using the `rng::Xoshiro` such that `f(rng, t)`
-produces a random draw of type `T`, where `t` is time.
+A container for a callable random process, `f::F`, and its `rng::Xoshiro`, where
+`f(rng, t)` produces a random draw of type `T` at time `t`.
 """
 struct RandomVariable{F, T}
     f::F
@@ -388,9 +390,9 @@ end
 """
     ContinuousWhiteNoise{T}(; sigma::T)
 
-A type that can be used like a function to draw random numbers for a continuous-time process
-with the given standard deviation, `sigma::T`. This works for any type that defines
-`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+A callable Gaussian white-noise process for continuous-time models with the given standard
+deviation, `sigma::T`. This works for any type that defines `randn(rng, type)` and
+broadcasting (`Float64`, `SVector`, etc.).
 
 An example:
 
@@ -410,9 +412,9 @@ end
 """
     DiscreteWhiteNoise{T}(; sigma::T)
 
-A type that can be used like a function to draw random numbers for a discrete-time process
-with the given standard deviation, `sigma::T`. This works for any type that defines
-`randn(rng, type)` and broadcasting (Float64, SVector, etc.).
+A callable Gaussian white-noise process for discrete-time models with the given standard
+deviation, `sigma::T`. This works for any type that defines `randn(rng, type)` and
+broadcasting (`Float64`, `SVector`, etc.).
 
 An example:
 
@@ -434,8 +436,8 @@ end
 #########################
 
 """
-This is the same as ModelDescription, except that any VariableDescription stuff has been
-pulled out and all types are fixed as type parameters. This is what's used by the sim loop.
+An internal model description with the `VariableDescription` metadata removed and all types
+fixed as type parameters. This is used by the simulation loop.
 
 This is mutable only to put it on the heap.
 """
@@ -750,7 +752,7 @@ include("ContinuousProblems.jl")
 include("Solvers.jl")
 
 """
-A set of options for the `simulate` function, with keyword arguments for:
+A container for the options supplied to `simulate`, with fields for:
 
 * `outdir`: A directory to save any outputs to (such as `Resources.OutputFile`)
 * `log`: Log options to use (e.g., `Logs.BasicLogOptions()`)
@@ -772,7 +774,7 @@ end
 ##############
 
 """
-A type to store the results from simulation, including fields for:
+A container for simulation results, including fields for:
 
 * `model`: The final model constructed in the sim
 * `log`: The log containing the time series for each variable of each model
@@ -987,7 +989,7 @@ end
 """
     find_model_requested_stop(output)
 
-Return the first model stop request in a deterministic, depth-first traversal of a
+Returns the first model stop request in a deterministic, depth-first traversal of a
 `RatesOutput` or `UpdatesOutput` hierarchy.
 
 The parent model is considered before its children, and children follow their named-tuple
@@ -1014,7 +1016,7 @@ first_stop(current, candidate) = isnothing(current) ? candidate : current
 """
     step!(...)
 
-Process one complete accepted hybrid-system sample.
+Processes one complete accepted hybrid-system sample.
 
 The integrator first advances continuous state by exactly one accepted numerical step. The
 function then logs its authoritative beginning sample, runs hooks, draws discrete random
@@ -1316,7 +1318,7 @@ end
 """
     loop!(...)
 
-Run accepted hybrid-system samples until a normal stop or failure is reported.
+Runs accepted hybrid-system samples until a normal stop or failure is reported.
 
 This function is the exception boundary for simulation execution. Numerical failures arrive
 as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`

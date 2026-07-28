@@ -36,7 +36,7 @@ abstract type AbstractSampler end
 """
     get_sampling_directive(t, sampler)
 
-Return the sampling instructions for `sampler` at exact simulation time `t`.
+Returns the sampling instructions for `sampler` at exact simulation time `t`.
 
 Custom `AbstractSampler` implementations must define this method. The returned value is
 queried with `should_log_states`, `should_snapshot_states`, and `should_log_outputs`.
@@ -46,15 +46,16 @@ function get_sampling_directive end
 """
     should_log_states(directive)
 
-Return whether the model's continuous and discrete states should be logged for this sample.
+Returns whether the model's continuous and discrete states should be logged for this
+sample.
 """
 function should_log_states end
 
 """
     should_snapshot_states(directive)
 
-Return whether every current state should be logged for this sample, including states absent
-from the current update result.
+Returns whether every current state should be logged for this sample, including states
+absent from the current update result.
 
 At a discrete update opportunity, snapshots are read from the authoritative post-update
 model state. This directive is ignored when `should_log_states` is false. When snapshotting
@@ -67,7 +68,7 @@ directives retain sparse behavior unless they implement this method.
 """
     should_log_outputs(directive)
 
-Return whether the model's continuous and discrete outputs should be logged for this
+Returns whether the model's continuous and discrete outputs should be logged for this
 sample. Only outputs supplied by the corresponding rates or updates result are recorded.
 """
 function should_log_outputs end
@@ -101,9 +102,9 @@ SamplingDirective(log_states, log_outputs) =
 """
     CompleteSampler()
 
-Log the model's states and outputs at every simulation-loop sample. Discrete states retain
-their normal sparse change-event representation: only fields present in an update result
-are appended.
+A sampler that logs the model's states and outputs at every simulation-loop sample.
+Discrete states retain their normal sparse change-event representation: only fields present
+in an update result are appended.
 """
 @kwdef struct CompleteSampler <: AbstractSampler
 end
@@ -116,7 +117,7 @@ end
 """
     NullSampler()
 
-Skip the model's states and outputs at every simulation-loop sample.
+A sampler that skips the model's states and outputs at every simulation-loop sample.
 
 The model history and any time-series containers selected by its model logging policy are
 still created during initialization. A model's sampler has no effect on the samplers
@@ -134,11 +135,11 @@ end
     RegularSampler(; period, offset = 0)
     RegularSampler(period, offset = 0)
 
-Log the model's states and outputs at times in the sequence `offset + n * period`, for
-nonnegative integer `n`. Every selected state is snapshotted at those times, including
-discrete states absent from the current update result. Discrete snapshots reflect the
-post-update model state. Discrete outputs remain event-like and are recorded only when the
-current update result supplies them.
+A sampler that logs the model's states and outputs at times in the sequence
+`offset + n * period`, for nonnegative integer `n`. Every selected state is snapshotted at
+those times, including discrete states absent from the current update result. Discrete
+snapshots reflect the post-update model state. Discrete outputs remain event-like and are
+recorded only when the current update result supplies them.
 
 `period` and `offset` are converted to exact simulation times. `period` must be finite and
 strictly positive, and `offset` must be finite. A sampler does not add times to the

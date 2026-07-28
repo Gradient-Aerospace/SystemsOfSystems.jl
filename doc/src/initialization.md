@@ -1,6 +1,6 @@
 # Initialization
 
-It's often useful to create a model outside of the context of simulation, such as when developing the model or harnessing the models for analysis purposes. The `initilize` function provides this behavior.
+It's often useful to create a model outside of the context of simulation, such as when developing the model or harnessing the models for analysis purposes. The `initialize` function provides this behavior.
 
 The preferred method is the `do` form. It works like this:
 
@@ -27,7 +27,7 @@ end
 Using the `do` form isn't required. Two other methods exist:
 
 ```julia
-my_model = initialize(user_data; init_fcn...)
+my_model = initialize(user_data; init_fcn = ...)
 my_model = initialize(model_description)
 ```
 

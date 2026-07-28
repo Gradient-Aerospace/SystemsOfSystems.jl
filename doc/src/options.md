@@ -1,7 +1,6 @@
 # Options
 
-The [`simulate`](@ref) function accepts a [`SimOptions`](@ref) value that controls output
-paths, logging, the continuous-time solver, hooks, and the time label used in plots.
+The [`simulate`](@ref) function accepts a [`SimOptions`](@ref) value that controls output paths, logging, the continuous-time solver, hooks, and the time label used in plots.
 
 ```julia
 history, final_time, final_model = simulate(
@@ -22,8 +21,7 @@ history, final_time, final_model = simulate(
 )
 ```
 
-Every field has a default. Most simulations can begin with `SimOptions()` or omit the
-`options` keyword entirely.
+Every field has a default. Most simulations can begin with `SimOptions()` or omit the `options` keyword entirely.
 
 ```@docs
 SystemsOfSystems.SimOptions
@@ -31,13 +29,9 @@ SystemsOfSystems.SimOptions
 
 ## Solvers
 
-The solver advances continuous states between event times. The default is the adaptive
-Dormand-Prince 5(4) solver.
+The solver advances continuous states between event times. The default is the adaptive Dormand-Prince 5(4) solver.
 
-Use `DormandPrince54Options` for most simulations. `initial_dt` is its first proposed step,
-`max_dt` limits later proposals, and `abs_tol` and `rel_tol` control local error. Accepted
-steps will be shortened when necessary to stop exactly at a user-requested time, schedule
-occurrence, or model `t_next`.
+`DormandPrince54Options` is appropriate for most simulations. `initial_dt` is its first proposed step, `max_dt` limits later proposals, and `abs_tol` and `rel_tol` control local error. Accepted steps will be shortened when necessary to stop exactly at a user-requested time, schedule occurrence, or model `t_next`.
 
 ```julia
 options = SimOptions(;
@@ -60,9 +54,7 @@ options = SimOptions(;
 )
 ```
 
-The times passed as `t` to `simulate` are required sample times, not a general
-fixed-step setting. For example, `t = 0:1:10` makes the solver stop at every whole second,
-but an adaptive solver can take as many smaller steps as necessary between those times.
+The times passed as `t` to `simulate` are required sample times, not a general fixed-step setting. For example, `t = 0:1:10` makes the solver stop at every whole second, but an adaptive solver can take as many smaller steps as necessary between those times.
 
 ```@docs
 SystemsOfSystems.Solvers.DormandPrince54Options
@@ -84,17 +76,11 @@ options = SimOptions(;
 )
 ```
 
-`ProgressBarOptions` displays command-line progress. Its update interval is wall-clock
-time, not simulation time.
+`ProgressBarOptions` displays command-line progress. Its update interval is wall-clock time, not simulation time.
 
-`SimTimeoutOptions` requests a clean stop after the simulation has run for the specified
-wall-clock duration. The timeout is checked by the simulation loop; it is not a hard
-operating-system deadline that interrupts arbitrary user code.
+`SimTimeoutOptions` requests a clean stop after the simulation has run for the specified wall-clock duration. The timeout is checked by the simulation loop; it is not a hard operating-system deadline that interrupts arbitrary user code.
 
-`ClockSyncOptions` prevents the simulation from advancing faster than wall-clock time. It
-is useful for soft real-time demonstrations and hardware- or software-in-the-loop setups.
-It cannot make a simulation run in real time when one simulation step requires more
-computation than the corresponding wall-clock interval.
+`ClockSyncOptions` prevents the simulation from advancing faster than wall-clock time. It is useful for soft real-time demonstrations and hardware- or software-in-the-loop setups. It cannot make a simulation run in real time when one simulation step requires more computation than the corresponding wall-clock interval.
 
 These are the built-in hooks.
 
@@ -110,8 +96,7 @@ Further hooks can be developed using the hooks interface.
 
 The `log` option selects where, and whether, simulation histories are stored.
 
-`BasicLogOptions` is the default. It stores selected histories in ordinary Julia arrays in
-memory and is normally the fastest choice.
+`BasicLogOptions` is the default. It stores selected histories in ordinary Julia arrays in memory and is normally the fastest choice.
 
 ```julia
 options = SimOptions(;
@@ -119,8 +104,7 @@ options = SimOptions(;
 )
 ```
 
-`NullLogOptions` turns history logging off. Use it when only `final_time` and `final_model`
-are needed.
+`NullLogOptions` turns history logging off. It is useful when only `final_time` and `final_model` are needed.
 
 ```julia
 options = SimOptions(;
@@ -128,8 +112,7 @@ options = SimOptions(;
 )
 ```
 
-`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are
-too large for RAM, at the cost of slower simulation. Import both `HDF5Vectors` to activate HDF5 logging.
+`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are too large for RAM, at the cost of slower simulation. HDF5 logging becomes available after importing `HDF5Vectors`.
 
 ```julia
 using HDF5Vectors
@@ -141,9 +124,7 @@ options = SimOptions(;
 )
 ```
 
-If the history fits in memory and only the final artifact needs to be HDF5, a
-`BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging
-directly to HDF5.
+If the history fits in memory and only the final artifact needs to be HDF5, a `BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging directly to HDF5.
 
 ```@docs
 SystemsOfSystems.Logs.BasicLogOptions
@@ -155,14 +136,12 @@ SystemsOfSystems.Logs.save_log_to_hdf5
 
 ### Logging Policies
 
-Both `BasicLogOptions` and `HDF5LogOptions` accept a `logging_policy`. A logging policy
-assigns two choices to each model:
+Both `BasicLogOptions` and `HDF5LogOptions` accept a `logging_policy`. A logging policy assigns two choices to each model:
 
 * A variable set that selects _which_ constants, states, and outputs are stored
 * A sampler that selects _when_ the states and outputs are recorded
 
-The default `AllPassLoggingPolicy` stores every variable from every model and samples at
-every simulation time.
+The default `AllPassLoggingPolicy` stores every variable from every model and samples at every simulation time.
 
 ```@docs
 SystemsOfSystems.LoggingPolicies.AllPassLoggingPolicy
@@ -186,8 +165,7 @@ options = SimOptions(;
 )
 ```
 
-A logging sampler does not force the simulation to take steps. (Changing the log never affects the result of the simulation.) It only selects from times
-that already exist.
+A logging sampler does not force the simulation to take steps. (Changing the log never affects the result of the simulation.) It only selects from times that already exist.
 
 ```@docs
 SystemsOfSystems.LoggingPolicies.UniformLoggingPolicy
@@ -199,11 +177,9 @@ SystemsOfSystems.Samplers.RegularSampler
 
 #### Policies by Model Path
 
-`RegexLoggingPolicy` allows the user to provide different model logging policies to different models according to the models' "paths". The root
-model has path `"/"`, while descendants have paths such as `"/plant"` and `"/vehicle/sensor"`. The first matching rule wins.
+`RegexLoggingPolicy` allows the user to provide different model logging policies to different models according to the models' "paths". The root model has path `"/"`, while descendants have paths such as `"/plant"` and `"/vehicle/sensor"`. The first matching rule wins.
 
-The following policy selects plant samples on a 100 Hz grid, omits two variables from the
-controller, and stores every variable from all remaining models:
+The following policy selects plant samples on a 100 Hz grid, omits two variables from the controller, and stores every variable from all remaining models:
 
 ```julia
 logging_policy = LoggingPolicies.RegexLoggingPolicy(;
@@ -226,7 +202,7 @@ options = SimOptions(;
 )
 ```
 
-Again, for the sake of clarity, note that asking for sampling at every 1/100 period does _not_ force the simulation to take steps that align with that sampling period. (Again, we do not want the log type to influence the results of the simulation.) It's up to the user to ensure that the selected sampler makes sense with the way the simulation requests discrete steps via schedules, `t_next`, etc.
+Again, for the sake of clarity, note that asking for sampling at every 1/100 period does _not_ force the simulation to take steps that align with that sampling period. (Again, we do not want the log type to influence the results of the simulation.) The selected sampler therefore needs to align with the discrete steps requested by schedules, `t_next`, etc.
 
 If no `default` is specified for `RegexLoggingPolicy`, models that don't match the regular expressions are omitted from the log (they receive a `NullModelLoggingPolicy`).
 
@@ -238,8 +214,7 @@ SystemsOfSystems.LoggingPolicies.NullModelLoggingPolicy
 
 #### Selecting Variables
 
-`ModelLoggingPolicy.variable_set` controls which variables are present in that model's
-history:
+`ModelLoggingPolicy.variable_set` controls which variables are present in that model's history:
 
 * `AllVariables()` selects every variable.
 * `NoVariables()` selects no variables.
@@ -248,8 +223,7 @@ history:
 
 This can be useful for models that have "weird" states. E.g., a discrete state could be a function, but we might not want to log a time history of functions (though we could).
 
-Names can be strings or symbols. A model's variable set does not control its submodels;
-each submodel receives its own model logging policy.
+Names can be strings or symbols. A model's variable set does not control its submodels; each submodel receives its own model logging policy.
 
 ```@docs
 SystemsOfSystems.LoggingPolicies.AllVariables
