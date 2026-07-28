@@ -113,10 +113,10 @@ We can select its time series for `x`.
 history["/"]["x"]
 ```
 
-SystemsOfSystems exports a `plot_ts` function. It requires a Makie backend to actually plot it. We'll use GLMakie, an excellent and flexible graphics package.
+SystemsOfSystems exports a `plot_ts` function. It requires a Makie backend to actually plot it. We'll use CairoMakie for the static images in this online documentation. GLMakie is an excellent choice when working interactively.
 
 ```@example quick_example
-using GLMakie # For the plot
+using CairoMakie # For the plot
 plot_ts(history["/"]["x"])
 ```
 

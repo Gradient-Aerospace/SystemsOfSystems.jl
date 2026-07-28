@@ -51,7 +51,7 @@ Since this is a working example, we'll import everything we need up front:
 import Random
 import SystemsOfSystems
 import Dimensions # We'll want this to label our sensor measurement
-import GLMakie # The plotting package we'll use
+import CairoMakie # The plotting package we'll use
 ```
 
 ## Plant
@@ -817,3 +817,89 @@ dump(final_system)
 ```
 
 In there, we see the sensor bias that results in the steady-state bias of the result.
+
+We could continue to explore our results using plots and the REPL.
+
+## Swapping Models
+
+A lot of the power of SystemsOfSystems comes from being able to swap one model for another. Let's give that a try by developing a `RampTarget` that has the same interface as the `ConstantTarget`. Then, we ought to be able to just use our new type in our `ClosedLoopSystemSpecs`.
+
+```@example controls
+@kwdef struct RampTargetSpecs
+    slope::Float64
+end
+
+@kwdef struct RampTarget
+    slope::Float64
+end
+
+# Since the target for this model is stateless, let's log it as an output.
+function init(t, specs::RampTargetSpecs, seed)
+    return SystemsOfSystems.ModelDescription(;
+        type = RampTarget,
+        constants = (;
+            slope = SystemsOfSystems.VariableDescription(
+                specs.slope;
+                title = "Slope",
+                dimensions = ["slope" => "m / s",],
+            ),
+        ),
+        discrete_outputs = (;
+            target = SystemsOfSystems.VariableDescription(
+                specs.slope * t;
+                title = "Target Position",
+                dimensions = ["target" => "m",],
+            ),
+        ),
+    )
+end
+
+function updates(t, target::RampTarget, target_position)
+    return SystemsOfSystems.UpdatesOutput(;
+        outputs = (;
+            target = target_position,
+        ),
+    )
+end
+
+get_target_position(t, target::RampTarget) = target.slope * t
+```
+
+Now let's run a sim, reusing everythinng from our last `system_specs` but using the new target.
+
+```@example controls
+ramp_system_specs = ClosedLoopSystemSpecs(
+    plant = system_specs.plant,
+    sensor = system_specs.sensor,
+    target = RampTargetSpecs(; slope = 0.25),
+    controller = system_specs.controller,
+    actuator = system_specs.actuator,
+)
+
+ramp_history, = SystemsOfSystems.simulate(
+    ramp_system_specs;
+    t = (0, 10),
+    init_fcn = init,
+    rates_fcn = rates,
+    updates_fcn = updates,
+)
+
+SystemsOfSystems.plot_ts(
+    [
+        [
+            "plant" => ramp_history["/plant"]["position"],
+            "measured" => ramp_history["/controller"]["position"],
+            "target" => ramp_history["/target"]["target"],
+        ],
+        history["/"]["control_error"],
+    ]
+)
+```
+
+Nothing in this section introduces anything new in SystemsOfSystems. It's simply an example of a useful design pattern in the systems-of-systems space. By designing careful, explicit interfaces for different models, one can create excellently re-usable, composable systems, allowing simulations to grow quite large without getting bogged down in code complexity.
+
+## Next Steps
+
+This example certainly has a lot that we could add. Next, we could make a new controller that observes the rate of change of the target input, or we could add a disturbance input to the plant that starts at some trigger time, or we could break the controller into sub-models so that new controllers could be built from common pieces. And we could quickly put together Monte-Carlo runs for different targets and different initial conditions. For now, however, we'll wrap up this introductory example.
+
+Please see the other sections for more on modeling features, simulation options, how to build a model without actually running a simulation, and how time is handled in the simulation.
