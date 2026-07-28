@@ -151,7 +151,7 @@ end
 
 This describes all of the variables that the plant cares about. (We don't _need_ to use `VariableDescription` here; we could just use raw numbers/structs, but the descriptions show up nicely in plots, so we'll use them in this example.)
 
-TODO: branching
+What about that `seed / "noise"` line? The `seed`, here is a `SystemsOfSystems.BranchingSeed` type, and `/` means "branch" (we could also call `branch(seed, "noise")`). When we branch a seed, it means that we spin off a new seed derived from the given seed using the given string. With branching seeds, SystemsOfSystems makes it very easy to create independent random number streams that nonetheless all change when the top-level seed changes. Basically every single random variable and every use of `seed` to draw during initialization should use its own unique branch. Having independent streams keeps things tidy when adding random variables or changing the order of models, etc.
 
 The plant has only continuous-time dynamics. Let's write a function that takes in the current time, plant model, and actuator force and returns the derivatives of the state variables, plus the extra output we said we wanted logged.
 
@@ -289,7 +289,8 @@ Let's put together the initialization function and model description.
 # Describe all of the variables in the sensor model, with their initial conditions.
 function init(t, specs::SensorSpecs, seed)
 
-    # Draw the bias. Here, we "branch" the seed for the bias. See below.
+    # Draw the bias. Here we see branching again to create this random
+    # number generator.
     rng = Random.Xoshiro(seed / "bias")
     bias = specs.sigma_bias * Random.randn(rng)
 
@@ -673,7 +674,7 @@ end
 
 There is no `control_error` on the initial sample; hence, we have a `missing` there, and we declare that this will, when it's available, be a `Float64`.
 
-Note that we "branch" the seed here for each sub-model. This means that, if the plant and sensor both take draws, they won't be taking the same draws, and their draws won't interact with each other. They will have totally separate (but predictable) streams.
+Note that we branch the seed here for each sub-model. This means that, if the plant and sensor both take draws, they won't be taking the same draws, and their draws won't interact with each other. They will have totally separate (but predictable) streams.
 
 Just like the `init` function, the job of this model's `rates` function is to gather up the `RatesOutput` for each of its sub-models. The plant's `rates` function depends on the actuator force input, so we get that from the actuator. Now, finally, we start to see where we use those accessors we made.
 
