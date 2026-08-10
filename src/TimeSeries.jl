@@ -107,7 +107,7 @@ struct TimeSeries{TVT, DVT, IT}
     data::DVT
     time_dimension::Dimension
     dimensions::Vector{Dimension}
-    path::String # TODO: Consider "ID" instead of path.
+    path::String
     discrete::Bool
     interpolator::IT
     groups::Vector{Pair{String, Vector{String}}}

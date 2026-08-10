@@ -792,8 +792,10 @@ end
 """
 A container for simulation results, including fields for:
 
-* `model`: The final model constructed in the sim
+* `model_description`: The ModelDescription returned from the init_fcn
+* `time`: A vector of all time steps (ExactTime)
 * `log`: The log containing the time series for each variable of each model
+* `model`: The final model constructed in the sim
 * `stop`: The normal stop or failure reason that ended the simulation
 
 This type acts like a log itself, so for instance these do the same thing:
@@ -806,10 +808,20 @@ history.log["/models/plant"]["position"]
 The `keys`, `values`, and `pairs` functions also pass through to the underlying log.
 """
 struct SimHistory
-    model::ModelDescription
+    model_description::ModelDescription # TODO: This doesn't match the description. What value does this have?
+    time::Vector{ExactTime} # All time steps the sim took TODO: Or should this be part of the log? If so, how would a user "ask" for that?
     log::Logs.AbstractLog
+    model::Any
     stop::AbstractTerminationReason
 end
+
+"""
+    completed(h::SimHistory)
+
+Returns true if the simulation ran through to completion (did not throw an error or fail
+to converge on a solution).
+"""
+completed(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
 function Base.show(io::IO, mime::MIME"text/plain", history::SimHistory)
     println(io, "Simulation History:")
@@ -1392,6 +1404,7 @@ function loop!(runtime)
     t_completed = first(runtime.t)
     msd = runtime.msd
     stop = UnknownStopReason()
+    time = ExactTime[first(t)] # TODO: Make the runtime set this up, and allow it to be nothing if we aren't returning a SimHistory.
 
     # No matter what happens, this function returns all of the progress it's made.
     try
@@ -1405,6 +1418,11 @@ function loop!(runtime)
                 mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks
             )
+
+            # Record all sim time steps.
+            if !isnothing(time)
+                push!(time, t_completed)
+            end
 
             # A successfully processed terminal sample receives one direct post-update
             # rates evaluation. Solver failures did not accept a sample and therefore must
@@ -1449,7 +1467,7 @@ function loop!(runtime)
 
     end
 
-    return (; t_completed, msd, stop)
+    return (; t_completed, time, msd, stop)
 
 end
 
@@ -1460,7 +1478,7 @@ function tear_down(runtime, loop_outputs)
         final_model = model(loop_outputs.msd)
         runtime.close_fcn(loop_outputs.t_completed, final_model)
         return (;
-            history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
+            history = SimHistory(runtime.model_description, loop_outputs.time, runtime.log, final_model, loop_outputs.stop),
             t_final = loop_outputs.t_completed,
             final_model,
         )
