@@ -1,5 +1,6 @@
 module TestTimeSeries
 
+import Dimensions
 using Test
 using HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
@@ -38,6 +39,7 @@ struct IMUMeasurement
     accelerometer::Float64
     angular_rate::Float64
 end
+Dimensions.dimstyle(::Type{IMUMeasurement}) = Dimensions.StructDimensionStyle()
 
 @testset "TimeSeries indexing" begin
 
@@ -287,6 +289,29 @@ end
         path = "/named_tuple/measurement",
     )
     @test SystemsOfSystems.select(named_tuple_ts, :accelerometer).data == [4.0, 5.0]
+
+    # Dimension selection follows the same flattened representation used by Dimensions.
+    acceleration_ts = Dimensions.getdim(measurements_ts, 1)
+    angular_rate_ts = Dimensions.getdim(measurements_ts, 2)
+    @test acceleration_ts.data == [1.0, 2.0, 3.0]
+    @test angular_rate_ts.data == [0.1, 0.2, 0.3]
+    @test acceleration_ts.dimensions == [measurements_ts.dimensions[1],]
+    @test angular_rate_ts.dimensions == [measurements_ts.dimensions[2],]
+
+    # Dimension selection preserves the source time axis and applicable series metadata.
+    @test acceleration_ts.title == measurements_ts.title
+    @test acceleration_ts.time == measurements_ts.time
+    @test acceleration_ts.time_dimension == measurements_ts.time_dimension
+    @test acceleration_ts.path == measurements_ts.path
+    @test acceleration_ts.discrete == measurements_ts.discrete
+
+    # Grouping and interpolation are inferred for the scalar result.
+    @test acceleration_ts.groups == ["acceleration" => ["acceleration",],]
+    @test acceleration_ts.interpolator isa SystemsOfSystems.SampleAndHold
+
+    # Selecting a dimension does not change the native payload stored by the source.
+    @test measurements_ts[1] == (measurements_ts.time[1] => measurements[1])
+    @test_throws BoundsError Dimensions.getdim(measurements_ts, 3)
 
 end
 
