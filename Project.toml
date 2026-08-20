@@ -11,6 +11,7 @@ Dimensions = "5f902022-033a-44bd-a904-0a49265d4d22"
 OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
 ProgressMeter = "92933f4c-e287-5a05-a399-4b506db050ca"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [weakdeps]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
@@ -32,6 +33,7 @@ Makie = "0.24.7"
 OrderedCollections = "1.8.1"
 ProgressMeter = "1.11.0"
 Random = "1.11.0"
+StaticArrays = "1.9.16"
 
 [extras]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"

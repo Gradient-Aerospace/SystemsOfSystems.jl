@@ -3,6 +3,7 @@ module TestTimeSeries
 import Dimensions
 using Test
 using HDF5Vectors # For the HDF5Logger
+using StaticArrays: SVector
 using SystemsOfSystems
 using SystemsOfSystems: Logs
 
@@ -322,6 +323,47 @@ end
     @test selected_ts.title == "Selected Acceleration"
     @test selected_ts.dimensions == [selected_dimension,]
     @test selected_ts.path == "/imu/selected_acceleration"
+
+    # Dimensions can also be selected by their metadata labels.
+    acceleration_by_name_ts = SystemsOfSystems.select(measurements_ts, "acceleration")
+    angular_rate_by_name_ts = SystemsOfSystems.select(measurements_ts, "angular rate")
+    @test acceleration_by_name_ts.data == acceleration_ts.data
+    @test angular_rate_by_name_ts.data == angular_rate_ts.data
+    @test acceleration_by_name_ts.dimensions == acceleration_ts.dimensions
+    @test angular_rate_by_name_ts.dimensions == angular_rate_ts.dimensions
+
+    titled_dimension_ts = SystemsOfSystems.select(
+        measurements_ts,
+        "acceleration";
+        title = "Acceleration",
+    )
+    @test titled_dimension_ts.title == "Acceleration"
+    @test_throws "Could not find dimension missing. Valid labels: [\"acceleration\", \"angular rate\"]" SystemsOfSystems.select(measurements_ts, "missing")
+
+    # Multiple labels produce fixed-size values in the requested order.
+    selected_dimensions_ts = SystemsOfSystems.select(
+        measurements_ts,
+        ["angular rate", "acceleration"],
+    )
+    @test selected_dimensions_ts.data == [
+        SVector(0.1, 1.0),
+        SVector(0.2, 2.0),
+        SVector(0.3, 3.0),
+    ]
+    @test selected_dimensions_ts.data isa Vector{SVector{2, Float64}}
+    @test selected_dimensions_ts.dimensions == [
+        measurements_ts.dimensions[2],
+        measurements_ts.dimensions[1],
+    ]
+    @test selected_dimensions_ts.title == measurements_ts.title
+    @test selected_dimensions_ts.time == measurements_ts.time
+    @test selected_dimensions_ts.path == measurements_ts.path
+    @test selected_dimensions_ts.discrete == measurements_ts.discrete
+    @test selected_dimensions_ts.groups == [
+        "angular rate" => ["angular rate",],
+        "acceleration" => ["acceleration",],
+    ]
+    @test selected_dimensions_ts.interpolator isa SystemsOfSystems.SampleAndHold
 
     # Selecting a dimension does not change the native payload stored by the source.
     @test measurements_ts[1] == (measurements_ts.time[1] => measurements[1])

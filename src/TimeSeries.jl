@@ -8,7 +8,8 @@ export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation,
     select, plot_ts, plot_ts!
 
-using Dimensions: numdims_for_type
+using Dimensions: getdim, numdims_for_type
+using StaticArrays: SVector
 
 """
     Dimension(; label = "", units = "")
@@ -292,6 +293,59 @@ function select(
         ts;
         kwargs...,
     )
+
+end
+
+function dimension_number(ts::TimeSeries, dimension::AbstractString)
+    dimension_labels = [dimension.label for dimension in ts.dimensions]
+    k = findfirst(==(dimension), dimension_labels)
+    if isnothing(k)
+        error("Could not find dimension $dimension. Valid labels: $dimension_labels")
+    end
+    return k
+end
+
+"""
+    select(ts::TimeSeries, dimension::AbstractString; kwargs)
+
+Selects the dimension with the given label as a new `TimeSeries`.
+"""
+function select(
+    ts::TimeSeries,
+    dimension::AbstractString;
+    kwargs...,
+)
+
+    k = dimension_number(ts, dimension)
+    return getdim(ts, k; kwargs...)
+
+end
+
+"""
+    select(ts::TimeSeries, dimensions::AbstractVector{<:AbstractString}; kwargs)
+
+Selects the dimensions with the given labels as a new `TimeSeries` of `SVector`s.
+"""
+function select(
+    ts::TimeSeries,
+    dimensions::AbstractVector{<:AbstractString};
+    kwargs...,
+)
+
+    dimension_numbers = map(
+        dimension -> dimension_number(ts, dimension),
+        dimensions,
+    )
+    return select(
+        ts;
+        dimensions = [ts.dimensions[k] for k in dimension_numbers],
+        kwargs...,
+    ) do x
+        return SVector(
+            map(k -> getdim(x, k), dimension_numbers)...,
+        )
+
+    end
 
 end
 
