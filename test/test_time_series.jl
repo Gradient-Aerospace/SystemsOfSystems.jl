@@ -166,6 +166,76 @@ end
 
 end
 
+@testset "TimeSeries selection" begin
+
+    source_interpolator = OffsetLinearInterpolation(10.0)
+    ts = SystemsOfSystems.TimeSeries(;
+        title = "Rotor Speed",
+        time = [0.0, 0.1, 0.2],
+        data = [100.0, 110.0, 120.0],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega",
+        discrete = false,
+        interpolator = source_interpolator,
+    )
+
+    # A selection transforms each native data value while retaining the temporal metadata.
+    # Dimensions, groups, and interpolation are inferred for the transformed values.
+    selected = SystemsOfSystems.select(ts) do speed
+        speed^2
+    end
+    @test selected.data == ts.data .^ 2
+    @test selected.time == ts.time
+    # Check that they are different array objects in memory.
+    @test selected.time !== ts.time
+    @test selected.title == ts.title
+    @test selected.time_dimension == ts.time_dimension
+    @test selected.path == ts.path
+    @test selected.discrete == ts.discrete
+    @test selected.dimensions == [SystemsOfSystems.Dimension("1", ""),]
+    @test selected.groups == ["1" => ["1",],]
+    @test selected.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test selected.interpolator !== source_interpolator
+    @test ts.data == [100.0, 110.0, 120.0]
+    @test ts.dimensions == [SystemsOfSystems.Dimension("angular speed", "rad/s"),]
+
+    # Callers can replace all result metadata that is not intrinsically tied to time.
+    selected_dimension = SystemsOfSystems.Dimension("scaled speed", "rad/s")
+    selected_groups = ["Speed" => ["scaled speed",],]
+    selected_interpolator = ConstantInterpolation(42.0)
+    selected_with_metadata = SystemsOfSystems.select(
+        identity,
+        ts;
+        title = "Scaled Rotor Speed",
+        dimensions = [selected_dimension,],
+        path = "/rotor/scaled_omega",
+        discrete = true,
+        interpolator = selected_interpolator,
+        groups = selected_groups,
+    )
+    @test selected_with_metadata.title == "Scaled Rotor Speed"
+    @test selected_with_metadata.dimensions == [selected_dimension,]
+    @test selected_with_metadata.path == "/rotor/scaled_omega"
+    @test selected_with_metadata.discrete
+    @test selected_with_metadata.interpolator === selected_interpolator
+    @test selected_with_metadata.groups == selected_groups
+    @test selected_with_metadata.time_dimension == ts.time_dimension
+
+    # Typed empty data remains typed after a transformation whose result Julia can infer.
+    empty_ts = SystemsOfSystems.TimeSeries(;
+        title = "Empty Rotor Speed",
+        time = Float64[],
+        data = Float64[],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        path = "/rotor/empty_omega",
+    )
+    empty_selected = SystemsOfSystems.select(speed -> 2.0 * speed, empty_ts)
+    @test isempty(empty_selected.data)
+    @test eltype(empty_selected.data) == Float64
+
+end
+
 @testset "VariableDescription interpolation" begin
 
     offset_interpolator = OffsetLinearInterpolation(5.0)

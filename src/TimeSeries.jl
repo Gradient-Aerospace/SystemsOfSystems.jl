@@ -6,7 +6,7 @@ module TimeSeriesStuff
 
 export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation,
-    plot_ts, plot_ts!
+    select, plot_ts, plot_ts!
 
 using Dimensions: numdims_for_type
 
@@ -219,6 +219,54 @@ function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
         ts.interpolator,
         ts.groups,
     )
+end
+
+"""
+    select(f, ts::TimeSeries; kwargs)
+
+Applies `f` to each data element and returns the results as a new `TimeSeries`. Time and
+the associated metadata come from `ts` by default.
+
+Keyword arguments:
+
+* `title`: Title for the new time series
+* `dimensions`: Dimensions for the transformed data
+* `path`: Model path associated with the new time series
+* `discrete`: Whether the new time series is discrete
+* `interpolator`: Interpolation policy for the new time series
+* `groups`: Dimension groups for the new time series
+
+Example:
+
+```
+accelerometer_ts = select(measurements_ts) do measurement
+    measurement.accelerometer
+end
+```
+"""
+function select(
+    f,
+    ts::TimeSeries;
+    title::AbstractString = ts.title,
+    dimensions = missing,
+    path::String = ts.path,
+    discrete::Bool = ts.discrete,
+    interpolator = missing,
+    groups = missing,
+)
+
+    return TimeSeries(;
+        title,
+        time = copy(ts.time),
+        data = map(f, ts.data),
+        ts.time_dimension,
+        dimensions,
+        path,
+        discrete,
+        interpolator,
+        groups,
+    )
+
 end
 
 # This helper is shared by interpolation policies that need the usual "first sample at or
