@@ -269,6 +269,32 @@ function select(
 
 end
 
+"""
+    select(ts::TimeSeries, field::Symbol; kwargs)
+
+Selects `field` from each data element and returns the results as a new `TimeSeries`.
+Accepts the same metadata keyword arguments as `select(f, ts)`.
+
+Example:
+
+```
+accelerometer_ts = select(measurements_ts, :accelerometer)
+```
+"""
+function select(
+    ts::TimeSeries,
+    field::Symbol;
+    kwargs...,
+)
+
+    return select(
+        value -> getproperty(value, field),
+        ts;
+        kwargs...,
+    )
+
+end
+
 # This helper is shared by interpolation policies that need the usual "first sample at or
 # after t" lookup. Keeping it outside `TimeSeries(t)` means interpolators that do not need
 # this search do not have to pay for it.

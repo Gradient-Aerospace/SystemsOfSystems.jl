@@ -34,6 +34,11 @@ function (interpolator::ConstantInterpolation)(ts, t)
     return interpolator.value
 end
 
+struct IMUMeasurement
+    accelerometer::Float64
+    angular_rate::Float64
+end
+
 @testset "TimeSeries indexing" begin
 
     ts = SystemsOfSystems.TimeSeries(;
@@ -233,6 +238,55 @@ end
     empty_selected = SystemsOfSystems.select(speed -> 2.0 * speed, empty_ts)
     @test isempty(empty_selected.data)
     @test eltype(empty_selected.data) == Float64
+
+    # A field selection is shorthand for applying `getproperty` to each native payload.
+    measurements = [
+        IMUMeasurement(1.0, 0.1),
+        IMUMeasurement(2.0, 0.2),
+        IMUMeasurement(3.0, 0.3),
+    ]
+    measurements_ts = SystemsOfSystems.TimeSeries(;
+        title = "IMU Measurements",
+        time = [0.0, 0.1, 0.2],
+        data = measurements,
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = ["acceleration" => "m/s^2", "angular rate" => "rad/s"],
+        path = "/imu/measurement",
+        discrete = true,
+    )
+    accelerometer_ts = SystemsOfSystems.select(measurements_ts, :accelerometer)
+    generic_accelerometer_ts = SystemsOfSystems.select(measurements_ts) do measurement
+        measurement.accelerometer
+    end
+    @test accelerometer_ts.data == [1.0, 2.0, 3.0]
+    @test accelerometer_ts.data == generic_accelerometer_ts.data
+    @test accelerometer_ts.time == measurements_ts.time
+    @test accelerometer_ts.time_dimension == measurements_ts.time_dimension
+    @test accelerometer_ts.path == measurements_ts.path
+    @test accelerometer_ts.discrete == measurements_ts.discrete
+    @test accelerometer_ts.dimensions == [SystemsOfSystems.Dimension("1", ""),]
+    @test accelerometer_ts.groups == ["1" => ["1",],]
+    @test accelerometer_ts.interpolator isa SystemsOfSystems.SampleAndHold
+    @test measurements_ts.data == measurements
+
+    # Field selections support the same metadata overrides as generic selections.
+    titled_accelerometer_ts = SystemsOfSystems.select(
+        measurements_ts,
+        :accelerometer;
+        title = "Accelerometer",
+    )
+    @test titled_accelerometer_ts.title == "Accelerometer"
+
+    # Named tuples support the same field-selection interface as ordinary structs.
+    named_tuple_ts = SystemsOfSystems.TimeSeries(;
+        title = "Named-Tuple Measurements",
+        time = [0.0, 0.1],
+        data = [(accelerometer = 4.0,), (accelerometer = 5.0,)],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = ["acceleration" => "m/s^2",],
+        path = "/named_tuple/measurement",
+    )
+    @test SystemsOfSystems.select(named_tuple_ts, :accelerometer).data == [4.0, 5.0]
 
 end
 
