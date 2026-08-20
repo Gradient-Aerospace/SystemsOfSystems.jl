@@ -298,8 +298,9 @@ end
     @test acceleration_ts.dimensions == [measurements_ts.dimensions[1],]
     @test angular_rate_ts.dimensions == [measurements_ts.dimensions[2],]
 
-    # Dimension selection preserves the source time axis and applicable series metadata.
-    @test acceleration_ts.title == measurements_ts.title
+    # Dimension selection identifies the dimension while preserving source metadata.
+    @test acceleration_ts.title == "IMU Measurements, dimension = 1"
+    @test angular_rate_ts.title == "IMU Measurements, dimension = 2"
     @test acceleration_ts.time == measurements_ts.time
     @test acceleration_ts.time_dimension == measurements_ts.time_dimension
     @test acceleration_ts.path == measurements_ts.path
@@ -308,6 +309,19 @@ end
     # Grouping and interpolation are inferred for the scalar result.
     @test acceleration_ts.groups == ["acceleration" => ["acceleration",],]
     @test acceleration_ts.interpolator isa SystemsOfSystems.SampleAndHold
+
+    # Callers can override the metadata supplied by dimension selection.
+    selected_dimension = SystemsOfSystems.Dimension("selected acceleration", "m/s^2")
+    selected_ts = Dimensions.getdim(
+        measurements_ts,
+        1;
+        title = "Selected Acceleration",
+        dimensions = [selected_dimension,],
+        path = "/imu/selected_acceleration",
+    )
+    @test selected_ts.title == "Selected Acceleration"
+    @test selected_ts.dimensions == [selected_dimension,]
+    @test selected_ts.path == "/imu/selected_acceleration"
 
     # Selecting a dimension does not change the native payload stored by the source.
     @test measurements_ts[1] == (measurements_ts.time[1] => measurements[1])
