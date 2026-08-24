@@ -204,6 +204,15 @@ end
 # The built-in methods are immutable constants. Their tuple shapes and coefficient types are
 # visible to the compiler wherever the corresponding integrator is specialized.
 
+const RALSTON_2_TABLEAU = ExplicitRungeKuttaTableau(
+    (
+        (2/3,),
+    ),
+    (1/4, 3/4),
+    (2/3,);
+    order = 2,
+)
+
 const RUNGE_KUTTA_4_TABLEAU = ExplicitRungeKuttaTableau(
     (
         (1/2,),
@@ -284,6 +293,23 @@ end
 #######################
 
 """
+    Ralston2Options(; dt)
+
+A container for the second-order Ralston Runge-Kutta solver options, where `dt` is the
+requested fixed official step spacing in seconds. Scheduled, model-requested, and
+user-requested times remain hard bounds and may shorten an individual step.
+"""
+struct Ralston2Options <: AbstractSolverOptions
+    dt::ExactTime
+end
+
+function Ralston2Options(; dt)
+    rational_dt = exact_time(dt)
+    rational_dt > 0 || throw(ArgumentError("dt must be positive."))
+    return Ralston2Options(rational_dt)
+end
+
+"""
     RungeKutta4Options(; dt)
 
 A container for the classical fourth-order Runge-Kutta solver options, where `dt` is the
@@ -334,6 +360,7 @@ function DormandPrince54Options(;
         abs_tol,
         rel_tol,
     )
+
 end
 
 """
@@ -342,6 +369,17 @@ end
 Creates runtime solver state for one simulation. `problem` and `initial_state` are accepted
 by the interface even when a particular method does not yet require initialization caches.
 """
+function create_integrator(
+    options::Ralston2Options,
+    problem::ContinuousProblem,
+    initial_state::ModelStateDescription,
+)
+    return RungeKuttaIntegrator(
+        RALSTON_2_TABLEAU,
+        FixedStepController(float(options.dt)),
+    )
+end
+
 function create_integrator(
     options::RungeKutta4Options,
     problem::ContinuousProblem,
