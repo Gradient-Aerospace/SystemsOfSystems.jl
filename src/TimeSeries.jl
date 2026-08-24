@@ -8,8 +8,8 @@ export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation,
     select, plot_ts, plot_ts!
 
-using Dimensions: getdim, numdims_for_type
-using StaticArrays: SVector
+import Dimensions: getdim
+using Dimensions: numdims_for_type
 
 """
     Dimension(; label = "", units = "")
@@ -347,7 +347,7 @@ end
 """
     select(ts::TimeSeries, dimensions::AbstractVector{<:AbstractString}; kwargs)
 
-Selects the dimensions with the given labels as a new `TimeSeries` of `SVector`s.
+Selects the dimensions with the given labels as a new `TimeSeries` of tuples.
 """
 function select(
     ts::TimeSeries,
@@ -364,9 +364,7 @@ function select(
         dimensions = [ts.dimensions[k] for k in dimension_numbers],
         kwargs...,
     ) do x
-        return SVector(
-            map(k -> getdim(x, k), dimension_numbers)...,
-        )
+        return Tuple(getdim(x, k) for k in dimension_numbers)
 
     end
 

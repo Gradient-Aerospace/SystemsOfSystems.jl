@@ -3,7 +3,6 @@ module TestTimeSeries
 import Dimensions
 using Test
 using HDF5Vectors # For the HDF5Logger
-using StaticArrays: SVector
 using SystemsOfSystems
 using SystemsOfSystems: Logs
 
@@ -41,6 +40,13 @@ struct IMUMeasurement
     angular_rate::Float64
 end
 Dimensions.dimstyle(::Type{IMUMeasurement}) = Dimensions.StructDimensionStyle()
+
+struct HeterogeneousMeasurement
+    temperature::Float64
+    valid::Bool
+end
+Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
+    Dimensions.StructDimensionStyle()
 
 @testset "TimeSeries indexing" begin
 
@@ -340,17 +346,17 @@ end
     @test titled_dimension_ts.title == "Acceleration"
     @test_throws "Could not find dimension missing. Valid labels: [\"acceleration\", \"angular rate\"]" SystemsOfSystems.select(measurements_ts, "missing")
 
-    # Multiple labels produce fixed-size values in the requested order.
+    # Multiple labels produce tuples in the requested order.
     selected_dimensions_ts = SystemsOfSystems.select(
         measurements_ts,
         ["angular rate", "acceleration"],
     )
     @test selected_dimensions_ts.data == [
-        SVector(0.1, 1.0),
-        SVector(0.2, 2.0),
-        SVector(0.3, 3.0),
+        (0.1, 1.0),
+        (0.2, 2.0),
+        (0.3, 3.0),
     ]
-    @test selected_dimensions_ts.data isa Vector{SVector{2, Float64}}
+    @test selected_dimensions_ts.data isa Vector{Tuple{Float64, Float64}}
     @test selected_dimensions_ts.dimensions == [
         measurements_ts.dimensions[2],
         measurements_ts.dimensions[1],
@@ -364,6 +370,29 @@ end
         "acceleration" => ["acceleration",],
     ]
     @test selected_dimensions_ts.interpolator isa SystemsOfSystems.SampleAndHold
+
+    # Tuples preserve the native type of each selected dimension.
+    heterogeneous_ts = SystemsOfSystems.TimeSeries(;
+        title = "Sensor Measurements",
+        time = [0.0, 0.1],
+        data = [
+            HeterogeneousMeasurement(293.15, true),
+            HeterogeneousMeasurement(294.15, false),
+        ],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = ["temperature" => "K", "valid" => ""],
+        path = "/sensor/measurement",
+        discrete = true,
+    )
+    heterogeneous_dimensions_ts = SystemsOfSystems.select(
+        heterogeneous_ts,
+        ["valid", "temperature"],
+    )
+    @test heterogeneous_dimensions_ts.data == [
+        (true, 293.15),
+        (false, 294.15),
+    ]
+    @test heterogeneous_dimensions_ts.data isa Vector{Tuple{Bool, Float64}}
 
     # Selecting a dimension does not change the native payload stored by the source.
     @test measurements_ts[1] == (measurements_ts.time[1] => measurements[1])
