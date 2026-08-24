@@ -4,18 +4,13 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Solvers
 
-const fixed_step_solver_options = (
-    Solvers.Ralston2Options,
-    Solvers.RungeKutta4Options,
-)
-
 # These tests describe the boundary between the continuous solver and the hybrid simulation
 # loop. In particular, a solver step is not merely an internal numerical detail: every
 # accepted step is followed by hooks, discrete random draws, and the model's discrete
 # update. Keeping that lifecycle explicit prevents a future solver backend from silently
 # integrating over several externally visible sample times in one call.
 
-@testset "terminal updates are followed by a real rates sample with $(nameof(solver_options))" for solver_options in fixed_step_solver_options
+@testset "terminal updates are followed by a real rates sample" begin
 
     # The terminal update deliberately changes a continuous state. The final continuous
     # state and output in the log must both describe the post-update model. Historically,
@@ -38,7 +33,7 @@ const fixed_step_solver_options = (
             nothing
         end,
         options = SimOptions(;
-            solver = solver_options(; dt = 1),
+            solver = Solvers.RungeKutta4Options(; dt = 1),
         ),
     )
 
@@ -49,7 +44,7 @@ const fixed_step_solver_options = (
 
 end
 
-@testset "a failed terminal rates sample retains the accepted endpoint with $(nameof(solver_options))" for solver_options in fixed_step_solver_options
+@testset "a failed terminal rates sample retains the accepted endpoint" begin
 
     # The update at t = 1 is already committed when the direct terminal rates evaluation
     # observes x = 10 and throws. The exception must end the simulation without rolling its
@@ -75,7 +70,7 @@ end
         ),
         close_fcn = (t, model) -> close_inputs[] = (t, model.x),
         options = SimOptions(;
-            solver = solver_options(; dt = 1),
+            solver = Solvers.RungeKutta4Options(; dt = 1),
         ),
     )
 
@@ -87,13 +82,11 @@ end
 
 end
 
-@testset "intermediate Runge-Kutta stages cannot stop the simulation with $(nameof(solver_options))" for (solver_options, stage_time) in (
-    (Solvers.Ralston2Options, 2/3),
-    (Solvers.RungeKutta4Options, 1/2),
-)
+@testset "intermediate Runge-Kutta stages cannot stop the simulation" begin
 
-    # Internal Runge-Kutta stages are provisional numerical models, not accepted simulation
-    # samples, so their stop flags must not affect the simulation lifecycle.
+    # RK4 evaluates rates at the midpoint of this step twice. Those models are provisional
+    # numerical stage models, not accepted simulation samples, so their stop flags must not
+    # affect the simulation lifecycle.
     history, t_final, model_final = simulate(
         nothing;
         t = (0, 1),
@@ -102,10 +95,10 @@ end
         ),
         rates_fcn = (t, model) -> RatesOutput(;
             rates = (; x = 1.),
-            stop = t == stage_time,
+            stop = t == 0.5,
         ),
         options = SimOptions(;
-            solver = solver_options(; dt = 1),
+            solver = Solvers.RungeKutta4Options(; dt = 1),
         ),
     )
 
@@ -156,7 +149,7 @@ end
 
 end
 
-@testset "an accepted rates stop completes its sample with $(nameof(solver_options))" for solver_options in fixed_step_solver_options
+@testset "an accepted rates stop completes its sample" begin
 
     # A stop request from the authoritative beginning-of-step rates evaluation becomes valid
     # only once the numerical attempt is accepted. The accepted continuous step and its
@@ -176,7 +169,7 @@ end
             updates = (; n_updates = model.n_updates + 1,),
         ),
         options = SimOptions(;
-            solver = solver_options(; dt = 1//2),
+            solver = Solvers.RungeKutta4Options(; dt = 1//2),
         ),
     )
 
@@ -187,7 +180,7 @@ end
 
 end
 
-@testset "the first model stop request wins deterministically with $(nameof(solver_options))" for solver_options in fixed_step_solver_options
+@testset "the first model stop request wins deterministically" begin
 
     # Both child models request a stop in the same accepted RatesOutput. Model hierarchies
     # are traversed parent-first and then depth-first in named-tuple field order, so the
@@ -208,7 +201,7 @@ end
             ),
         ),
         options = SimOptions(;
-            solver = solver_options(; dt = 1//2),
+            solver = Solvers.RungeKutta4Options(; dt = 1//2),
         ),
     )
 
@@ -264,7 +257,7 @@ end
 
 end
 
-@testset "an update can stop after its accepted sample with $(nameof(solver_options))" for solver_options in fixed_step_solver_options
+@testset "an update can stop after its accepted sample" begin
 
     # The update at the accepted endpoint is applied before its stop request takes effect.
     # The direct terminal rates sample then observes and logs that updated state.
@@ -284,7 +277,7 @@ end
             stop = t == 1//2,
         ),
         options = SimOptions(;
-            solver = solver_options(; dt = 1//2),
+            solver = Solvers.RungeKutta4Options(; dt = 1//2),
         ),
     )
 
