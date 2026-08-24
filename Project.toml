@@ -22,7 +22,6 @@ Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 HDF5Vectors = {rev = "4c99dbe39d47f2d1bbf81448af418c348a217144", url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}
 
 [extensions]
-SystemsOfSystemsDimensionsExt = "Dimensions"
 SystemsOfSystemsHDF5Ext = ["HDF5", "HDF5Vectors"]
 SystemsOfSystemsMakieExt = "Makie"
 

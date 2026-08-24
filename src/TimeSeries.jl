@@ -296,6 +296,29 @@ function select(
 
 end
 
+"""
+    getdim(ts::TimeSeries, k::Integer; kwargs)
+
+Returns dimension `k` of each data element as a new `TimeSeries`.
+Accepts the same metadata keyword arguments as `select`.
+"""
+function getdim(
+    ts::TimeSeries,
+    k::Integer;
+    kwargs...,
+)
+
+    return select(
+        x -> getdim(x, k),
+        ts;
+        title = ts.title * ", dimension = $k",
+        dimensions = [ts.dimensions[k],],
+        path = ts.path,
+        kwargs...,
+    )
+
+end
+
 function dimension_number(ts::TimeSeries, dimension::AbstractString)
     dimension_labels = [dimension.label for dimension in ts.dimensions]
     k = findfirst(==(dimension), dimension_labels)
