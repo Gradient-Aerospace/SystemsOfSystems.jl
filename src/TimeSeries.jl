@@ -320,9 +320,9 @@ function getdim(
 end
 
 function dimension_number(ts::TimeSeries, dimension::AbstractString)
-    dimension_labels = [dimension.label for dimension in ts.dimensions]
-    k = findfirst(==(dimension), dimension_labels)
+    k = findfirst(dimension == d.label for d in ts.dimensions)
     if isnothing(k)
+        dimension_labels = [d.label for d in ts.dimensions]
         error("Could not find dimension $dimension. Valid labels: $dimension_labels")
     end
     return k
