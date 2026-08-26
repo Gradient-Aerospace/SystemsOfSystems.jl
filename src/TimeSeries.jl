@@ -271,32 +271,6 @@ function select(
 end
 
 """
-    select(ts::TimeSeries, field::Symbol; kwargs)
-
-Selects `field` from each data element and returns the results as a new `TimeSeries`.
-Accepts the same metadata keyword arguments as `select(f, ts)`.
-
-Example:
-
-```
-accelerometer_ts = select(measurements_ts, :accelerometer)
-```
-"""
-function select(
-    ts::TimeSeries,
-    field::Symbol;
-    kwargs...,
-)
-
-    return select(
-        value -> getproperty(value, field),
-        ts;
-        kwargs...,
-    )
-
-end
-
-"""
     getdim(ts::TimeSeries, k::Integer; kwargs)
 
 Returns dimension `k` of each data element as a new `TimeSeries`.
