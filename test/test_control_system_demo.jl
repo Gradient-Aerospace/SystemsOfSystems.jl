@@ -87,6 +87,7 @@ end
                     @test var.data == collect(var2.data)
                     @test var.title == var2.title
                     @test var.dimensions == collect(var2.dimensions)
+                    @test var.groups == var2.groups
                 elseif var isa VariableDescription # constants
                     @test var.value == var2 # These are undecorated. TODO: Revisit.
                 elseif var isa Logs.ModelHistory # submodels

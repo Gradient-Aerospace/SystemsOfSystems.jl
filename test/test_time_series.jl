@@ -379,23 +379,27 @@ end
 
 end
 
-@testset "VariableDescription interpolation" begin
+@testset "VariableDescription metadata" begin
 
     offset_interpolator = OffsetLinearInterpolation(5.0)
     described_state = SystemsOfSystems.VariableDescription(
         0.0;
         title = "Described State",
         dimensions = [SystemsOfSystems.Dimension("state", ""),],
+        groups = ["Custom State Axis" => ["state",],],
         interpolator = offset_interpolator,
     )
     default_described_state = SystemsOfSystems.VariableDescription(
         0.0;
         title = "Default Described State",
         dimensions = [SystemsOfSystems.Dimension("state", ""),],
+        groups = [],
     )
 
     @test described_state.interpolator === offset_interpolator
+    @test described_state.groups == ["Custom State Axis" => ["state",],]
     @test ismissing(default_described_state.interpolator)
+    @test isempty(default_described_state.groups)
 
     model_description = SystemsOfSystems.ModelDescription(;
         continuous_states = (;
@@ -411,16 +415,35 @@ end
     )
     @test basic_history.continuous_states.x.interpolator === offset_interpolator
     @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test basic_history.continuous_states.x.groups == described_state.groups
+    @test isempty(basic_history.continuous_states.y.groups)
     Logs.close_log(basic_log)
 
+    direct_filename = joinpath(out_dir, "variable_description_interpolator.h5")
     hdf5_log, hdf5_history = Logs.create_log(
-        Logs.HDF5LogOptions(joinpath(out_dir, "variable_description_interpolator.h5")),
+        Logs.HDF5LogOptions(direct_filename),
         model_description,
         SystemsOfSystems.Dimension("time", "s"),
     )
     @test hdf5_history.continuous_states.x.interpolator === offset_interpolator
     @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test hdf5_history.continuous_states.x.groups == described_state.groups
+    @test isempty(hdf5_history.continuous_states.y.groups)
     Logs.close_log(hdf5_log)
+
+    # Direct HDF5 logging and saving an in-memory log use separate writers. Both files must
+    # restore the custom grouping rather than regenerating default groups from dimensions.
+    direct_log, direct_history = Logs.load_hdf5_log(direct_filename)
+    @test direct_history.continuous_states.x.groups == described_state.groups
+    @test isempty(direct_history.continuous_states.y.groups)
+    Logs.close_log(direct_log)
+
+    saved_filename = joinpath(out_dir, "saved_variable_description_groups.h5")
+    Logs.save_log_to_hdf5(saved_filename, basic_log)
+    saved_log, saved_history = Logs.load_hdf5_log(saved_filename)
+    @test saved_history.continuous_states.x.groups == described_state.groups
+    @test isempty(saved_history.continuous_states.y.groups)
+    Logs.close_log(saved_log)
 
 end
 

@@ -41,18 +41,39 @@ Base.pairs(log::HDF5Log) = pairs(log.model_history_dict)
 figure_out_el_type(::Type{Union{Missing, T}}) where {T} = T
 figure_out_el_type(::Type{T}) where {T} = T
 
-function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::VariableDescription{T}, time_dimension; discrete) where {T}
+function record_time_series_metadata(group, ts)
+
+    group["title"] = ts.title
+    group["time_label"] = ts.time_dimension.label
+    group["time_units"] = ts.time_dimension.units
+    group["labels"] = [dim.label for dim in ts.dimensions]
+    group["units"] = [dim.units for dim in ts.dimensions]
+    group["group_labels"] = String[label for (label, _) in ts.groups]
+    group["group_dimension_counts"] = Int[length(labels) for (_, labels) in ts.groups]
+    group["group_dimension_labels"] = String[
+        dimension_label
+        for (_, dimension_labels) in ts.groups
+        for dimension_label in dimension_labels
+    ]
+    return nothing
+
+end
+
+function create_time_series_for_var(
+    log::HDF5Log,
+    breadcrumbs,
+    var_name,
+    var::VariableDescription{T},
+    time_dimension;
+    discrete,
+) where {T}
+
     el_type = figure_out_el_type(T)
     group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
     # println("Creating HDF5Vectors for $(var.title) at $group_path with type $el_type.")
     group = HDF5.create_group(log.fid, group_path)
-    group["title"] = var.title
-    group["time_label"] = time_dimension.label
-    group["time_units"] = time_dimension.units
-    group["labels"] = [dim.label for dim in var.dimensions]
-    group["units"] = [dim.units for dim in var.dimensions]
-    return TimeSeries(;
+    ts = TimeSeries(;
         var.title,
         time = create_hdf5_vector(group, "time", Float64),
         data = create_hdf5_vector(group, "data", el_type),
@@ -63,19 +84,26 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::Va
         var.interpolator,
         var.groups,
     )
+    record_time_series_metadata(group, ts)
+    return ts
+
 end
-function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T, time_dimension; discrete) where {T}
+
+function create_time_series_for_var(
+    log::HDF5Log,
+    breadcrumbs,
+    var_name,
+    var::T,
+    time_dimension;
+    discrete,
+) where {T}
+
     el_type = figure_out_el_type(T)
     group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
     # println("Creating HDF5Vectors at $group_path with type $el_type.")
     group = HDF5.create_group(log.fid, group_path)
-    group["title"] = slug
-    group["time_label"] = time_dimension.label
-    group["time_units"] = time_dimension.units
-    group["labels"] = String[]
-    group["units"] = String[]
-    return TimeSeries(;
+    ts = TimeSeries(;
         title = slug,
         time = create_hdf5_vector(group, "time", Float64),
         data = create_hdf5_vector(group, "data", el_type),
@@ -83,6 +111,9 @@ function create_time_series_for_var(log::HDF5Log, breadcrumbs, var_name, var::T,
         path = slug,
         discrete,
     )
+    record_time_series_metadata(group, ts)
+    return ts
+
 end
 
 function record_constant(constant_group, v::VariableDescription{T}, breadcrumbs, name) where {T}
@@ -189,6 +220,29 @@ function close_log(log::HDF5Log)
     end
 end
 
+function load_time_series_groups(group)
+
+    # Files written before dimension groups were persisted have no group datasets. Passing
+    # missing preserves their previous behavior of deriving one group per dimension.
+    if !haskey(group, "group_labels")
+        return missing
+    end
+
+    group_labels = read(group["group_labels"])
+    dimension_counts = read(group["group_dimension_counts"])
+    dimension_labels = read(group["group_dimension_labels"])
+    next_dimension = firstindex(dimension_labels)
+    groups = Pair{String, Vector{String}}[]
+    for (label, count) in zip(group_labels, dimension_counts)
+        final_dimension = next_dimension + count - 1
+        labels = String[dimension_labels[next_dimension:final_dimension]...]
+        push!(groups, String(label) => labels)
+        next_dimension = final_dimension + 1
+    end
+    return groups
+
+end
+
 function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
     ts = TimeSeries(;
@@ -196,10 +250,13 @@ function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
         time = load_hdf5_vector(group["time"]),
         data = load_hdf5_vector(group["data"]),
         time_dimension = Dimension(read(group["time_label"]), read(group["time_units"])),
-        dimensions = [Dimension(l, u) for (l, u) in zip(read(group["labels"]), read(group["units"]))],
+        dimensions = [
+            Dimension(label, units)
+            for (label, units) in zip(read(group["labels"]), read(group["units"]))
+        ],
         path = slug,
         discrete,
-        # TODO: It would be nice if we saved the groups so that we could load them here.
+        groups = load_time_series_groups(group),
     )
     return ts
 end
@@ -282,11 +339,7 @@ function save_time_series_to_hdf5(fid, path, ts::TimeSeries; kwargs...)
 
     # Set up the group and add the metadata.
     group = HDF5.create_group(fid, path)
-    group["title"] = ts.title
-    group["time_label"] = ts.time_dimension.label
-    group["time_units"] = ts.time_dimension.units
-    group["labels"] = [dim.label for dim in ts.dimensions]
-    group["units"] = [dim.units for dim in ts.dimensions]
+    record_time_series_metadata(group, ts)
 
     # For the time and data, we'll use the copy_to_hdf5_vector to be totally consistent with
     # how these are created by HDF5Log.
