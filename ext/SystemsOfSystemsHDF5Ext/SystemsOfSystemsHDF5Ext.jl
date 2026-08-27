@@ -2,6 +2,7 @@ module SystemsOfSystemsHDF5Ext
 
 using OrderedCollections: OrderedDict
 import HDF5
+import Serialization
 using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
@@ -41,6 +42,16 @@ Base.pairs(log::HDF5Log) = pairs(log.model_history_dict)
 figure_out_el_type(::Type{Union{Missing, T}}) where {T} = T
 figure_out_el_type(::Type{T}) where {T} = T
 
+function serialize_to_bytes(value)
+    io = IOBuffer()
+    Serialization.serialize(io, value)
+    return take!(io)
+end
+
+function deserialize_from_bytes(bytes)
+    return Serialization.deserialize(IOBuffer(bytes))
+end
+
 function record_time_series_metadata(group, ts)
 
     group["title"] = ts.title
@@ -55,6 +66,8 @@ function record_time_series_metadata(group, ts)
         for (_, dimension_labels) in ts.groups
         for dimension_label in dimension_labels
     ]
+    group["interpolator_type"] = string(typeof(ts.interpolator))
+    group["serialized_interpolator"] = serialize_to_bytes(ts.interpolator)
     return nothing
 
 end
@@ -243,6 +256,19 @@ function load_time_series_groups(group)
 
 end
 
+function load_time_series_interpolator(group)
+
+    # Older files did not record interpolation behavior. Missing asks the TimeSeries
+    # constructor to continue deriving its default from the data type and discrete flag.
+    if !haskey(group, "serialized_interpolator")
+        return missing
+    end
+
+    bytes = Vector{UInt8}(read(group["serialized_interpolator"]))
+    return deserialize_from_bytes(bytes)
+
+end
+
 function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
     ts = TimeSeries(;
@@ -256,6 +282,7 @@ function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
         ],
         path = slug,
         discrete,
+        interpolator = load_time_series_interpolator(group),
         groups = load_time_series_groups(group),
     )
     return ts
