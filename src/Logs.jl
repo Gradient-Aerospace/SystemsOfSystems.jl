@@ -535,9 +535,10 @@ HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 """
     load_hdf5_log(filename)
 
-Loads a log from an HDF5 file. Interpolators are restored using Julia serialization, so
-files should come only from trusted sources and custom interpolator types must be available
-in the loading environment.
+Loads a log from an HDF5 file. Interpolators and model types are restored using Julia
+serialization, so files should come only from trusted sources. Custom interpolator types
+must be available in the loading environment. An unavailable model type produces a warning
+and is represented by `Missing` without preventing the remaining history from loading.
 """
 function load_hdf5_log(filename)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_hdf5_log`.")

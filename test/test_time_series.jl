@@ -434,6 +434,7 @@ end
     # Direct HDF5 logging and saving an in-memory log use separate writers. Both files must
     # restore custom interpolation and grouping rather than regenerating defaults.
     direct_log, direct_history = Logs.load_hdf5_log(direct_filename)
+    @test direct_history.type === basic_history.type
     @test direct_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
     @test direct_history.continuous_states.x.interpolator.offset == 5.
     @test direct_history.continuous_states.y.interpolator isa
@@ -445,6 +446,7 @@ end
     saved_filename = joinpath(out_dir, "saved_variable_description_groups.h5")
     Logs.save_log_to_hdf5(saved_filename, basic_log)
     saved_log, saved_history = Logs.load_hdf5_log(saved_filename)
+    @test saved_history.type === basic_history.type
     @test saved_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
     @test saved_history.continuous_states.x.interpolator.offset == 5.
     @test saved_history.continuous_states.y.interpolator isa

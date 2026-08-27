@@ -160,10 +160,10 @@ function record_model_description(
         group = log.fid["/"] # This exists at creation.
     end
 
-    # It's helpful to record what type generated this stuff. We can't actually load this as
-    # a type, and it's not always available, but when it is, it seems like a helpful thing
-    # to log.
+    # Keep a readable name for general HDF5 inspection and the actual Julia type for an
+    # exact round trip when its defining module is available.
     group["type"] = string(md.type)
+    group["serialized_type"] = serialize_to_bytes(md.type)
 
     # We save the constants and use a try-catch, because we don't know how to save
     # everything a user might have as a constant to HDF5, and we'd rather just omit
@@ -293,6 +293,32 @@ function load_hdf5_constant(group)
     return constant_vector[1]
 end
 
+function load_model_type(group, model_path)
+
+    # Older files contain only the readable type string. The type is useful metadata, but
+    # it is not required to inspect the recorded values, so unavailable definitions should
+    # not make the rest of a log unusable.
+    if !haskey(group, "serialized_type")
+        return Missing
+    end
+
+    try
+        bytes = Vector{UInt8}(read(group["serialized_type"]))
+        type = deserialize_from_bytes(bytes)
+        if !(type isa Type)
+            error("The serialized model type produced a $(typeof(type)) value.")
+        end
+        return type
+    catch err
+        @warn "Could not restore the $model_path model type. Using Missing." exception = (
+            err,
+            catch_backtrace(),
+        )
+        return Missing
+    end
+
+end
+
 function load_hdf5_model!(mhd, group, breadcrumbs)
 
     slug = isempty(breadcrumbs) ? "/" : join("/" * model for model in breadcrumbs)
@@ -315,7 +341,7 @@ function load_hdf5_model!(mhd, group, breadcrumbs)
     discrete_output_names = read(group["names/discrete_outputs"])
 
     mh = ModelHistory(;
-        type = Missing, # The type is missing because we can't load it from an HDF5 file.
+        type = load_model_type(group, slug),
         path = slug,
         constants = NamedTuple(
             Symbol(k) => load_hdf5_constant(group["constants"][k])
@@ -392,9 +418,9 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
     # Set up the path to here, like /models/subsystem1/models/subsubsystem2.
     this_path = join("/models/" * el for el in breadcrumbs)
 
-    # Record the type just for users to look at. We don't load this string as if it were a
-    # type or use it in any way.
+    # Store both a readable name and the actual Julia type, as direct HDF5 logging does.
     fid["$this_path/type"] = string(mh.type)
+    fid["$this_path/serialized_type"] = serialize_to_bytes(mh.type)
 
     # Save the constants. This may fail since the user may have all kinds of constants that
     # we don't know how to log, so make sure we record only the successful ones.

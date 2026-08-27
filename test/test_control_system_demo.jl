@@ -77,6 +77,7 @@ end
         for model_path in keys(history.log)
             mh = history.log[model_path]
             mh2 = loaded_log[model_path]
+            @test mh.type === mh2.type
             for var_name in keys(mh)
                 var = mh[var_name]
                 # @test haskey(mh2, var_name)
