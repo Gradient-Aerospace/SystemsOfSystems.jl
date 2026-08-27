@@ -1,5 +1,6 @@
 module TestTimeSeries
 
+import Dimensions
 using Test
 using HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
@@ -33,6 +34,19 @@ end
 function (interpolator::ConstantInterpolation)(ts, t)
     return interpolator.value
 end
+
+struct IMUMeasurement
+    accelerometer::Float64
+    angular_rate::Float64
+end
+Dimensions.dimstyle(::Type{IMUMeasurement}) = Dimensions.StructDimensionStyle()
+
+struct HeterogeneousMeasurement
+    temperature::Float64
+    valid::Bool
+end
+Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
+    Dimensions.StructDimensionStyle()
 
 @testset "TimeSeries indexing" begin
 
@@ -163,6 +177,205 @@ end
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
+
+end
+
+@testset "TimeSeries selection" begin
+
+    source_interpolator = OffsetLinearInterpolation(10.0)
+    ts = SystemsOfSystems.TimeSeries(;
+        title = "Rotor Speed",
+        time = [0.0, 0.1, 0.2],
+        data = [100.0, 110.0, 120.0],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("angular speed", "rad/s"),],
+        path = "/rotor/omega",
+        discrete = false,
+        interpolator = source_interpolator,
+    )
+
+    # A selection transforms each native data value while retaining the temporal metadata.
+    # Dimensions, groups, and interpolation are inferred for the transformed values.
+    selected = SystemsOfSystems.select(ts) do speed
+        speed^2
+    end
+    @test selected.data == ts.data .^ 2
+    @test selected.time == ts.time
+    # Check that they are different array objects in memory.
+    @test selected.time !== ts.time
+    @test selected.title == ts.title
+    @test selected.time_dimension == ts.time_dimension
+    @test selected.path == ts.path
+    @test selected.discrete == ts.discrete
+    @test selected.dimensions == [SystemsOfSystems.Dimension("1", ""),]
+    @test selected.groups == ["1" => ["1",],]
+    @test selected.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test selected.interpolator !== source_interpolator
+    @test ts.data == [100.0, 110.0, 120.0]
+    @test ts.dimensions == [SystemsOfSystems.Dimension("angular speed", "rad/s"),]
+
+    # Callers can replace all result metadata that is not intrinsically tied to time.
+    selected_dimension = SystemsOfSystems.Dimension("scaled speed", "rad/s")
+    selected_groups = ["Speed" => ["scaled speed",],]
+    selected_interpolator = ConstantInterpolation(42.0)
+    selected_with_metadata = SystemsOfSystems.select(
+        identity,
+        ts;
+        title = "Scaled Rotor Speed",
+        dimensions = [selected_dimension,],
+        path = "/rotor/scaled_omega",
+        discrete = true,
+        interpolator = selected_interpolator,
+        groups = selected_groups,
+    )
+    @test selected_with_metadata.title == "Scaled Rotor Speed"
+    @test selected_with_metadata.dimensions == [selected_dimension,]
+    @test selected_with_metadata.path == "/rotor/scaled_omega"
+    @test selected_with_metadata.discrete
+    @test selected_with_metadata.interpolator === selected_interpolator
+    @test selected_with_metadata.groups == selected_groups
+    @test selected_with_metadata.time_dimension == ts.time_dimension
+
+    # Typed empty data remains typed after a transformation whose result Julia can infer.
+    empty_ts = SystemsOfSystems.TimeSeries(;
+        title = "Empty Rotor Speed",
+        time = Float64[],
+        data = Float64[],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        path = "/rotor/empty_omega",
+    )
+    empty_selected = SystemsOfSystems.select(speed -> 2.0 * speed, empty_ts)
+    @test isempty(empty_selected.data)
+    @test eltype(empty_selected.data) == Float64
+
+    # A selection function can access fields of each native measurement.
+    measurements = [
+        IMUMeasurement(1.0, 0.1),
+        IMUMeasurement(2.0, 0.2),
+        IMUMeasurement(3.0, 0.3),
+    ]
+    measurements_ts = SystemsOfSystems.TimeSeries(;
+        title = "IMU Measurements",
+        time = [0.0, 0.1, 0.2],
+        data = measurements,
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = ["acceleration" => "m/s^2", "angular rate" => "rad/s"],
+        path = "/imu/measurement",
+        discrete = true,
+    )
+    accelerometer_ts = SystemsOfSystems.select(measurements_ts) do measurement
+        measurement.accelerometer
+    end
+    @test accelerometer_ts.data == [1.0, 2.0, 3.0]
+    @test accelerometer_ts.time == measurements_ts.time
+    @test accelerometer_ts.time_dimension == measurements_ts.time_dimension
+    @test accelerometer_ts.path == measurements_ts.path
+    @test accelerometer_ts.discrete == measurements_ts.discrete
+    @test accelerometer_ts.dimensions == [SystemsOfSystems.Dimension("1", ""),]
+    @test accelerometer_ts.groups == ["1" => ["1",],]
+    @test accelerometer_ts.interpolator isa SystemsOfSystems.SampleAndHold
+    @test measurements_ts.data == measurements
+
+    # Dimension selection follows the same flattened representation used by Dimensions.
+    acceleration_ts = Dimensions.getdim(measurements_ts, 1)
+    angular_rate_ts = Dimensions.getdim(measurements_ts, 2)
+    @test acceleration_ts.data == [1.0, 2.0, 3.0]
+    @test angular_rate_ts.data == [0.1, 0.2, 0.3]
+    @test acceleration_ts.dimensions == [measurements_ts.dimensions[1],]
+    @test angular_rate_ts.dimensions == [measurements_ts.dimensions[2],]
+
+    # Dimension selection identifies the dimension while preserving source metadata.
+    @test acceleration_ts.title == "IMU Measurements, dimension = 1"
+    @test angular_rate_ts.title == "IMU Measurements, dimension = 2"
+    @test acceleration_ts.time == measurements_ts.time
+    @test acceleration_ts.time_dimension == measurements_ts.time_dimension
+    @test acceleration_ts.path == measurements_ts.path
+    @test acceleration_ts.discrete == measurements_ts.discrete
+
+    # Grouping and interpolation are inferred for the scalar result.
+    @test acceleration_ts.groups == ["acceleration" => ["acceleration",],]
+    @test acceleration_ts.interpolator isa SystemsOfSystems.SampleAndHold
+
+    # Callers can override the metadata supplied by dimension selection.
+    selected_dimension = SystemsOfSystems.Dimension("selected acceleration", "m/s^2")
+    selected_ts = Dimensions.getdim(
+        measurements_ts,
+        1;
+        title = "Selected Acceleration",
+        dimensions = [selected_dimension,],
+        path = "/imu/selected_acceleration",
+    )
+    @test selected_ts.title == "Selected Acceleration"
+    @test selected_ts.dimensions == [selected_dimension,]
+    @test selected_ts.path == "/imu/selected_acceleration"
+
+    # Dimensions can also be selected by their metadata labels.
+    acceleration_by_name_ts = SystemsOfSystems.select(measurements_ts, "acceleration")
+    angular_rate_by_name_ts = SystemsOfSystems.select(measurements_ts, "angular rate")
+    @test acceleration_by_name_ts.data == acceleration_ts.data
+    @test angular_rate_by_name_ts.data == angular_rate_ts.data
+    @test acceleration_by_name_ts.dimensions == acceleration_ts.dimensions
+    @test angular_rate_by_name_ts.dimensions == angular_rate_ts.dimensions
+
+    titled_dimension_ts = SystemsOfSystems.select(
+        measurements_ts,
+        "acceleration";
+        title = "Acceleration",
+    )
+    @test titled_dimension_ts.title == "Acceleration"
+    @test_throws "Could not find dimension missing. Valid labels: [\"acceleration\", \"angular rate\"]" SystemsOfSystems.select(measurements_ts, "missing")
+
+    # Multiple labels produce tuples in the requested order.
+    selected_dimensions_ts = SystemsOfSystems.select(
+        measurements_ts,
+        ["angular rate", "acceleration"],
+    )
+    @test selected_dimensions_ts.data == [
+        (0.1, 1.0),
+        (0.2, 2.0),
+        (0.3, 3.0),
+    ]
+    @test selected_dimensions_ts.data isa Vector{Tuple{Float64, Float64}}
+    @test selected_dimensions_ts.dimensions == [
+        measurements_ts.dimensions[2],
+        measurements_ts.dimensions[1],
+    ]
+    @test selected_dimensions_ts.title == measurements_ts.title
+    @test selected_dimensions_ts.time == measurements_ts.time
+    @test selected_dimensions_ts.path == measurements_ts.path
+    @test selected_dimensions_ts.discrete == measurements_ts.discrete
+    @test selected_dimensions_ts.groups == [
+        "angular rate" => ["angular rate",],
+        "acceleration" => ["acceleration",],
+    ]
+    @test selected_dimensions_ts.interpolator isa SystemsOfSystems.SampleAndHold
+
+    # Tuples preserve the native type of each selected dimension.
+    heterogeneous_ts = SystemsOfSystems.TimeSeries(;
+        title = "Sensor Measurements",
+        time = [0.0, 0.1],
+        data = [
+            HeterogeneousMeasurement(293.15, true),
+            HeterogeneousMeasurement(294.15, false),
+        ],
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        dimensions = ["temperature" => "K", "valid" => ""],
+        path = "/sensor/measurement",
+        discrete = true,
+    )
+    heterogeneous_dimensions_ts = SystemsOfSystems.select(
+        heterogeneous_ts,
+        ["valid", "temperature"],
+    )
+    @test heterogeneous_dimensions_ts.data == [
+        (true, 293.15),
+        (false, 294.15),
+    ]
+    @test heterogeneous_dimensions_ts.data isa Vector{Tuple{Bool, Float64}}
+
+    # Selecting a dimension does not change the native payload stored by the source.
+    @test measurements_ts[1] == (measurements_ts.time[1] => measurements[1])
+    @test_throws BoundsError Dimensions.getdim(measurements_ts, 3)
 
 end
 

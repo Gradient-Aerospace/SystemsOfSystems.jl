@@ -6,8 +6,9 @@ module TimeSeriesStuff
 
 export Dimension, TimeSeries, AbstractTimeSeriesInterpolator,
     SampleAndHold, LinearInterpolation,
-    plot_ts, plot_ts!
+    select, plot_ts, plot_ts!
 
+import Dimensions: getdim
 using Dimensions: numdims_for_type
 
 """
@@ -219,6 +220,128 @@ function Base.getindex(ts::TimeSeries, i::Union{Colon, AbstractVector})
         ts.interpolator,
         ts.groups,
     )
+end
+
+"""
+    select(f, ts::TimeSeries; kwargs)
+
+Applies `f` to each data element and returns the results as a new `TimeSeries`. Time and
+the associated metadata come from `ts` by default.
+
+Keyword arguments:
+
+* `title`: Title for the new time series
+* `dimensions`: Dimensions for the transformed data
+* `path`: Model path associated with the new time series
+* `discrete`: Whether the new time series is discrete
+* `interpolator`: Interpolation policy for the new time series
+* `groups`: Dimension groups for the new time series
+
+Example:
+
+```
+accelerometer_ts = select(measurements_ts) do measurement
+    measurement.accelerometer
+end
+```
+"""
+function select(
+    f,
+    ts::TimeSeries;
+    title::AbstractString = ts.title,
+    dimensions = missing,
+    path::String = ts.path,
+    discrete::Bool = ts.discrete,
+    interpolator = missing,
+    groups = missing,
+)
+
+    return TimeSeries(;
+        title,
+        time = copy(ts.time),
+        data = map(f, ts.data),
+        ts.time_dimension,
+        dimensions,
+        path,
+        discrete,
+        interpolator,
+        groups,
+    )
+
+end
+
+"""
+    getdim(ts::TimeSeries, k::Integer; kwargs)
+
+Returns dimension `k` of each data element as a new `TimeSeries`.
+Accepts the same metadata keyword arguments as `select`.
+"""
+function getdim(
+    ts::TimeSeries,
+    k::Integer;
+    kwargs...,
+)
+
+    return select(
+        x -> getdim(x, k),
+        ts;
+        title = ts.title * ", dimension = $k",
+        dimensions = [ts.dimensions[k],],
+        path = ts.path,
+        kwargs...,
+    )
+
+end
+
+function dimension_number(ts::TimeSeries, dimension::AbstractString)
+    k = findfirst(dimension == d.label for d in ts.dimensions)
+    if isnothing(k)
+        dimension_labels = [d.label for d in ts.dimensions]
+        error("Could not find dimension $dimension. Valid labels: $dimension_labels")
+    end
+    return k
+end
+
+"""
+    select(ts::TimeSeries, dimension::AbstractString; kwargs)
+
+Selects the dimension with the given label as a new `TimeSeries`.
+"""
+function select(
+    ts::TimeSeries,
+    dimension::AbstractString;
+    kwargs...,
+)
+
+    k = dimension_number(ts, dimension)
+    return getdim(ts, k; kwargs...)
+
+end
+
+"""
+    select(ts::TimeSeries, dimensions::AbstractVector{<:AbstractString}; kwargs)
+
+Selects the dimensions with the given labels as a new `TimeSeries` of tuples.
+"""
+function select(
+    ts::TimeSeries,
+    dimensions::AbstractVector{<:AbstractString};
+    kwargs...,
+)
+
+    dimension_numbers = map(
+        dimension -> dimension_number(ts, dimension),
+        dimensions,
+    )
+    return select(
+        ts;
+        dimensions = [ts.dimensions[k] for k in dimension_numbers],
+        kwargs...,
+    ) do x
+        return Tuple(getdim(x, k) for k in dimension_numbers)
+
+    end
+
 end
 
 # This helper is shared by interpolation policies that need the usual "first sample at or

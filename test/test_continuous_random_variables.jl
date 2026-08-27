@@ -13,6 +13,7 @@ end
 # standard deviation of the noise. Note that we're using ContinuousWhiteNoise, which scales
 # the random draws by 1/sqrt(dt) for us.
 @testset "continuous_random_variables with $(typeof(solver))" for solver in (
+    SystemsOfSystems.Solvers.Ralston2Options(; dt = 1//1),
     SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1//1),
     SystemsOfSystems.Solvers.DormandPrince54Options(),
 )

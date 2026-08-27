@@ -27,13 +27,15 @@ mkpath(out_dir)
 end
 
 # This is a continuous-only sim.
-@testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
+@testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk2", "rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 
-    dt_rk4 = 0.1
+    fixed_dt = 0.1
     solver = if solver_type == "dp54"
         Solvers.DormandPrince54Options() # TODO: Test that max_dt limits/doesn't limit.
+    elseif solver_type == "rk2"
+        Solvers.Ralston2Options(; dt = fixed_dt)
     elseif solver_type == "rk4"
-        Solvers.RungeKutta4Options(; dt = dt_rk4)
+        Solvers.RungeKutta4Options(; dt = fixed_dt)
     end
 
     log = if log_type == "ram"
@@ -112,8 +114,8 @@ end
             @test x_ts(t_mid) ≈ expected
         end
 
-        if solver_type == "rk4"
-            @test x_ts.time == collect(0. : dt_rk4 : t_end)
+        if solver_type == "rk2" || solver_type == "rk4"
+            @test x_ts.time == collect(0. : fixed_dt : t_end)
         end
     end
 
@@ -129,6 +131,43 @@ end
     end
 
     Logs.close_log(history.log)
+
+end
+
+@testset "Ralston second-order convergence" begin
+
+    # The exact solution of x' = x with x(0) = 1 is exp(t). For a second-order method,
+    # halving a sufficiently small fixed step should reduce global error by a factor near
+    # four.
+    function final_error(dt)
+        _, _, model_final = simulate(
+            nothing;
+            t = (0, 1),
+            init_fcn = (args...) -> ModelDescription(;
+                continuous_states = (; x = 1.),
+            ),
+            rates_fcn = (t, model) -> RatesOutput(;
+                rates = (; x = model.x,),
+            ),
+            options = SimOptions(;
+                log = nothing,
+                solver = Solvers.Ralston2Options(; dt),
+            ),
+        )
+        return abs(model_final.x - exp(1.))
+    end
+
+    # Compare a 0.1 s step with a 0.05 s step. Halving the step size of an order-p method
+    # should reduce its global error by approximately 2^p once the steps are sufficiently
+    # small. Ralston is second order, so the fine error should be about four times smaller.
+    coarse_error = final_error(1//10)
+    fine_error = final_error(1//20)
+
+    # Dividing the coarse error by the fine error should therefore produce a value near
+    # four. Allow a range because these finite step sizes also contain higher-order error
+    # terms that prevent the observed ratio from being exactly four.
+    error_reduction = coarse_error / fine_error
+    @test 3.5 < error_reduction < 4.5
 
 end
 
