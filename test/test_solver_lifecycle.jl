@@ -79,7 +79,83 @@ end
     @test history.stop isa SystemsOfSystems.EncounteredError
     @test history.stop.time == 1.
     @test close_inputs[] == (1//1, 10.)
+    @test history["/"]["x"].time[end] == 1.
+    @test history["/"]["x"].data[end] == 10.
     @test !succeeded(history)
+
+end
+
+@testset "a failed next rates sample retains the propagated state" begin
+
+    # The first step propagates x from t = 0 to t = 1 and commits that endpoint. The rates
+    # evaluation beginning the next step then fails. The state at t = 1 is known and should
+    # remain in the log, while no corresponding output exists because rates never returned.
+    n_rates_at_one = Ref(0)
+    history = @test_logs (:error,) simulate(
+        nothing;
+        t = (0, 2),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.),
+            continuous_outputs = (; observed_x = 0.),
+        ),
+        rates_fcn = (t, model) -> begin
+
+            if t == 1.
+                n_rates_at_one[] += 1
+                if n_rates_at_one[] == 2
+                    error("The next rates sample failed.")
+                end
+            end
+
+            return RatesOutput(;
+                rates = (; x = 1.,),
+                outputs = (; observed_x = model.x,),
+            )
+
+        end,
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    x_history = history["/"]["x"]
+    output_history = history["/"]["observed_x"]
+    @test history.t_stop == 1
+    @test history.model.x ≈ 1.
+    @test history.stop isa SystemsOfSystems.EncounteredError
+    @test x_history.time[end] == 1.
+    @test x_history.data[end] == history.model.x
+    @test output_history.time[end] == 0.
+
+end
+
+@testset "a solver-reported failure retains the propagated state" begin
+
+    # At this large epoch, adjacent integer times have the same Float64 representation.
+    # The first one-second interval is nevertheless a hard user boundary and succeeds. The
+    # following soft one-second proposal cannot advance floating-point solver time, so the
+    # solver reports underflow. The state committed at the first boundary must remain logged.
+    t_start = 2^60
+    history = simulate(
+        nothing;
+        t = (t_start, t_start + 1, t_start + 3),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (; x = 1.,),
+        ),
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    x_history = history["/"]["x"]
+    @test history.t_stop == t_start + 1
+    @test history.model.x ≈ 1.
+    @test history.stop isa Solvers.SolverStepSizeUnderflow
+    @test length(x_history.time) == 2
+    @test x_history.data[end] == history.model.x
 
 end
 

@@ -3,15 +3,15 @@ The `SimulationLogging` module records model states and outputs during the simul
 
 `Logs` owns storage and compiles model samplers into shared sampling groups.
 `SimulationLogging` evaluates those groups and routes each accepted simulation sample
-through three distinct paths:
+through four distinct paths:
 
-* Continuous logging reads states from `ModelStateDescription` and outputs from
-  `RatesOutput`.
+* Continuous state logging reads states from `ModelStateDescription`.
+* Continuous output logging reads outputs from `RatesOutput`.
 * Discrete event logging reads sparse state changes and outputs from `UpdatesOutput`.
 * Discrete snapshot logging reads complete post-update states from
   `ModelStateDescription`.
 
-This module is internal. The simulation setup and loop call its three top-level
+This module is internal. The simulation setup and loop call its four top-level
 `log_..._stuff!` functions; the remaining helpers implement type-stable tree traversal.
 """
 module SimulationLogging
@@ -57,13 +57,10 @@ end
 # Continuous Logging #
 ######################
 
-function log_continuous_stuff!(
-    ::ExactTime, ::Float64,
-    ::Nothing,
-    ::ModelStateDescription,
-    ::RatesOutput,
-)
-end
+log_continuous_state_stuff!(::ExactTime, ::Float64, ::Nothing, ::ModelStateDescription) =
+    nothing
+
+log_continuous_output_stuff!(::Float64, ::Nothing, ::RatesOutput) = nothing
 
 function log_continuous_states!(t_f, mh_xc, msd_xc)
     for fn in fieldnames(typeof(mh_xc))
@@ -79,20 +76,77 @@ function log_continuous_outputs!(t_f, mh_yc, ro_yc)
     end
 end
 
-function log_continuous_model! end
+function log_continuous_state_model! end
+function log_continuous_output_model! end
 
 # Generate direct field accesses for the heterogeneous child histories. A runtime Symbol
 # index makes Julia box those values before the recursive call. The generated code only
-# handles this static routing; the logging behavior remains in log_continuous_model!.
-@generated function log_continuous_models!(
-    t,
+# handles this static routing; the logging behavior remains in the model helpers.
+@generated function log_continuous_state_models!(
     t_f,
     mh_models::MHT,
     msd_models::MSDT,
-    ro_models::ROT,
 ) where {
     MHT <: NamedTuple,
     MSDT <: NamedTuple,
+}
+
+    statements = map(fieldnames(MHT)) do fn
+        field = QuoteNode(fn)
+        return quote
+            model_history = getfield(mh_models, $field)
+            if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
+                log_continuous_state_model!(
+                    t_f, model_history, getfield(msd_models, $field),
+                )
+            end
+        end
+    end
+    return quote
+        $(statements...)
+        nothing
+    end
+
+end
+
+function log_continuous_state_model!(
+    t_f::Float64,
+    mh::Logs.ModelHistory,
+    msd::ModelStateDescription,
+)
+
+    # The compiled group contains this model's independently evaluated sampling decision.
+    sampling_group = mh.sampling_group
+
+    if sampling_group.log_states
+        log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
+    end
+    log_continuous_state_models!(t_f, mh.models, msd.models)
+
+end
+
+function log_continuous_state_stuff!(
+    t::ExactTime, t_f::Float64,
+    mh::Logs.ModelHistory,
+    msd::ModelStateDescription,
+)
+
+    # Evaluate each distinct sampler once, then reject the whole tree when every group is
+    # inactive at this time.
+    sampling_groups = mh.sampling_groups_in_subtree
+    update_sampling_groups!(t, sampling_groups)
+    if sampling_groups_log_sample(sampling_groups)
+        log_continuous_state_model!(t_f, mh, msd)
+    end
+
+end
+
+@generated function log_continuous_output_models!(
+    t_f,
+    mh_models::MHT,
+    ro_models::ROT,
+) where {
+    MHT <: NamedTuple,
     ROT <: NamedTuple,
 }
 
@@ -106,10 +160,7 @@ function log_continuous_model! end
         return quote
             model_history = getfield(mh_models, $field)
             if sampling_groups_log_sample(model_history.sampling_groups_in_subtree)
-                log_continuous_model!(
-                    t, t_f,
-                    model_history, getfield(msd_models, $field), $rates_output,
-                )
+                log_continuous_output_model!(t_f, model_history, $rates_output)
             end
         end
     end
@@ -120,40 +171,30 @@ function log_continuous_model! end
 
 end
 
-function log_continuous_model!(
-    t::ExactTime, t_f::Float64,
+function log_continuous_output_model!(
+    t_f::Float64,
     mh::Logs.ModelHistory,
-    msd::ModelStateDescription,
     ro::RatesOutput,
 )
 
-    # The compiled group contains this model's independently evaluated sampling decision.
-    sampling_group = mh.sampling_group
-
-    if sampling_group.log_states
-        log_continuous_states!(t_f, mh.continuous_states, msd.continuous_states)
-    end
-    if sampling_group.log_outputs
+    if mh.sampling_group.log_outputs
         log_continuous_outputs!(t_f, mh.continuous_outputs, ro.outputs)
     end
     # TODO: Log the derivatives too.
-    log_continuous_models!(t, t_f, mh.models, msd.models, ro.models)
+    log_continuous_output_models!(t_f, mh.models, ro.models)
 
 end
 
-function log_continuous_stuff!(
-    t::ExactTime, t_f::Float64,
+function log_continuous_output_stuff!(
+    t_f::Float64,
     mh::Logs.ModelHistory,
-    msd::ModelStateDescription,
     ro::RatesOutput,
 )
 
-    # Evaluate each distinct sampler once, then reject the whole tree when every group is
-    # inactive at this accepted time.
-    sampling_groups = mh.sampling_groups_in_subtree
-    update_sampling_groups!(t, sampling_groups)
-    if sampling_groups_log_sample(sampling_groups)
-        log_continuous_model!(t, t_f, mh, msd, ro)
+    # The state phase evaluated each sampler. Reuse those decisions so one logical sample
+    # cannot select a state and output differently.
+    if sampling_groups_log_sample(mh.sampling_groups_in_subtree)
+        log_continuous_output_model!(t_f, mh, ro)
     end
 
 end

@@ -1086,11 +1086,12 @@ first_stop(current, candidate) = isnothing(current) ? candidate : current
 
 Processes one complete accepted hybrid-system sample.
 
-The integrator first advances continuous state by exactly one accepted numerical step. The
-function then logs its authoritative beginning sample, runs hooks, draws discrete random
-variables, and accepts the discrete update at the rational endpoint. Returning establishes
-that endpoint as the simulation loop's latest committed time and state. Terminal rate
-sampling occurs afterward in `loop!`, where an exception cannot hide the committed sample.
+The function first records the known continuous state, then asks the integrator to advance
+it by exactly one accepted numerical step. An accepted result supplies the corresponding
+continuous outputs. The function then runs hooks, draws discrete random variables, and
+accepts the discrete update at the rational endpoint. Returning establishes that endpoint
+as the simulation loop's latest committed time and state. Terminal rate sampling occurs
+afterward in `loop!`, where an exception cannot hide the committed sample.
 """
 function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integrator, hooks)
 
@@ -1125,8 +1126,14 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
         earlier_time(t_next_from_models, t_next_from_schedules),
     )
 
+    # Record the committed state before entering the fallible solver. The matching output
+    # is recorded only if the solver returns authoritative beginning-of-step rates.
+    SimulationLogging.log_continuous_state_stuff!(
+        t_last, float(t_last), mh, msd,
+    )
+
     # Ask the integrator for one accepted numerical step. A failure has no accepted
-    # endpoint, so hooks and discrete updates must not run for it.
+    # endpoint, so outputs, hooks, and discrete updates must not run for it.
     result = Solvers.step!(
         integrator,
         problem,
@@ -1139,13 +1146,10 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     t_next = result.t_end
     msd = result.state_at_end
 
-    # The beginning state and rates come from the accepted attempt. Rejected attempts and
-    # intermediate Runge-Kutta stages never reach logging or model stop handling.
-    SimulationLogging.log_continuous_stuff!(
-        t_last, float(t_last),
-        mh,
-        result.state_at_start,
-        result.rates_at_start,
+    # The beginning rates come from the accepted attempt. Rejected attempts and intermediate
+    # Runge-Kutta stages never reach output logging or model stop handling.
+    SimulationLogging.log_continuous_output_stuff!(
+        float(t_last), mh, result.rates_at_start,
     )
     stop = find_model_requested_stop(result.rates_at_start)
 
@@ -1187,8 +1191,8 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # Log the update events and any state snapshots selected at this time.
     #
     # If a discrete update changes continuous state, this records the pre-update side of the
-    # discontinuity. The next accepted rates sample, or the explicit terminal sample below,
-    # records the post-update side together with matching continuous outputs.
+    # discontinuity. The next continuous state sample records the post-update side. Its
+    # matching output is recorded separately after rates have been evaluated successfully.
     #
     SimulationLogging.log_discrete_stuff!(
         t_next, float(t_next), mh,
@@ -1459,14 +1463,16 @@ function loop!(runtime)
                 # is an internal loop sentinel, not a reason that should take precedence
                 # over a terminal model request or `ReachedEndTime`.
                 terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                SimulationLogging.log_continuous_state_stuff!(
+                    t_completed, float(t_completed), mh, msd,
+                )
                 terminal_rates = ContinuousProblems.evaluate_rates(
                     problem,
                     float(t_completed),
                     msd,
                 )
-                SimulationLogging.log_continuous_stuff!(
-                    t_completed, float(t_completed),
-                    mh, msd, terminal_rates,
+                SimulationLogging.log_continuous_output_stuff!(
+                    float(t_completed), mh, terminal_rates,
                 )
                 terminal_stop = first_stop(
                     terminal_stop,
