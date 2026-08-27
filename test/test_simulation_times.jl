@@ -146,7 +146,7 @@ end
     triggers_a = Rational{Int64}[]
     triggers_b = Rational{Int64}[]
 
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (t_start, t_end),
         init_fcn = (args...) -> ModelDescription(;
@@ -189,11 +189,11 @@ end
 
     expected_a = collect(offset_a:period_a:t_end)
     expected_b = collect(offset_b:period_b:t_end)
-    @test t_final == t_end
+    @test history.t_stop == t_end
     @test triggers_a == expected_a
     @test triggers_b == expected_b
-    @test model_final.a.n == length(expected_a)
-    @test model_final.b.n == length(expected_b)
+    @test history.model.a.n == length(expected_a)
+    @test history.model.b.n == length(expected_b)
     @test history.stop isa SystemsOfSystems.ReachedEndTime
 
 end

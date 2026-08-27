@@ -32,7 +32,7 @@ mkpath(out_dir)
     # We'll simulate a pure exponential decay and compare to the known answer.
     time_constant = 2.
     t_end = 5.
-    history, t, model = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             constants = (;
@@ -59,10 +59,14 @@ mkpath(out_dir)
             hooks = [Hooks.ProgressBarOptions()],
         ),
     )
+    (; t_stop, model) = history
 
     # Test the final state.
-    @test t == t_end
+    @test history.t_start == 0
+    @test t_stop == t_end
     @test model.x ≈ exp(-t_end/time_constant) atol=1e-4
+    @test succeeded(history)
+    @test fieldtype(typeof(history), :model) == typeof(model)
 
     # We can only test logs when we have logs.
     if log_type == "ram" || log_type == "hdf5"
@@ -119,7 +123,7 @@ end
     # We'll simulate a pure (and discrete) exponential decay and compare to the known answer.
     time_constant = 2.
     t_end = 5.
-    history, t, model = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             discrete_states = (;
@@ -140,9 +144,10 @@ end
         end,
         t = (0, t_end),
     )
+    (; t_stop, model) = history
 
     # Test the final state.
-    @test t == t_end
+    @test t_stop == t_end
     @test model.x ≈ exp(-t_end/time_constant) atol=1e-4
 
     @test history["/"]["x"].time[1] == 0.
@@ -166,7 +171,7 @@ end
     # We'll simulate a closed-loop control system to test hybrid systems.
     dt = 0.05
     t_end = 5.
-    history, t, x = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             constants = (;

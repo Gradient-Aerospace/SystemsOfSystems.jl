@@ -1,7 +1,8 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Schedules, Solvers, Hooks, Logs, Resources
+export initialize, simulate, SimHistory, SimOptions, succeeded,
+    Schedules, Solvers, Hooks, Logs, Resources
 
 # Model descriptions
 export ModelDescription, VariableDescription, RandomVariableDescription,
@@ -792,8 +793,8 @@ end
 """
 A container for simulation results, including fields for:
 
-* `model_description`: The ModelDescription returned from the init_fcn
-* `time`: A vector of all time steps (ExactTime)
+* `t_start`: The simulation's start time
+* `t_stop`: The last time completed by the simulation
 * `log`: The log containing the time series for each variable of each model
 * `model`: The final model constructed in the sim
 * `stop`: The normal stop or failure reason that ended the simulation
@@ -807,21 +808,21 @@ history.log["/models/plant"]["position"]
 
 The `keys`, `values`, and `pairs` functions also pass through to the underlying log.
 """
-struct SimHistory
-    model_description::ModelDescription # TODO: This doesn't match the description. What value does this have?
-    time::Vector{ExactTime} # All time steps the sim took TODO: Or should this be part of the log? If so, how would a user "ask" for that?
+struct SimHistory{M}
+    t_start::ExactTime
+    t_stop::ExactTime
     log::Logs.AbstractLog
-    model::Any
+    model::M
     stop::AbstractTerminationReason
 end
 
 """
-    completed(h::SimHistory)
+    succeeded(h::SimHistory)
 
-Returns true if the simulation ran through to completion (did not throw an error or fail
-to converge on a solution).
+Returns true if the simulation ended without throwing an error or failing to converge on a
+solution.
 """
-completed(h::SimHistory) = !(h.stop isa AbstractFailureReason)
+succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
 function Base.show(io::IO, mime::MIME"text/plain", history::SimHistory)
     println(io, "Simulation History:")
@@ -1360,7 +1361,7 @@ function make_runtime(inputs)
 
         return (;
             inputs.updates_fcn, inputs.close_fcn,
-            model_description, ommd,
+            ommd,
             t, schedules,
             msd,
             log, mh,
@@ -1404,7 +1405,6 @@ function loop!(runtime)
     t_completed = first(runtime.t)
     msd = runtime.msd
     stop = UnknownStopReason()
-    time = ExactTime[first(t)] # TODO: Make the runtime set this up, and allow it to be nothing if we aren't returning a SimHistory.
 
     # No matter what happens, this function returns all of the progress it's made.
     try
@@ -1418,11 +1418,6 @@ function loop!(runtime)
                 mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks
             )
-
-            # Record all sim time steps.
-            if !isnothing(time)
-                push!(time, t_completed)
-            end
 
             # A successfully processed terminal sample receives one direct post-update
             # rates evaluation. Solver failures did not accept a sample and therefore must
@@ -1467,7 +1462,7 @@ function loop!(runtime)
 
     end
 
-    return (; t_completed, time, msd, stop)
+    return (; t_completed, msd, stop)
 
 end
 
@@ -1477,10 +1472,12 @@ function tear_down(runtime, loop_outputs)
     try
         final_model = model(loop_outputs.msd)
         runtime.close_fcn(loop_outputs.t_completed, final_model)
-        return (;
-            history = SimHistory(runtime.model_description, loop_outputs.time, runtime.log, final_model, loop_outputs.stop),
-            t_final = loop_outputs.t_completed,
+        return SimHistory(
+            first(runtime.t),
+            loop_outputs.t_completed,
+            runtime.log,
             final_model,
+            loop_outputs.stop,
         )
     finally
         close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
@@ -1588,7 +1585,8 @@ end
 """
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
 
-Runs a simulation, returning the time history, end time, and final model.
+Runs a simulation, returning a `SimHistory` containing its log, start and stop times, final
+model, and termination reason.
 
 * `user_data`: Can be anything used by the `init_fcn`
 * `t`: A collection of monotonic times. The sim will step to exactly each given time, plus
@@ -1619,8 +1617,7 @@ function simulate(
     inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
     runtime = make_runtime(inputs)
     loop_outputs = loop!(runtime)
-    results = tear_down(runtime, loop_outputs)
-    return (results.history, results.t_final, results.final_model)
+    return tear_down(runtime, loop_outputs)
 end
 
 end # module SystemsOfSystems

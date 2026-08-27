@@ -16,7 +16,7 @@ using SystemsOfSystems: Solvers
     # state and output in the log must both describe the post-update model. Historically,
     # the sim obtained this output by asking the solver to take a zero-duration step; the
     # desired interface samples rates directly instead.
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (0, 1),
         init_fcn = (args...) -> ModelDescription(;
@@ -37,8 +37,8 @@ using SystemsOfSystems: Solvers
         ),
     )
 
-    @test t_final == 1
-    @test model_final.x == 10.
+    @test history.t_stop == 1
+    @test history.model.x == 10.
     @test history["/"]["x"].data[end] == 10.
     @test history["/"]["twice_x"].data[end] == 20.
 
@@ -50,7 +50,7 @@ end
     # observes x = 10 and throws. The exception must end the simulation without rolling its
     # reported time, final model, or close callback back to the preceding accepted sample.
     close_inputs = Ref{Any}(nothing)
-    history, t_final, model_final = @test_logs (:error,) simulate(
+    history = @test_logs (:error,) simulate(
         nothing;
         t = (0, 1),
         init_fcn = (args...) -> ModelDescription(;
@@ -74,11 +74,12 @@ end
         ),
     )
 
-    @test t_final == 1
-    @test model_final.x == 10.
+    @test history.t_stop == 1
+    @test history.model.x == 10.
     @test history.stop isa SystemsOfSystems.EncounteredError
     @test history.stop.time == 1.
     @test close_inputs[] == (1//1, 10.)
+    @test !succeeded(history)
 
 end
 
@@ -87,7 +88,7 @@ end
     # RK4 evaluates rates at the midpoint of this step twice. Those models are provisional
     # numerical stage models, not accepted simulation samples, so their stop flags must not
     # affect the simulation lifecycle.
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (0, 1),
         init_fcn = (args...) -> ModelDescription(;
@@ -102,8 +103,8 @@ end
         ),
     )
 
-    @test t_final == 1
-    @test model_final.x ≈ 1.
+    @test history.t_stop == 1
+    @test history.model.x ≈ 1.
     @test history.stop isa SystemsOfSystems.ReachedEndTime
 
 end
@@ -115,7 +116,7 @@ end
     # attempt at the same official start time is accepted without a stop request, and the
     # simulation must continue normally.
     n_start_evaluations = [0,]
-    history, t_final, _ = simulate(
+    history = simulate(
         nothing;
         t = (0, 1),
         init_fcn = (args...) -> ModelDescription(;
@@ -144,7 +145,7 @@ end
     )
 
     @test n_start_evaluations[1] > 1
-    @test t_final == 1
+    @test history.t_stop == 1
     @test history.stop isa SystemsOfSystems.ReachedEndTime
 
 end
@@ -154,7 +155,7 @@ end
     # A stop request from the authoritative beginning-of-step rates evaluation becomes valid
     # only once the numerical attempt is accepted. The accepted continuous step and its
     # discrete update therefore complete before the sim stops.
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (0, 2),
         init_fcn = (args...) -> ModelDescription(;
@@ -173,10 +174,11 @@ end
         ),
     )
 
-    @test t_final == 1//2
-    @test model_final.x ≈ 1//2
-    @test model_final.n_updates == 1
+    @test history.t_stop == 1//2
+    @test history.model.x ≈ 1//2
+    @test history.model.n_updates == 1
     @test history.stop isa SystemsOfSystems.ModelRequestedStop
+    @test succeeded(history)
 
 end
 
@@ -185,7 +187,7 @@ end
     # Both child models request a stop in the same accepted RatesOutput. Model hierarchies
     # are traversed parent-first and then depth-first in named-tuple field order, so the
     # request from `first_model` is the one represented in the scalar simulation stop field.
-    history, t_final, _ = simulate(
+    history = simulate(
         nothing;
         t = (0, 2),
         init_fcn = (args...) -> ModelDescription(;
@@ -205,7 +207,7 @@ end
         ),
     )
 
-    @test t_final == 1//2
+    @test history.t_stop == 1//2
     @test history.stop isa SystemsOfSystems.ModelRequestedStop
     @test history.stop.model_path == "/models/first_model"
 
@@ -261,7 +263,7 @@ end
 
     # The update at the accepted endpoint is applied before its stop request takes effect.
     # The direct terminal rates sample then observes and logs that updated state.
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (0, 2),
         init_fcn = (args...) -> ModelDescription(;
@@ -281,8 +283,8 @@ end
         ),
     )
 
-    @test t_final == 1//2
-    @test model_final.x == 10.
+    @test history.t_stop == 1//2
+    @test history.model.x == 10.
     @test history["/"]["x"].data[end] == 10.
     @test history["/"]["observed_x"].data[end] == 10.
     @test history.stop isa SystemsOfSystems.ModelRequestedStop

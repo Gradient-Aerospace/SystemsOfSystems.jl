@@ -173,7 +173,7 @@ end
     offset_triggers = Rational{Int64}[]
     explicit_triggers = Rational{Int64}[]
 
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = (0, 1),
         init_fcn = (args...) -> ModelDescription(;
@@ -231,15 +231,15 @@ end
     expected_regular = collect(1//5:1//5:1//1)
     expected_offset = [1//10, 13//30, 23//30]
     expected_explicit = [1//7, 5//7]
-    @test t_final == 1
+    @test history.t_stop == 1
     @test regular_triggers == expected_regular
     @test repeated_triggers == expected_regular
     @test offset_triggers == expected_offset
     @test explicit_triggers == expected_explicit
-    @test model_final.regular.count == length(expected_regular)
-    @test model_final.repeated.count == length(expected_regular)
-    @test model_final.offset.count == length(expected_offset)
-    @test model_final.explicit.count == length(expected_explicit)
+    @test history.model.regular.count == length(expected_regular)
+    @test history.model.repeated.count == length(expected_regular)
+    @test history.model.offset.count == length(expected_offset)
+    @test history.model.explicit.count == length(expected_explicit)
     @test history.stop isa SystemsOfSystems.ReachedEndTime
 
 end

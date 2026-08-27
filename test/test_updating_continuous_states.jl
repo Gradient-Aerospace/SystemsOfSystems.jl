@@ -18,7 +18,7 @@ end
 # and velocity.
 @testset "updating continuous states" begin
 
-    history, _, _ = simulate(
+    history = simulate(
         nothing;
         t = 0//1 : 1//2 : 5//1,
         init_fcn = (t, params, seed) -> ModelDescription(;
@@ -76,7 +76,7 @@ end
 # final sample to the history.
 @testset "updating continuous states when a hook stops the simulation" begin
 
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = 0//1 : 1//2 : 5//1,
         init_fcn = (t, params, seed) -> ModelDescription(;
@@ -101,11 +101,11 @@ end
     # 1 to 10. The final history must contain both sides of the discontinuity and select
     # the updated value at the exact event time.
     x_history = history["/"]["x"]
-    @test t_final == 1
-    @test model_final.x == 10.
+    @test history.t_stop == 1
+    @test history.model.x == 10.
     @test x_history.time[end-1:end] == [1., 1.]
     @test x_history.data[end-1:end] ≈ [1., 10.]
-    @test x_history(t_final) == model_final.x
+    @test x_history(history.t_stop) == history.model.x
 
 end
 

@@ -64,7 +64,7 @@ end
     # This should generate a sinusoid. When the time step is really large, it should fail
     # integration tolerances and end up with smaller steps. When it's really smaller, it
     # should observe the unnecessarily small steps.
-    history, t, x = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             continuous_states = (;
@@ -103,7 +103,7 @@ end
     # request even shorter time steps for the first several steps.
     max_dt = 1//2
     t_specified = [0.01, 0.1, 0.2, 0.3, 30.] # Includes a non-zero start
-    history, t, x = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             continuous_states = (;

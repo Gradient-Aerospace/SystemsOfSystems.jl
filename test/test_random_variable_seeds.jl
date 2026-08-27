@@ -228,7 +228,7 @@ end
 
     # Use both initialize and simulate to see if the same draws are happening.
     model = initialize(nothing; init_fcn = init_fcn, seed = 5)
-    history, _, _ = simulate(
+    history = simulate(
         nothing;
         init_fcn = init_fcn,
         rates_fcn = (t, model) -> RatesOutput(;

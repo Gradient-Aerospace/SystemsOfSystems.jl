@@ -193,7 +193,7 @@ plant_specs = PlantSpecs(;
     initial_velocity = 0.,
     sigma_noise = 1.,
 )
-history, t, plant = SystemsOfSystems.simulate(
+history = SystemsOfSystems.simulate(
     plant_specs;
     t = (0, 10),
     init_fcn = init,
@@ -228,7 +228,7 @@ In fact, let's run 15 simulations, returning the `position` time series from eac
 position_histories = map(1:15) do seed
 
     # Run the sim for this seed.
-    history, t, plant = SystemsOfSystems.simulate(
+    history = SystemsOfSystems.simulate(
         plant_specs;
         t = (0, 10),
         init_fcn = init,
@@ -770,7 +770,7 @@ system_specs = ClosedLoopSystemSpecs(
     ),
 )
 
-history, final_time, final_system = SystemsOfSystems.simulate(
+history = SystemsOfSystems.simulate(
     system_specs;
     t = (0, 10),
     init_fcn = init,
@@ -810,10 +810,10 @@ The performance certainly appears to be correct.
 
 Note the difference between lines for continuous-time variables and points for discrete variables.
 
-Let's take a look at `final_system`, the complete model form at the end of the simulation:
+Let's take a look at `history.model`, the complete model form at the end of the simulation:
 
 ```@example controls
-dump(final_system)
+dump(history.model)
 ```
 
 In there, we see the sensor bias that results in the steady-state bias of the result.
@@ -876,7 +876,7 @@ ramp_system_specs = ClosedLoopSystemSpecs(
     actuator = system_specs.actuator,
 )
 
-ramp_history, = SystemsOfSystems.simulate(
+ramp_history = SystemsOfSystems.simulate(
     ramp_system_specs;
     t = (0, 10),
     init_fcn = init,

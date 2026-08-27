@@ -3,7 +3,7 @@
 The [`simulate`](@ref) function accepts a [`SimOptions`](@ref) value that controls output paths, logging, the continuous-time solver, hooks, and the time label used in plots.
 
 ```julia
-history, final_time, final_model = simulate(
+history = simulate(
     user_data;
     t = (0, 10),
     init_fcn,
@@ -104,7 +104,7 @@ options = SimOptions(;
 )
 ```
 
-`NullLogOptions` turns history logging off. It is useful when only `final_time` and `final_model` are needed.
+`NullLogOptions` turns time-series logging off. It is useful when only fields such as `history.t_stop` and `history.model` are needed.
 
 ```julia
 options = SimOptions(;

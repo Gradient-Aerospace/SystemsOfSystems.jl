@@ -55,14 +55,17 @@ end
     system_specs = ControlSystemDemo.default_closed_loop_system_specs()
 
     # Run the sim.
-    history, t, system = ControlSystemDemo.simulate_closed_loop_system(;
+    history = ControlSystemDemo.simulate_closed_loop_system(;
         system_specs, log, solver,
     )
+    t = history.t_stop
+    system = history.model
 
     dt_sensor = system_specs.sensor.schedule.period
-    @test t == 10
-    @test history["/sensor"]["measurement"].time == collect(0. : dt_sensor : t)
-    @test history["/sensor"]["measurement"].data[end].t == t
+    @test history.t_stop == 10
+    @test history["/sensor"]["measurement"].time ==
+        collect(0. : dt_sensor : history.t_stop)
+    @test history["/sensor"]["measurement"].data[end].t == history.t_stop
 
     Logs.close_log(history.log)
 

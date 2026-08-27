@@ -48,7 +48,7 @@ end
 @testset "OutputFile" begin
 
     # Test that it can open a file for us.
-    history, _, m = simulate(
+    history = simulate(
         nothing;
         t = 0 : 0.1 : 1,
         init_fcn = my_init_fcn,
@@ -62,7 +62,7 @@ end
     # Test that it put the file there, we wrote to it, and now it's closed.
     out_file_name = joinpath(out_dir, "files", "my_file.txt")
     @test isfile(out_file_name) == true
-    @test isopen(m.io) == false
+    @test isopen(history.model.io) == false
     open(out_file_name) do f
         for (t, x) in zip(history["/"]["x"].time, history["/"]["x"].data)
             if t != 0 # We only write on updates.
@@ -128,7 +128,7 @@ end
 
     # Test that it can open a file for us. Here, we'll put the whole thing in another model
     # to test that file scope is correct.
-    history, _, m = simulate(
+    history = simulate(
         nothing;
         t = 0 : 0.3 : 1,
         init_fcn = (t, params, seed) -> ModelDescription(;
@@ -154,7 +154,7 @@ end
     # Test that it put the file there, we wrote to it, and now it's closed.
     out_file_name = joinpath(out_dir, "files", "my_file2.txt")
     @test isfile(out_file_name) == true
-    @test isopen(m.my_model.io[2]) == false
+    @test isopen(history.model.my_model.io[2]) == false
     open(out_file_name) do f
         for (t, x) in zip(history["/my_model"]["x"].time, history["/my_model"]["x"].data)
             if t == 0
@@ -264,7 +264,7 @@ end
     # Resource with some references, to make sure close gets called correctly.
     file_was_opened = [false]
     file_was_closed = [false]
-    @test_logs (:error,) history, _, m = simulate(
+    history = @test_logs (:error,) simulate(
         nothing;
         t = 0 : 0.1 : 1,
         init_fcn = (t, params, seed) -> ModelDescription(;

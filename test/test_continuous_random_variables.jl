@@ -25,7 +25,7 @@ end
     # Make an array of the final positions.
     final_position = [
         begin
-            history, t_f, x_f = simulate(
+            history = simulate(
                 nothing;
                 t = 0//1 : 1//10 : t_final, # Force some steps to happen (not one big step).
                 seed,

@@ -145,7 +145,7 @@ function run_logging_simulation(logging_policy; log_options = nothing)
     # RK4 with a quarter-second step gives the known accepted-time grid
     # [0, 0.25, 0.5, 0.75, 1]. Regular samplers can therefore be checked with exact expected
     # vectors instead of depending on the adaptive solver's chosen steps.
-    history, = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> model_description(),
         rates_fcn = rates,
@@ -239,7 +239,7 @@ function run_sparse_update_simulation(logging_policy; log_options = nothing)
         log_options = Logs.BasicLogOptions(; logging_policy)
     end
 
-    history, = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> sparse_update_model_description(),
         rates_fcn = sparse_update_rates,

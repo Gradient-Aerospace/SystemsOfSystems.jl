@@ -44,7 +44,7 @@ end
     x_final_storage = Float64[]
 
     # Create a simulation that produces a sinusoid and has the hook.
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = 0 : 0.1 : 10,
         init_fcn = (args...) -> ModelDescription(;
@@ -71,8 +71,8 @@ end
     # The model stored everything on all steps.
     @test history["/"]["x"].time == t_storage
     @test history["/"]["x"].data == x_storage
-    @test only(t_final_storage) == t_final
-    @test only(x_final_storage) == model_final.x
+    @test only(t_final_storage) == history.t_stop
+    @test only(x_final_storage) == history.model.x
 
 end
 
