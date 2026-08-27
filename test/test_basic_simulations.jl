@@ -9,6 +9,23 @@ using SystemsOfSystems: Solvers, Logs, Hooks
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
 
+@testset "log display" begin
+
+    # Property destructuring returns the selected property in the REPL. The compact show
+    # method must therefore summarize the log instead of displaying its full backing
+    # dictionary and every stored sample.
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(),
+    )
+    (; log) = history
+
+    @test sprint(show, log) == "BasicLog with 1 model history"
+    @test sprint(show, MIME"text/plain"(), log) == "Model Histories:\n  /\n"
+
+end
+
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 

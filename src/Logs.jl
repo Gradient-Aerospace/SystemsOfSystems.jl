@@ -361,7 +361,13 @@ end
 
 gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 
-function Base.show(io::IO, mime::MIME"text/plain", log::AbstractLog)
+function Base.show(io::IO, log::AbstractLog)
+    n_model_histories = length(keys(log))
+    label = n_model_histories == 1 ? "model history" : "model histories"
+    print(io, "$(nameof(typeof(log))) with $n_model_histories $label")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", log::AbstractLog)
     println(io, "Model Histories:")
     slugs = sort(collect(keys(log)))
     for slug in slugs
