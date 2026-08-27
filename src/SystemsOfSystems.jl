@@ -1196,7 +1196,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     #
     SimulationLogging.log_discrete_stuff!(
         t_next, float(t_next), mh,
-        updates, msd, updated_msd, false,
+        updates, msd, updated_msd,
     )
 
     # Now accept the update.

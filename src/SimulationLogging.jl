@@ -267,7 +267,6 @@ function log_discrete_stuff!(
     ::Union{Nothing, UpdatesOutput},
     ::ModelStateDescription,
     ::ModelStateDescription,
-    include_updated_continuous_states::Bool,
 )
 end
 
@@ -279,16 +278,10 @@ function log_discrete_state_changes!(t_f, mh_xd, uo_updates)
     end
 end
 
-function log_continuous_state_updates!(
-    t_f, mh_xc, uo_updates, prior_xc,
-    include_updated_continuous_states,
-)
+function log_continuous_state_updates!(t_f, mh_xc, uo_updates, prior_xc)
     for fn in fieldnames(typeof(mh_xc))
         if hasfield(typeof(uo_updates), fn)
             push!(mh_xc[fn], t_f, prior_xc[fn])
-            if include_updated_continuous_states
-                push!(mh_xc[fn], t_f, uo_updates[fn])
-            end
         end
     end
 end
@@ -311,7 +304,6 @@ function log_discrete_event_model!(
     ::Logs.ModelHistory,
     ::Nothing,
     ::ModelStateDescription,
-    ::Bool,
 )
 end
 
@@ -323,7 +315,6 @@ end
     mh_models::MHT,
     uo_models::UOT,
     prior_models::PT,
-    include_updated_continuous_states,
 ) where {
     MHT <: NamedTuple,
     UOT <: NamedTuple,
@@ -340,7 +331,6 @@ end
                         t_f,
                         model_history, getfield(uo_models, $field),
                         getfield(prior_models, $field),
-                        include_updated_continuous_states,
                     )
                 end
             end
@@ -361,7 +351,6 @@ function log_discrete_event_model!(
     mh::Logs.ModelHistory,
     uo::UpdatesOutput,
     prior::ModelStateDescription,
-    include_updated_continuous_states::Bool,
 )
 
     # The compiled group contains this model's independently evaluated sampling decision.
@@ -378,12 +367,9 @@ function log_discrete_event_model!(
 
         # Continuous state changes are discontinuity events rather than discrete snapshots.
         # Record the *prior* value at `t`. The continuous logger records the updated value
-        # at the beginning of the next step, which also starts at `t`. At the terminal
-        # sample, include_updated_continuous_states requests the right-hand value
-        # immediately.
+        # in its next state phase, which also occurs at `t`.
         log_continuous_state_updates!(
             t_f, mh.continuous_states, uo.updates, prior.continuous_states,
-            include_updated_continuous_states,
         )
     end
 
@@ -392,10 +378,7 @@ function log_discrete_event_model!(
         log_discrete_outputs!(t_f, mh.discrete_outputs, uo.outputs)
     end
 
-    log_discrete_event_models!(
-        t_f, mh.models, uo.models, prior.models,
-        include_updated_continuous_states,
-    )
+    log_discrete_event_models!(t_f, mh.models, uo.models, prior.models)
 
 end
 
@@ -471,7 +454,6 @@ function log_discrete_stuff!(
     uo::Union{Nothing, UpdatesOutput},
     prior::ModelStateDescription,
     updated::ModelStateDescription,
-    include_updated_continuous_states::Bool,
 )
 
     sampling_groups = mh.sampling_groups_in_subtree
@@ -482,7 +464,7 @@ function log_discrete_stuff!(
     # state snapshot opportunity below.
     if !isnothing(uo) && sampling_groups_log_sample(sampling_groups)
         log_discrete_event_model!(
-            t_f, mh, uo, prior, include_updated_continuous_states,
+            t_f, mh, uo, prior,
         )
     end
 
