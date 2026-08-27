@@ -57,6 +57,30 @@ end
     @test hard_interval.t_end == hard_bound
     @test hard_interval.dt == 0.1
 
+    # A non-advancing hard bound must be rejected before attempt preparation can draw a
+    # continuous random variable over a zero-duration interval.
+    @test isnothing(SystemsOfSystems.Solvers.choose_step_interval(1//1, 1//1, 1.))
+
+end
+
+@testset "requested simulation times" begin
+
+    # Input validation happens before initialization so invalid requests cannot open model
+    # resources or reach the continuous solver. Equal adjacent times are invalid as well as
+    # decreasing times because every accepted interval must have positive duration.
+    init_was_called = Ref(false)
+    init = (args...) -> begin
+        init_was_called[] = true
+        return ModelDescription()
+    end
+
+    @test_throws ArgumentError simulate(nothing; t = (), init_fcn = init)
+    @test_throws ArgumentError simulate(nothing; t = (0,), init_fcn = init)
+    @test_throws ArgumentError simulate(nothing; t = (0, 0), init_fcn = init)
+    @test_throws ArgumentError simulate(nothing; t = (0, 2, 1), init_fcn = init)
+    @test_throws ArgumentError simulate(nothing; t = (0, NO_T_NEXT), init_fcn = init)
+    @test !init_was_called[]
+
 end
 
 @testset "overflow-resistant time ordering" begin

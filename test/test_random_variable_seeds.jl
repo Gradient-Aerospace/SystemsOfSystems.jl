@@ -32,7 +32,7 @@ end
 
     model_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_last, t_next) -> randn(rng),
+            w_draw = (rng, t_km1, dt_f) -> randn(rng),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),
@@ -151,7 +151,7 @@ end
 
     leaf_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_last, t_next) -> randn(rng),
+            w_draw = (rng, t_km1, dt_f) -> randn(rng),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),

@@ -427,9 +427,15 @@ function choose_step_interval(t_start::Rational, t_bound::Rational, proposed_dt:
     if !(proposed_dt > 0.)
         return nothing
     end
+    if !time_isless(t_start, t_bound)
+        return nothing
+    end
 
     t_start_f = float(t_start)
     duration_to_bound = float_duration(t_start, t_bound)
+    if !(duration_to_bound > 0.)
+        return nothing
+    end
     if !isfinite(proposed_dt) || proposed_dt >= duration_to_bound
         return (; t_end = t_bound, dt = duration_to_bound)
     end
@@ -524,7 +530,7 @@ function evaluate_stages(
     state::ModelStateDescription,
 )
 
-    state_at_start = prepare_attempt(problem, t_start, t_end, dt, state)
+    state_at_start = prepare_attempt(problem, t_start, dt, state)
     t_start_f = float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(

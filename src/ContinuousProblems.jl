@@ -48,10 +48,10 @@ ContinuousProblem(typed_description, rates_fcn) =
     ContinuousProblem(typed_description, rates_fcn, DefaultErrorPolicy())
 
 """
-    prepare_attempt(problem, t_start, t_end, dt, state)
+    prepare_attempt(problem, t_start, dt_f, state)
 
-Prepares the beginning state for one numerical attempt over the official interval
-`[t_start, t_end]`.
+Prepares the beginning state for one numerical attempt starting at the official `t_start`
+with floating-point duration `dt_f`.
 
 At present, preparation draws every continuous random variable for the proposed interval.
 Rejected adaptive attempts are prepared again and therefore receive new draws. Expressing
@@ -61,15 +61,12 @@ underlying draw and rescales or subdivides it when an attempted step is shortene
 function prepare_attempt(
     problem::ContinuousProblem,
     t_start,
-    t_end,
-    dt::Float64,
+    dt_f::Float64,
     state::ModelStateDescription,
 )
-    t_start_f = float(t_start)
-    t_end_f = t_start_f + dt
     return draw_wc(
-        t_start_f,
-        t_end_f,
+        t_start,
+        dt_f,
         problem.typed_description,
         state,
     )

@@ -65,8 +65,9 @@ contains:
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
 * `discrete_outputs`: A named tuple of each of the discrete outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
-   the model. Each element can be a function mapping `(rng, t_last, t_next)` to a value, or
-   a `RandomVariableDescription`.
+  the model. Each element can be a function mapping `(rng, t_km1, dt_f)` to a value, or a
+  `RandomVariableDescription`. The interval starts at the exact time `t_km1` and has the
+  floating-point duration `dt_f`.
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
@@ -348,10 +349,11 @@ end
 
 A container for a random variable of type `T`. The `f` field is a function or callable type
 satisfying `f(rng, t)::T` for a discrete random variable or
-`f(rng, t_last, t_next)::T` for a continuous random variable. It also stores a
-`seed::BranchingSeed` for its own random number generator, which is useful when a model
-description needs to reproduce the same draw outside of its usual parent model. The
-remaining fields, `title`, `dimensions`, and `groups`, are the same as for
+`f(rng, t_km1, dt_f)::T` for a continuous random variable, where `t_km1` is the exact
+simulation time at the beginning of the interval and `dt_f` is its floating-point duration.
+It also stores a `seed::BranchingSeed` for its own random number generator, which is useful
+when a model description needs to reproduce the same draw outside of its usual parent
+model. The remaining fields, `title`, `dimensions`, and `groups`, are the same as for
 `VariableDescription`.
 """
 struct RandomVariableDescription{T}
@@ -401,14 +403,15 @@ An example:
 ```
 rng = Xoshiro(1)
 process = ContinuousWhiteNoise(SA[1., 2.])
-process(rng, t_last, t_next) # Yields appropriate random draws.
+process(rng, t_km1, dt_f) # Yields appropriate random draws.
 ```
 """
 @kwdef struct ContinuousWhiteNoise{T}
     sigma::T
 end
-function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
-    return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
+function (nu::ContinuousWhiteNoise{T})(rng, t_km1, dt_f) where {T}
+    dt_f > 0 || throw(ArgumentError("ContinuousWhiteNoise requires a positive duration."))
+    return nu.sigma ./ sqrt(dt_f) .* randn(rng, T)
 end
 
 """
@@ -852,9 +855,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 #########
 
 # Functions for drawing from the sets of random variables
-function draw_crvs(crvs, t_last, t_next)
+function draw_crvs(crvs, t_km1, dt_f)
     return map(crvs) do rv
-        return rv.f(rv.rng, t_last, t_next)
+        return rv.f(rv.rng, t_km1, dt_f)
     end
 end
 function draw_drvs(drvs, t)
@@ -865,8 +868,8 @@ end
 
 # We turn off inlining here. This appears to help keep this allocation-free.
 @noinline function draw_wc(
-    t_last,
-    t_next,
+    t_km1,
+    dt_f,
     ommd::TypedModelDescription,
     msd::ModelStateDescription,
 )
@@ -880,7 +883,7 @@ end
 
     models = if ommd.models_have_continuous_random_variables
         map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+            draw_wc(t_km1, dt_f, ommd_submodel, msd_submodel)
         end
     else
         msd.models
@@ -888,7 +891,7 @@ end
 
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, t_last, t_next,
+            ommd.continuous_random_variables, t_km1, dt_f,
         ),
         models,
     )
@@ -931,7 +934,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.continuous_states,
         ommd.discrete_states,
         continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
+            ommd.continuous_random_variables, t, 1., # Placeholder duration
         ),
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         ommd.schedules,
@@ -1309,12 +1312,35 @@ function close_hooks(hooks, t_end, final_model)
     end
 end
 
+function validate_requested_times(t)
+
+    length(t) >= 2 || throw(ArgumentError(
+        "t must contain at least a start time and a stop time.",
+    ))
+
+    for k in eachindex(t)
+
+        isfinite(t[k]) || throw(ArgumentError("t[$k] must be finite."))
+        if k != firstindex(t) && !time_isless(t[k - 1], t[k])
+            throw(ArgumentError(
+                "t must be strictly increasing, but t[$(k - 1)] = $(t[k - 1]) " *
+                "and t[$k] = $(t[k]).",
+            ))
+        end
+
+    end
+
+    return nothing
+
+end
+
 # Build all of the things necessary for the loop and subsequent tear-down.
 function make_runtime(inputs)
 
     # This might be a tuple with (t_start, t_end), but it can also be any collection of
-    # monotonic times.
+    # strictly increasing times.
     t = [exact_time(el) for el in inputs.t]
+    validate_requested_times(t)
     t_start = first(t)
 
     # Pull out the full model description from the initialization function, as well as the
@@ -1590,9 +1616,9 @@ Runs a simulation, returning a `SimHistory` containing its log, start and stop t
 model, and termination reason.
 
 * `user_data`: Can be anything used by the `init_fcn`
-* `t`: A collection of monotonic times. The sim will step to exactly each given time, plus
-  as many other steps are required by the solver and models. At the very least, this must
-  contain a start time and end time.
+* `t`: A collection of strictly increasing, finite times. The sim will step to exactly each
+  given time, plus as many other steps as are required by the solver and models. At the very
+  least, this must contain a start time and end time.
 * `init_fcn`: Will be called with `(t_start, user_data, seed)`, where `t_start` is the first
   element of the above `t` input. This must return a `ModelDescription`.
 * `rates_fcn`: Will be called with `(t, model)` and is expected to return a `RatesOutput`.

@@ -8,7 +8,7 @@ function initialization_artifacts(model_description)
     return SystemsOfSystems.create_initialization_artifacts(model_description, context)
 end
 
-continuous_draw(rng, t_last, t_next) = t_last + t_next
+continuous_draw(rng, t_km1, dt_f) = t_km1 + dt_f
 discrete_draw(rng, t) = float(t)
 
 @testset "random variable subtree metadata" begin
