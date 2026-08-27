@@ -140,7 +140,7 @@ end
     # halving a sufficiently small fixed step should reduce global error by a factor near
     # four.
     function final_error(dt)
-        _, _, model_final = simulate(
+        history = simulate(
             nothing;
             t = (0, 1),
             init_fcn = (args...) -> ModelDescription(;
@@ -154,7 +154,7 @@ end
                 solver = Solvers.Ralston2Options(; dt),
             ),
         )
-        return abs(model_final.x - exp(1.))
+        return abs(history.model.x - exp(1.))
     end
 
     # Compare a 0.1 s step with a 0.05 s step. Halving the step size of an order-p method
