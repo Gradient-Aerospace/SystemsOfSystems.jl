@@ -267,6 +267,68 @@ function assert_regular_state_snapshots(root_history)
 
 end
 
+function missing_output_model_description()
+
+    # Declaring Missing as part of the continuous output type deliberately verifies that
+    # the value remains the no-sample sentinel rather than becoming logged data.
+    return ModelDescription(;
+        continuous_outputs = (;
+            continuous_signal = VariableDescription{Union{Missing, Float64}}(
+                missing;
+                title = "Continuous Signal",
+                dimensions = [],
+            ),
+        ),
+        discrete_outputs = (;
+            discrete_signal = VariableDescription{Float64}(
+                missing;
+                title = "Discrete Signal",
+                dimensions = [],
+            ),
+        ),
+    )
+
+end
+
+function run_missing_output_simulation(log_options)
+
+    # Both output functions decline the half-second sample. Fixed quarter-second steps make
+    # the expected retained timestamps independent of adaptive solver behavior.
+    return simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> missing_output_model_description(),
+        rates_fcn = (t, model) -> RatesOutput(;
+            outputs = (;
+                continuous_signal = t == 0.5 ? missing : t,
+            ),
+        ),
+        updates_fcn = (t, model) -> UpdatesOutput(;
+            outputs = (;
+                discrete_signal = t == 1//2 ? missing : float(t),
+            ),
+        ),
+        options = SimOptions(;
+            log = log_options,
+            solver = Solvers.RungeKutta4Options(; dt = 1//4),
+        ),
+    )
+
+end
+
+function assert_missing_outputs_are_skipped(model_history)
+
+    continuous_signal = model_history["continuous_signal"]
+    discrete_signal = model_history["discrete_signal"]
+    @test collect(continuous_signal.time) == [0., 0.25, 0.75, 1.]
+    @test collect(continuous_signal.data) == [0., 0.25, 0.75, 1.]
+    @test collect(discrete_signal.time) == [0.25, 0.75, 1.]
+    @test collect(discrete_signal.data) == [0.25, 0.75, 1.]
+    @test all(!ismissing, continuous_signal.data)
+    @test all(!ismissing, discrete_signal.data)
+
+end
+
 function assert_selected_variables(model_history)
 
     # This helper intentionally inspects the five storage categories directly. Checking
@@ -677,6 +739,31 @@ end
     disabled_snapshot_history = run_logging_simulation(disabled_snapshot_policy)
     @test isempty(disabled_snapshot_history["/"]["keep_continuous_state"].time)
     @test isempty(disabled_snapshot_history["/"]["keep_discrete_state"].time)
+
+end
+
+@testset "missing output samples" begin
+
+    # Missing always means that no output sample is available, even when the declared type
+    # includes Missing. Verify the rule first with ordinary in-memory vectors.
+    basic_history = run_missing_output_simulation(Logs.BasicLogOptions())
+    assert_missing_outputs_are_skipped(basic_history["/"])
+
+    # Direct-to-HDF5 histories use the same TimeSeries interface over different vector
+    # storage. Check both the live history and the reloaded file so omitted samples cannot
+    # be hidden by either storage layer.
+    mktempdir() do directory
+
+        filename = joinpath(directory, "missing_outputs.h5")
+        history = run_missing_output_simulation(Logs.HDF5LogOptions(filename))
+        assert_missing_outputs_are_skipped(history["/"])
+        Logs.close_log(history.log)
+
+        loaded_log, loaded_history = Logs.load_hdf5_log(filename)
+        assert_missing_outputs_are_skipped(loaded_history)
+        Logs.close_log(loaded_log)
+
+    end
 
 end
 

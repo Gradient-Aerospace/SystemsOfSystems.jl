@@ -275,6 +275,30 @@ The update above creates a discontinuity. The next continuous-time evaluation st
 SystemsOfSystems.UpdatesOutput
 ```
 
+### Unavailable Outputs
+
+A model can return `missing` for a continuous or discrete output when no sample is
+available at the current time. The logger skips that value and its timestamp.
+
+When an output has no initial value, a `VariableDescription` can declare its eventual type
+explicitly:
+
+```julia
+discrete_outputs = (;
+    measurement = VariableDescription{Float64}(
+        missing;
+        title = "Measurement",
+        dimensions = ["measurement" => "m"],
+    ),
+)
+```
+
+Skipping a value leaves no marker for the unavailable interval. Linear interpolation will
+bridge the gap between surrounding samples, and sample-and-hold interpolation will return
+the preceding value. The recorded timestamps indicate when the model actually supplied
+values. If `missing` itself must be retained as output data, it can be wrapped in a distinct
+value such as `Some(missing)` or represented by a model-specific type.
+
 ## Custom `t_next`
 
 Schedules are best for declarative event patterns known at initialization. A model can use `t_next` when its next event time is dynamic, such as when the next event depends on a state, an input, or the outcome of the current update.
