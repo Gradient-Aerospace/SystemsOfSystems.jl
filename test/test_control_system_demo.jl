@@ -90,7 +90,13 @@ end
                     @test var.dimensions == collect(var2.dimensions)
                     @test var.groups == var2.groups
                 elseif var isa VariableDescription # constants
-                    @test var.value == var2 # These are undecorated. TODO: Revisit.
+                    @test var2 isa VariableDescription
+                    @test typeof(var) == typeof(var2)
+                    @test var.value == var2.value
+                    @test var.title == var2.title
+                    @test var.dimensions == var2.dimensions
+                    @test isequal(var.groups, var2.groups)
+                    @test isequal(var.interpolator, var2.interpolator)
                 elseif var isa Logs.ModelHistory # submodels
                     @test var2 isa Logs.ModelHistory
                     @test keys(var) == keys(var2)

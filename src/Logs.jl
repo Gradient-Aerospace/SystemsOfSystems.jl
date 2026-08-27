@@ -93,6 +93,8 @@ recursive submodel histories. `path` identifies the model, using `/` for the roo
 decides which simulation-loop samples record this model.
 
 A model logging policy may omit constants and time-series fields from these named tuples.
+Constants preserve their declaration form: raw constants remain raw values, while constants
+declared with `VariableDescription` retain that description and its metadata.
 
 `ModelHistory` is mutable to give large, recursively parameterized histories reference
 semantics. Its fields are established during log construction and are not normally
@@ -116,7 +118,7 @@ giving a parent sampler semantic control over its children.
 }
     type::Type
     path::String
-    constants::CT # all elements are raw values
+    constants::CT # Elements retain their raw or VariableDescription form.
     continuous_states::XCT # all elements are TimeSeries
     discrete_states::XDT
     continuous_outputs::YCT
@@ -246,8 +248,6 @@ function record_model_description(log::AbstractLog, breadcrumbs, md, variable_se
     nothing
 end
 
-# TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators
-# for the TimeSeries, below?
 function store_constants(constants, variable_set)
     return NamedTuple(
         f => v

@@ -395,6 +395,18 @@ end
         dimensions = [SystemsOfSystems.Dimension("state", ""),],
         groups = [],
     )
+    described_constant = SystemsOfSystems.VariableDescription(
+        3.0;
+        title = "Described Constant",
+        dimensions = [SystemsOfSystems.Dimension("constant", "m"),],
+        groups = ["Constant Axis" => ["constant",],],
+        interpolator = offset_interpolator,
+    )
+    missing_constant = SystemsOfSystems.VariableDescription{Float64}(
+        missing;
+        title = "Unavailable Constant",
+        dimensions = [SystemsOfSystems.Dimension("constant", "m"),],
+    )
 
     @test described_state.interpolator === offset_interpolator
     @test described_state.groups == ["Custom State Axis" => ["state",],]
@@ -402,6 +414,12 @@ end
     @test isempty(default_described_state.groups)
 
     model_description = SystemsOfSystems.ModelDescription(;
+        constants = (;
+            raw_constant = 2.0,
+            described_constant,
+            raw_missing = missing,
+            missing_constant,
+        ),
         continuous_states = (;
             x = described_state,
             y = default_described_state,
@@ -417,6 +435,10 @@ end
     @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
     @test basic_history.continuous_states.x.groups == described_state.groups
     @test isempty(basic_history.continuous_states.y.groups)
+    @test basic_history.constants.raw_constant == 2.
+    @test basic_history.constants.described_constant === described_constant
+    @test ismissing(basic_history.constants.raw_missing)
+    @test basic_history.constants.missing_constant === missing_constant
     Logs.close_log(basic_log)
 
     direct_filename = joinpath(out_dir, "variable_description_interpolator.h5")
@@ -429,6 +451,10 @@ end
     @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
     @test hdf5_history.continuous_states.x.groups == described_state.groups
     @test isempty(hdf5_history.continuous_states.y.groups)
+    @test hdf5_history.constants.raw_constant == 2.
+    @test hdf5_history.constants.described_constant === described_constant
+    @test ismissing(hdf5_history.constants.raw_missing)
+    @test hdf5_history.constants.missing_constant === missing_constant
     Logs.close_log(hdf5_log)
 
     # Direct HDF5 logging and saving an in-memory log use separate writers. Both files must
@@ -441,6 +467,18 @@ end
         SystemsOfSystems.LinearInterpolation
     @test direct_history.continuous_states.x.groups == described_state.groups
     @test isempty(direct_history.continuous_states.y.groups)
+    @test direct_history.constants.raw_constant == 2.
+    @test ismissing(direct_history.constants.raw_missing)
+    @test typeof(direct_history.constants.missing_constant) == typeof(missing_constant)
+    @test ismissing(direct_history.constants.missing_constant.value)
+    direct_constant = direct_history.constants.described_constant
+    @test typeof(direct_constant) == typeof(described_constant)
+    @test direct_constant.value == described_constant.value
+    @test direct_constant.title == described_constant.title
+    @test direct_constant.dimensions == described_constant.dimensions
+    @test direct_constant.groups == described_constant.groups
+    @test direct_constant.interpolator isa OffsetLinearInterpolation
+    @test direct_constant.interpolator.offset == 5.
     Logs.close_log(direct_log)
 
     saved_filename = joinpath(out_dir, "saved_variable_description_groups.h5")
@@ -453,6 +491,18 @@ end
         SystemsOfSystems.LinearInterpolation
     @test saved_history.continuous_states.x.groups == described_state.groups
     @test isempty(saved_history.continuous_states.y.groups)
+    @test saved_history.constants.raw_constant == 2.
+    @test ismissing(saved_history.constants.raw_missing)
+    @test typeof(saved_history.constants.missing_constant) == typeof(missing_constant)
+    @test ismissing(saved_history.constants.missing_constant.value)
+    saved_constant = saved_history.constants.described_constant
+    @test typeof(saved_constant) == typeof(described_constant)
+    @test saved_constant.value == described_constant.value
+    @test saved_constant.title == described_constant.title
+    @test saved_constant.dimensions == described_constant.dimensions
+    @test saved_constant.groups == described_constant.groups
+    @test saved_constant.interpolator isa OffsetLinearInterpolation
+    @test saved_constant.interpolator.offset == 5.
     Logs.close_log(saved_log)
 
 end

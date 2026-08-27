@@ -52,22 +52,45 @@ function deserialize_from_bytes(bytes)
     return Serialization.deserialize(IOBuffer(bytes))
 end
 
+function record_dimensions(group, dimensions)
+    group["labels"] = [dimension.label for dimension in dimensions]
+    group["units"] = [dimension.units for dimension in dimensions]
+    return nothing
+end
+
+function record_groups(group, groups)
+
+    group["groups_are_missing"] = ismissing(groups)
+    groups_to_record = ismissing(groups) ? Pair{String, Vector{String}}[] : groups
+    group["group_labels"] = String[label for (label, _) in groups_to_record]
+    group["group_dimension_counts"] = Int[
+        length(labels) for (_, labels) in groups_to_record
+    ]
+    group["group_dimension_labels"] = String[
+        dimension_label
+        for (_, dimension_labels) in groups_to_record
+        for dimension_label in dimension_labels
+    ]
+    return nothing
+
+end
+
+function record_interpolator(group, interpolator)
+
+    group["interpolator_type"] = string(typeof(interpolator))
+    group["serialized_interpolator"] = serialize_to_bytes(interpolator)
+    return nothing
+
+end
+
 function record_time_series_metadata(group, ts)
 
     group["title"] = ts.title
     group["time_label"] = ts.time_dimension.label
     group["time_units"] = ts.time_dimension.units
-    group["labels"] = [dim.label for dim in ts.dimensions]
-    group["units"] = [dim.units for dim in ts.dimensions]
-    group["group_labels"] = String[label for (label, _) in ts.groups]
-    group["group_dimension_counts"] = Int[length(labels) for (_, labels) in ts.groups]
-    group["group_dimension_labels"] = String[
-        dimension_label
-        for (_, dimension_labels) in ts.groups
-        for dimension_label in dimension_labels
-    ]
-    group["interpolator_type"] = string(typeof(ts.interpolator))
-    group["serialized_interpolator"] = serialize_to_bytes(ts.interpolator)
+    record_dimensions(group, ts.dimensions)
+    record_groups(group, ts.groups)
+    record_interpolator(group, ts.interpolator)
     return nothing
 
 end
@@ -129,20 +152,42 @@ function create_time_series_for_var(
 
 end
 
-function record_constant(constant_group, v::VariableDescription{T}, breadcrumbs, name) where {T}
+function record_constant(
+    constant_group,
+    v::VariableDescription{T},
+    breadcrumbs,
+    name,
+) where {T}
+
+    constant_group["is_variable_description"] = true
+    constant_group["value_type"] = string(T)
+    constant_group["serialized_value_type"] = serialize_to_bytes(T)
+    constant_group["value_is_missing"] = ismissing(v.value)
     constant_group["title"] = v.title
     type = figure_out_el_type(T)
     vec = create_hdf5_vector(constant_group, "value", type; chunk_length = 1)
-    push!(vec, v.value)
-    constant_group["labels"] = String[d.label for d in v.dimensions]
-    constant_group["units"] = String[d.label for d in v.dimensions]
+    if !ismissing(v.value)
+        push!(vec, v.value)
+    end
+    record_dimensions(constant_group, v.dimensions)
+    record_groups(constant_group, v.groups)
+    record_interpolator(constant_group, v.interpolator)
+    return nothing
+
 end
+
 function record_constant(constant_group, v, breadcrumbs, name)
+
+    constant_group["is_variable_description"] = false
+    constant_group["value_is_missing"] = ismissing(v)
     constant_group["title"] = join("/" * el for el in breadcrumbs) * "/$name"
     vec = create_hdf5_vector(constant_group, "value", typeof(v); chunk_length = 1)
-    push!(vec, v)
-    constant_group["labels"] = String[]
-    constant_group["units"] = String[]
+    if !ismissing(v)
+        push!(vec, v)
+    end
+    record_dimensions(constant_group, Dimension[])
+    return nothing
+
 end
 
 function record_model_description(
@@ -233,11 +278,14 @@ function close_log(log::HDF5Log)
     end
 end
 
-function load_time_series_groups(group)
+function load_groups(group)
 
-    # Files written before dimension groups were persisted have no group datasets. Passing
-    # missing preserves their previous behavior of deriving one group per dimension.
+    # Files written before dimension groups were persisted have no group datasets. Missing
+    # lets each caller retain its previous default behavior.
     if !haskey(group, "group_labels")
+        return missing
+    end
+    if haskey(group, "groups_are_missing") && read(group["groups_are_missing"])
         return missing
     end
 
@@ -256,7 +304,7 @@ function load_time_series_groups(group)
 
 end
 
-function load_time_series_interpolator(group)
+function load_interpolator(group)
 
     # Older files did not record interpolation behavior. Missing asks the TimeSeries
     # constructor to continue deriving its default from the data type and discrete flag.
@@ -282,15 +330,43 @@ function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
         ],
         path = slug,
         discrete,
-        interpolator = load_time_series_interpolator(group),
-        groups = load_time_series_groups(group),
+        interpolator = load_interpolator(group),
+        groups = load_groups(group),
     )
     return ts
 end
 
 function load_hdf5_constant(group)
-    constant_vector = load_hdf5_vector(group["value"]) # We store constants as 1-element vectors.
-    return constant_vector[1]
+
+    value_is_missing = haskey(group, "value_is_missing") &&
+        read(group["value_is_missing"])
+    value = if value_is_missing
+        missing
+    else
+        constant_vector = load_hdf5_vector(group["value"])
+        constant_vector[1]
+    end
+
+    is_description = haskey(group, "is_variable_description") &&
+        read(group["is_variable_description"])
+    if !is_description
+        return value
+    end
+
+    value_type = deserialize_from_bytes(
+        Vector{UInt8}(read(group["serialized_value_type"])),
+    )
+    dimensions = [
+        Dimension(label, units)
+        for (label, units) in zip(read(group["labels"]), read(group["units"]))
+    ]
+    return VariableDescription{value_type}(value;
+        title = read(group["title"]),
+        dimensions,
+        groups = load_groups(group),
+        interpolator = load_interpolator(group),
+    )
+
 end
 
 function load_model_type(group, model_path)
