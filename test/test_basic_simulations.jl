@@ -217,7 +217,8 @@ end
     @test x_ts(t_mid) == x_ts.data[2]
 
     # Test our weird stepping strategy.
-    history["/"]["x"].time == vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
+    @test history["/"]["x"].time ≈
+        vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
 
 end
 

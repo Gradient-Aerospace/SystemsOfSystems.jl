@@ -30,7 +30,7 @@ function updates(t, model)
     )
 end
 
-@testset "copmlex states" begin
+@testset "complex states" begin
 
     history = simulate(nothing; init_fcn = init, updates_fcn = updates, t = 1:1:10)
 
