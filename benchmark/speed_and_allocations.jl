@@ -86,7 +86,6 @@ function make_inputs(system_specs, solver, log, t_end)
         init_fcn = ControlSystemDemo.init,
         rates_fcn = ControlSystemDemo.rates,
         updates_fcn = ControlSystemDemo.updates,
-        close_fcn = (t, model) -> nothing,
         seed = 0,
         options = SimOptions(;
             solver,

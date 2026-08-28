@@ -1426,7 +1426,7 @@ function make_runtime(inputs)
         end
 
         return (;
-            inputs.updates_fcn, inputs.close_fcn,
+            inputs.updates_fcn,
             ommd,
             t, schedules,
             msd,
@@ -1540,7 +1540,6 @@ function tear_down(runtime, loop_outputs)
     final_model = nothing
     try
         final_model = model(loop_outputs.msd)
-        runtime.close_fcn(loop_outputs.t_completed, final_model)
         return SimHistory(
             first(runtime.t),
             loop_outputs.t_completed,
@@ -1652,7 +1651,7 @@ function initialize(f::Function, model_description::ModelDescription; kwargs...)
 end
 
 """
-    simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, seed, options)
 
 Runs a simulation, returning a `SimHistory` containing its log, start and stop times, final
 model, and termination reason.
@@ -1667,8 +1666,6 @@ model, and termination reason.
 * `updates_fcn`: Will be called with `(t, model)` and is expected to return an
   `UpdatesOutput`, or `nothing` when there are no updates, outputs, replacement `t_next`, or
   stop request.
-* `close_fcn`: Will be called when simulation completes (even if an error is caught) with
-  `(t, model)`. No return value is expected.
 * `seed`: A top-level seed (Int) to control all random number generation in the sim. The
   `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
@@ -1679,11 +1676,10 @@ function simulate(
     init_fcn,
     rates_fcn = (args...) -> RatesOutput(),
     updates_fcn = (args...) -> nothing,
-    close_fcn = (t, model) -> nothing,
     seed::Union{Integer, BranchingSeed} = 0,
     options::SimOptions = SimOptions(),
 )
-    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, seed, options)
     runtime = make_runtime(inputs)
     loop_outputs = loop!(runtime)
     return tear_down(runtime, loop_outputs)

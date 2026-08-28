@@ -174,8 +174,6 @@ end
 # Here's a discrete-only sim.
 @testset failfast = false "discrete exponential" begin
 
-    is_closed = [false,]
-
     # We'll simulate a pure (and discrete) exponential decay and compare to the known answer.
     time_constant = 2.
     t_end = 5.
@@ -195,9 +193,6 @@ end
             ),
             t_next = 1.5 * t, # Just for fun, steps change size.
         ),
-        close_fcn = (t, model) -> begin
-            is_closed[1] = true
-        end,
         t = (0, t_end),
     )
     (; t_stop, model) = history
@@ -209,7 +204,6 @@ end
     @test history["/"]["x"].time[1] == 0.
     @test history["/"]["x"].data[1] == 1.
     @test history["/"]["x"].data[end] == model.x
-    @test is_closed[1] == true
 
     x_ts = history["/"]["x"]
     @test x_ts(x_ts.time[1]) == x_ts.data[1]

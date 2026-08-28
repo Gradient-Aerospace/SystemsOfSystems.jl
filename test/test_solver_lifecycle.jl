@@ -48,8 +48,7 @@ end
 
     # The update at t = 1 is already committed when the direct terminal rates evaluation
     # observes x = 10 and throws. The exception must end the simulation without rolling its
-    # reported time, final model, or close callback back to the preceding accepted sample.
-    close_inputs = Ref{Any}(nothing)
+    # reported time or final model back to the preceding accepted sample.
     history = @test_logs (:error,) simulate(
         nothing;
         t = (0, 1),
@@ -68,7 +67,6 @@ end
         updates_fcn = (t, model) -> UpdatesOutput(;
             updates = t == 1 ? (; x = 10.,) : (;),
         ),
-        close_fcn = (t, model) -> close_inputs[] = (t, model.x),
         options = SimOptions(;
             solver = Solvers.RungeKutta4Options(; dt = 1),
         ),
@@ -78,7 +76,6 @@ end
     @test history.model.x == 10.
     @test history.stop isa SystemsOfSystems.EncounteredError
     @test history.stop.time == 1.
-    @test close_inputs[] == (1//1, 10.)
     @test history["/"]["x"].time[end] == 1.
     @test history["/"]["x"].data[end] == 10.
     @test !succeeded(history)
