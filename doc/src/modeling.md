@@ -39,7 +39,7 @@ function init(t, specs, seed)
 end
 ```
 
-The purpose of a `ModelDescription` is to describe each "variable" in the model, where a variable can be a constant, state, output, sub-model, resource, or schedule. Each variable name must be unique.
+The purpose of a `ModelDescription` is to describe each "variable" in the model, where a variable can be a constant, state, output, random variable, submodel, resource, or schedule. Each variable name must be unique within its model.
 
 The model will be constructed by calling the given `type` with each variable as a keyword argument. If no `type` is given, the model will be a named tuple of all of the variables.
 

@@ -107,6 +107,76 @@ end
 
 end
 
+@testset "model variable names are unique" begin
+
+    clock = RegularSchedule(; period = 1//5)
+    resource_opened = Ref(false)
+    resource = Resource(;
+        open_args = (),
+        open_fcn = inputs -> (resource_opened[] = true),
+        close_fcn = payload -> nothing,
+    )
+    description = ModelDescription(;
+        constants = (; repeated = 1.0,),
+        continuous_states = (; repeated = 1.0,),
+        discrete_states = (; repeated = 1,),
+        continuous_outputs = (; repeated = 1.0,),
+        discrete_outputs = (; repeated = 1,),
+        continuous_random_variables = (; repeated = (rng, t, dt) -> 0.0,),
+        discrete_random_variables = (; repeated = (rng, t) -> 0.0,),
+        schedules = (; repeated = clock,),
+        models = (; repeated = ModelDescription(),),
+        resources = (; repeated = resource,),
+    )
+
+    # The diagnostic should identify both the repeated name and every category that uses
+    # it. Validation occurs before the resource above can be opened.
+    err = try
+        initialize(description)
+    catch err
+        err
+    end
+    @test err isa ArgumentError
+    @test !resource_opened[]
+    message = sprint(showerror, err)
+    @test occursin("Model / uses the name `repeated`", message)
+    for category in (
+        :constants,
+        :continuous_states,
+        :discrete_states,
+        :continuous_outputs,
+        :discrete_outputs,
+        :continuous_random_variables,
+        :discrete_random_variables,
+        :schedules,
+        :models,
+        :resources,
+    )
+        @test occursin("`$category`", message)
+    end
+
+    # Nested diagnostics should identify the model containing the conflict rather than
+    # reporting it as a root-model problem.
+    nested_description = ModelDescription(;
+        models = (;
+            child = ModelDescription(;
+                constants = (; duplicated = 1.0,),
+                discrete_outputs = (; duplicated = 1,),
+            ),
+        ),
+    )
+    nested_err = try
+        initialize(nested_description)
+    catch err
+        err
+    end
+    @test nested_err isa ArgumentError
+    nested_message = sprint(showerror, nested_err)
+    @test occursin("Model /models/child uses the name `duplicated`", nested_message)
+    @test occursin("`constants`, `discrete_outputs`", nested_message)
+
+end
+
 @testset "schedules are named model members" begin
 
     clock = RegularSchedule(; period = 1//5)

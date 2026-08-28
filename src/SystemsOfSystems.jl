@@ -91,6 +91,10 @@ VariableDescription(
     dimensions = ["m" => "kg",],
 )
 ```
+
+Within each model, names must be unique across constants, states, outputs, random variables,
+schedules, submodels, and resources. Initialization throws an `ArgumentError` describing
+any conflicts before opening model resources.
 """
 struct ModelDescription
     type
@@ -129,28 +133,55 @@ ModelDescription(;
 )
 
 """
-    validate_model_schedules(description, model_path = "/")
+    validate_model_description(description, model_path = "/")
 
-Validates every declared schedule before simulation resources are opened.
+Validates the names and schedules declared by every model before simulation resources are
+opened.
 
-Schedules must implement `AbstractSchedule`, and their names must not collide with another
-member exposed on the same constructed model. Detecting those mistakes during initialization
-produces a focused error instead of relying on named-tuple or model-constructor behavior.
+Variable names must be unique across every named category in a model. Schedules must also
+implement `AbstractSchedule`. Detecting these mistakes during initialization produces a
+focused error instead of relying on named-tuple, history-lookup, or model-constructor
+behavior.
 """
-function validate_model_schedules(description::ModelDescription, model_path = "/")
+function validate_model_description(description::ModelDescription, model_path = "/")
 
-    schedule_names = fieldnames(typeof(description.schedules))
-    other_model_member_names = (
-        fieldnames(typeof(description.constants))...,
-        fieldnames(typeof(description.continuous_states))...,
-        fieldnames(typeof(description.discrete_states))...,
-        fieldnames(typeof(description.continuous_random_variables))...,
-        fieldnames(typeof(description.discrete_random_variables))...,
-        fieldnames(typeof(description.models))...,
-        fieldnames(typeof(description.resources))...,
+    categories = (;
+        constants = fieldnames(typeof(description.constants)),
+        continuous_states = fieldnames(typeof(description.continuous_states)),
+        discrete_states = fieldnames(typeof(description.discrete_states)),
+        continuous_outputs = fieldnames(typeof(description.continuous_outputs)),
+        discrete_outputs = fieldnames(typeof(description.discrete_outputs)),
+        continuous_random_variables =
+            fieldnames(typeof(description.continuous_random_variables)),
+        discrete_random_variables =
+            fieldnames(typeof(description.discrete_random_variables)),
+        schedules = fieldnames(typeof(description.schedules)),
+        models = fieldnames(typeof(description.models)),
+        resources = fieldnames(typeof(description.resources)),
     )
 
-    for name in schedule_names
+    all_names = Symbol[]
+    for names in categories
+        append!(all_names, names)
+    end
+    for name in unique(all_names)
+        conflicting_categories = Symbol[
+            category
+            for category in keys(categories) if name in categories[category]
+        ]
+        if length(conflicting_categories) > 1
+            category_list = join(
+                ("`$category`" for category in conflicting_categories),
+                ", ",
+            )
+            throw(ArgumentError(
+                "Model $model_path uses the name `$name` in multiple categories: " *
+                "$category_list. Variable names must be unique within each model.",
+            ))
+        end
+    end
+
+    for name in fieldnames(typeof(description.schedules))
 
         schedule = strip_fluff_from_variable(description.schedules[name])
         if !(schedule isa AbstractSchedule)
@@ -162,19 +193,11 @@ function validate_model_schedules(description::ModelDescription, model_path = "/
             ))
         end
 
-        if name in other_model_member_names
-            schedule_path = model_path == "/" ? "/schedules/$name" :
-                "$model_path/schedules/$name"
-            throw(ArgumentError(
-                "Schedule $schedule_path conflicts with another model member named $name.",
-            ))
-        end
-
     end
 
     for name in fieldnames(typeof(description.models))
         submodel_path = model_path == "/" ? "/models/$name" : "$model_path/models/$name"
-        validate_model_schedules(description.models[name], submodel_path)
+        validate_model_description(description.models[name], submodel_path)
     end
 
     return nothing
@@ -1249,10 +1272,10 @@ function create_initialization_artifacts(
     context,
 )
 
-    # Schedules are immutable declarations, so validate and collect them before opening any
-    # model resources. The concrete, deduplicated tuple becomes simulation-level scheduler
-    # metadata, while each named declaration also remains available on its model form.
-    validate_model_schedules(model_description)
+    # Validate the model description before opening any resources. The concrete,
+    # deduplicated schedule tuple then becomes simulation-level scheduler metadata, while
+    # each named schedule declaration also remains available on its model form.
+    validate_model_description(model_description)
     schedules = collect_unique_schedules(model_description)
 
     # We'll keep track of resources we create along the way so that we can close them.
