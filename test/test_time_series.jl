@@ -424,6 +424,13 @@ end
             x = described_state,
             y = default_described_state,
         ),
+        models = (;
+            child = SystemsOfSystems.ModelDescription(;
+                continuous_states = (;
+                    z = 0.0,
+                ),
+            ),
+        ),
     )
 
     basic_log, basic_history = Logs.create_log(
@@ -431,8 +438,12 @@ end
         model_description,
         SystemsOfSystems.Dimension("time", "s"),
     )
+    @test basic_history.path == "/"
+    @test basic_history.models.child.path == "/child"
     @test basic_history.continuous_states.x.interpolator === offset_interpolator
     @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test basic_history.continuous_states.x.path == "/x"
+    @test basic_history.models.child.continuous_states.z.path == "/child/z"
     @test basic_history.continuous_states.x.groups == described_state.groups
     @test isempty(basic_history.continuous_states.y.groups)
     @test basic_history.constants.raw_constant == 2.
@@ -449,6 +460,8 @@ end
     )
     @test hdf5_history.continuous_states.x.interpolator === offset_interpolator
     @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test hdf5_history.continuous_states.x.path == "/x"
+    @test hdf5_history.models.child.continuous_states.z.path == "/child/z"
     @test hdf5_history.continuous_states.x.groups == described_state.groups
     @test isempty(hdf5_history.continuous_states.y.groups)
     @test hdf5_history.constants.raw_constant == 2.
@@ -463,6 +476,8 @@ end
     @test direct_history.type === basic_history.type
     @test direct_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
     @test direct_history.continuous_states.x.interpolator.offset == 5.
+    @test direct_history.continuous_states.x.path == "/x"
+    @test direct_history.models.child.continuous_states.z.path == "/child/z"
     @test direct_history.continuous_states.y.interpolator isa
         SystemsOfSystems.LinearInterpolation
     @test direct_history.continuous_states.x.groups == described_state.groups
@@ -487,6 +502,8 @@ end
     @test saved_history.type === basic_history.type
     @test saved_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
     @test saved_history.continuous_states.x.interpolator.offset == 5.
+    @test saved_history.continuous_states.x.path == "/x"
+    @test saved_history.models.child.continuous_states.z.path == "/child/z"
     @test saved_history.continuous_states.y.interpolator isa
         SystemsOfSystems.LinearInterpolation
     @test saved_history.continuous_states.x.groups == described_state.groups

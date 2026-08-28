@@ -40,9 +40,9 @@ function SystemsOfSystems.plot_ts!(f, ts::TimeSeries)
     # at the appropriate time. (stairs! would work too.)
     plot_fcn = ts.discrete ? scatter! : lines!
 
-    # Combine the path and the title (if the path isn't empty). If the whole result is
-    # empty, that's fine; GLMakie will just ignore it.
-    title = if isempty(ts.path)
+    # Combine distinct path and title metadata. If the whole result is empty, that's fine;
+    # GLMakie will just ignore it.
+    title = if isempty(ts.path) || ts.title == ts.path
         ts.title
     elseif isempty(ts.title)
         ts.path

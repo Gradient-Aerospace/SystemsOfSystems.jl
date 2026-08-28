@@ -420,6 +420,7 @@ function create_time_series_for_var(
 ) where {T}
 
     model_path = join("/" * el for el in breadcrumbs)
+    signal_path = model_path * "/" * var_name
 
     return TimeSeries(;
         var.title,
@@ -427,7 +428,7 @@ function create_time_series_for_var(
         data = T[],
         time_dimension,
         var.dimensions,
-        path = model_path,
+        path = signal_path,
         discrete,
         var.interpolator,
         var.groups,
@@ -452,7 +453,7 @@ function create_time_series_for_var(
         time = Float64[],
         data = T[],
         time_dimension,
-        path = model_path,
+        path = signal_path,
         discrete,
     )
 
