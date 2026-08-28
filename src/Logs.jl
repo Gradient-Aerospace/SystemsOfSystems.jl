@@ -58,7 +58,7 @@ function get_sampling_group!(sampling_groups, sampler)
 
 end
 
-function collect_sampling_groups_in_subtree(sampling_group, models)
+function collect_sampling_groups_in_subtree(sampling_group, runtimes)
 
     # Begin with this model's group, then append each distinct group used below it. Identity
     # is appropriate because get_sampling_group! has already canonicalized shared samplers.
@@ -67,8 +67,8 @@ function collect_sampling_groups_in_subtree(sampling_group, models)
     # longer tuple types in the loop. The final splat recovers a concretely typed tuple for
     # allocation-free iteration in the simulation loop.
     sampling_groups = Any[sampling_group]
-    for model in models
-        for group in model.sampling_groups_in_subtree
+    for runtime in runtimes
+        for group in runtime.sampling_groups_in_subtree
             if !any(existing === group for existing in sampling_groups)
                 push!(sampling_groups, group)
             end
@@ -86,11 +86,10 @@ end
 """
     ModelHistory
 
-A container for the history and logging configuration of one model.
+A container for the recorded history of one model.
 
 The named-tuple fields contain the model's constants, state and output time series, and
-recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
-decides which simulation-loop samples record this model.
+recursive submodel histories. `path` identifies the model, using `/` for the root.
 
 A model logging policy may omit constants and time-series fields from these named tuples.
 Constants preserve their declaration form: raw constants remain raw values, while constants
@@ -99,11 +98,6 @@ declared with `VariableDescription` retain that description and its metadata.
 `ModelHistory` is mutable to give large, recursively parameterized histories reference
 semantics. Its fields are established during log construction and are not normally
 reassigned; samples are appended to the contained time series.
-
-The internal `sampling_group` stores this model's current sampling decision. Models with
-the same sampler share a group, so its trigger is evaluated once per logging opportunity.
-`sampling_groups_in_subtree` lets the recursive logger reject inactive subtrees without
-giving a parent sampler semantic control over its children.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -112,9 +106,6 @@ giving a parent sampler semantic control over its children.
     YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
-    ST   <: Samplers.AbstractSampler,
-    SGT,
-    SGST <: Tuple,
 }
     type::Type
     path::String
@@ -124,9 +115,16 @@ giving a parent sampler semantic control over its children.
     continuous_outputs::YCT
     discrete_outputs::YDT
     models::MT
-    sampler::ST = Samplers.CompleteSampler()
-    sampling_group::SGT = nothing # Shared current decision for this model.
-    sampling_groups_in_subtree::SGST = () # Distinct decisions at or below this model.
+end
+
+# This parallel tree contains the compiled logging behavior needed only while a simulation
+# is running. Keeping it separate leaves ModelHistory as a clean persisted result while
+# preserving type-stable traversal of heterogeneous child histories.
+struct ModelLoggingRuntime{HT <: ModelHistory, MT <: NamedTuple, SGT, SGST <: Tuple}
+    history::HT
+    models::MT
+    sampling_group::SGT
+    sampling_groups_in_subtree::SGST
 end
 
 function Base.keys(mh::ModelHistory)
@@ -277,32 +275,26 @@ function create_time_series_for_model!(
     md::ModelDescription,
     time_dimension,
     logging_policy::AbstractLoggingPolicy,
-    sampling_groups = Any[],
 )
 
     # Form this model's path.
     model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
 
-    # See what should be logged (variable set) and when it should be logged (sampler).
+    # See which variables should be logged for this model.
     model_logging_policy = get_model_logging_policy(logging_policy, model_path)
     variable_set = get_variable_set(model_logging_policy)
-    sampler = get_sampler(model_logging_policy)
-    sampling_group = get_sampling_group!(sampling_groups, sampler)
 
     # Record any extra stuff.
     record_model_description(log, breadcrumbs, md, variable_set)
 
-    # Build the child histories first so this model can cache every distinct sampling group
-    # used in its subtree.
+    # Build the child histories.
     models = NamedTuple(
         f => create_time_series_for_model!(
             log, vcat(breadcrumbs, string(f)), m,
-            time_dimension, logging_policy, sampling_groups,
+            time_dimension, logging_policy,
         )
         for (f, m) in pairs(md.models)
     )
-    sampling_groups_in_subtree =
-        collect_sampling_groups_in_subtree(sampling_group, models)
 
     # Create the time histories.
     mh = ModelHistory(;
@@ -327,15 +319,40 @@ function create_time_series_for_model!(
             discrete = true,
         ),
         models,
-        sampler = sampler,
-        sampling_group,
-        sampling_groups_in_subtree,
     )
 
     # Put it in the dictionary of time histories.
     log[model_path] = mh
 
     return mh
+
+end
+
+function create_model_logging_runtime(
+    mh::ModelHistory,
+    logging_policy::AbstractLoggingPolicy,
+    sampling_groups = Any[],
+)
+
+    # Compile this model's sampler into a mutable decision shared by every model assigned
+    # the same sampler object.
+    model_logging_policy = get_model_logging_policy(logging_policy, mh.path)
+    sampler = get_sampler(model_logging_policy)
+    sampling_group = get_sampling_group!(sampling_groups, sampler)
+
+    models = NamedTuple(
+        f => create_model_logging_runtime(m, logging_policy, sampling_groups)
+        for (f, m) in pairs(mh.models)
+    )
+    sampling_groups_in_subtree =
+        collect_sampling_groups_in_subtree(sampling_group, models)
+
+    return ModelLoggingRuntime(
+        mh,
+        models,
+        sampling_group,
+        sampling_groups_in_subtree,
+    )
 
 end
 
@@ -391,6 +408,10 @@ A container for in-memory `BasicLog` options.
 """
 @kwdef struct BasicLogOptions <: AbstractLogOptions
     logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
+end
+
+function create_model_logging_runtime(mh::ModelHistory, options::BasicLogOptions)
+    return create_model_logging_runtime(mh, options.logging_policy)
 end
 
 """
@@ -483,6 +504,9 @@ An empty container for `NullLog` options, which disable history logging.
 """
 struct NullLogOptions <: AbstractLogOptions end
 
+create_model_logging_runtime(::Nothing, ::NullLogOptions) = nothing
+create_model_logging_runtime(::Nothing, ::Nothing) = nothing
+
 """
     NullLog
 
@@ -528,6 +552,10 @@ faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
     logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
+end
+
+function create_model_logging_runtime(mh::ModelHistory, options::HDF5LogOptions)
+    return create_model_logging_runtime(mh, options.logging_policy)
 end
 
 # For backwards compatibility.

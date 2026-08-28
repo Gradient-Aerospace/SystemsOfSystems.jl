@@ -1093,7 +1093,18 @@ accepts the discrete update at the rational endpoint. Returning establishes that
 as the simulation loop's latest committed time and state. Terminal rate sampling occurs
 afterward in `loop!`, where an exception cannot hide the committed sample.
 """
-function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integrator, hooks)
+function step!(
+    logging_runtime,
+    t,
+    schedules,
+    ommd,
+    problem,
+    updates_fcn,
+    t_last,
+    msd,
+    integrator,
+    hooks,
+)
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
     # belong to the runtime integrator; the scheduler owns only exact external boundaries.
@@ -1129,7 +1140,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # Record the committed state before entering the fallible solver. The matching output
     # is recorded only if the solver returns authoritative beginning-of-step rates.
     SimulationLogging.log_continuous_state_stuff!(
-        t_last, float(t_last), mh, msd,
+        t_last, float(t_last), logging_runtime, msd,
     )
 
     # Ask the integrator for one accepted numerical step. A failure has no accepted
@@ -1149,7 +1160,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # The beginning rates come from the accepted attempt. Rejected attempts and intermediate
     # Runge-Kutta stages never reach output logging or model stop handling.
     SimulationLogging.log_continuous_output_stuff!(
-        float(t_last), mh, result.rates_at_start,
+        float(t_last), logging_runtime, result.rates_at_start,
     )
     stop = find_model_requested_stop(result.rates_at_start)
 
@@ -1195,7 +1206,7 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # matching output is recorded separately after rates have been evaluated successfully.
     #
     SimulationLogging.log_discrete_stuff!(
-        t_next, float(t_next), mh,
+        t_next, float(t_next), logging_runtime,
         updates, msd, updated_msd,
     )
 
@@ -1368,9 +1379,10 @@ function make_runtime(inputs)
         log, mh = Logs.create_log(
             inputs.options.log, model_description, inputs.options.time_dimension,
         )
+        logging_runtime = Logs.create_model_logging_runtime(mh, inputs.options.log)
 
         # Log the initial stuff.
-        SimulationLogging.log_initial_discrete_stuff!(t_start, mh, ommd)
+        SimulationLogging.log_initial_discrete_stuff!(t_start, logging_runtime, ommd)
 
         # Adapt the hierarchical model to the small mathematical interface consumed by
         # continuous-time integrators, then create runtime solver state for this simulation.
@@ -1395,7 +1407,7 @@ function make_runtime(inputs)
             ommd,
             t, schedules,
             msd,
-            log, mh,
+            log, logging_runtime,
             problem, integrator,
             hooks, manager,
         )
@@ -1422,7 +1434,7 @@ so resources, hooks, and logs can still be closed by `simulate`.
 function loop!(runtime)
 
     # Pull these out here so we aren't constantly pulling them in the loop.
-    mh = runtime.mh
+    logging_runtime = runtime.logging_runtime
     t = runtime.t
     schedules = runtime.schedules
     ommd = runtime.ommd
@@ -1446,7 +1458,8 @@ function loop!(runtime)
             # update are complete. Assigning its result here is the simulation's commit
             # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
-                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
+                logging_runtime,
+                t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks
             )
 
@@ -1464,7 +1477,7 @@ function loop!(runtime)
                 # over a terminal model request or `ReachedEndTime`.
                 terminal_stop = stop isa UnknownStopReason ? nothing : stop
                 SimulationLogging.log_continuous_state_stuff!(
-                    t_completed, float(t_completed), mh, msd,
+                    t_completed, float(t_completed), logging_runtime, msd,
                 )
                 terminal_rates = ContinuousProblems.evaluate_rates(
                     problem,
@@ -1472,7 +1485,7 @@ function loop!(runtime)
                     msd,
                 )
                 SimulationLogging.log_continuous_output_stuff!(
-                    float(t_completed), mh, terminal_rates,
+                    float(t_completed), logging_runtime, terminal_rates,
                 )
                 terminal_stop = first_stop(
                     terminal_stop,

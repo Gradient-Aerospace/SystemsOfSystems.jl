@@ -594,9 +594,9 @@ end
     @test independent_history["/child"]["keep_discrete_state"].time ==
         [0.0, 0.25, 0.5, 0.75, 1.0]
     @test independent_history["/child"]["keep_discrete_state"].data == [0, 1, 2, 3, 4]
-    @test independent_history["/"].sampling_group !==
-        independent_history["/child"].sampling_group
-    @test length(independent_history["/"].sampling_groups_in_subtree) == 2
+    @test !hasproperty(independent_history["/"], :sampler)
+    @test !hasproperty(independent_history["/"], :sampling_group)
+    @test !hasproperty(independent_history["/"], :sampling_groups_in_subtree)
 
     # NullModelLoggingPolicy used to stop traversal as well as suppressing its own model.
     # Under independent sampling, a null root must not hide a specifically enabled child.
@@ -633,9 +633,6 @@ end
         @test model_history["keep_discrete_state"].data == [1, 3]
         @test model_history["keep_discrete_output"].time == [0.25, 0.75]
     end
-    @test shared_root.sampling_group === shared_child.sampling_group
-    @test shared_root.sampling_groups_in_subtree == (shared_root.sampling_group,)
-
     # Sharing a group must also share the work, rather than simply sharing a sampler field.
     # This simulation has five accepted times. Each is a discrete logging opportunity and a
     # continuous logging opportunity, so the sampler should be called twice per time—not
