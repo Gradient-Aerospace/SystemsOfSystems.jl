@@ -251,6 +251,7 @@ function record_model_description(
         string(k)
         for k in keys(md.discrete_outputs) if is_variable_in_set(k, variable_set)
     ]
+    names_group["models"] = String[string(k) for k in keys(md.models)]
 
     return nothing
 
@@ -399,15 +400,21 @@ function load_hdf5_model!(mhd, group, breadcrumbs)
 
     slug = isempty(breadcrumbs) ? "/" : join("/" * model for model in breadcrumbs)
 
-    # Construct the histories of the submodels.
-    models = if haskey(group, "models")
-        NamedTuple(
-            Symbol(k) => load_hdf5_model!(mhd, group["models"][k], vcat(breadcrumbs, k))
-            for k in keys(group["models"])
-        )
+    # HDF5 group iteration does not preserve the NamedTuple field order. New files record
+    # it explicitly; the group keys retain the old behavior for files written previously.
+    model_names = if haskey(group["names"], "models")
+        read(group["names/models"])
+    elseif haskey(group, "models")
+        collect(keys(group["models"]))
     else
-        (;)
+        String[]
     end
+
+    # Construct the histories of the submodels.
+    models = NamedTuple(
+        Symbol(k) => load_hdf5_model!(mhd, group["models"][k], vcat(breadcrumbs, k))
+        for k in model_names
+    )
 
     # Figure out which times series is which kind of thing.
     constant_names = read(group["names/constants"])
@@ -527,6 +534,9 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
             save_time_series_to_hdf5(fid, group_path, ts; kwargs...)
         end
     end
+
+    # Preserve the NamedTuple order separately because HDF5 group iteration does not.
+    fid["$this_path/names/models"] = String[string(name) for name in keys(mh.models)]
 
     # Do the submodels.
     for (name, smh) in pairs(mh.models)

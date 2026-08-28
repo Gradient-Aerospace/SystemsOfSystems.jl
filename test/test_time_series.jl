@@ -430,6 +430,8 @@ end
                     z = 0.0,
                 ),
             ),
+            zebra = SystemsOfSystems.ModelDescription(),
+            alpha = SystemsOfSystems.ModelDescription(),
         ),
     )
 
@@ -440,6 +442,7 @@ end
     )
     @test basic_history.path == "/"
     @test basic_history.models.child.path == "/child"
+    @test keys(basic_history.models) == (:child, :zebra, :alpha)
     @test basic_history.continuous_states.x.interpolator === offset_interpolator
     @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
     @test basic_history.continuous_states.x.path == "/x"
@@ -462,6 +465,7 @@ end
     @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
     @test hdf5_history.continuous_states.x.path == "/x"
     @test hdf5_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(hdf5_history.models) == (:child, :zebra, :alpha)
     @test hdf5_history.continuous_states.x.groups == described_state.groups
     @test isempty(hdf5_history.continuous_states.y.groups)
     @test hdf5_history.constants.raw_constant == 2.
@@ -478,6 +482,7 @@ end
     @test direct_history.continuous_states.x.interpolator.offset == 5.
     @test direct_history.continuous_states.x.path == "/x"
     @test direct_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(direct_history.models) == (:child, :zebra, :alpha)
     @test direct_history.continuous_states.y.interpolator isa
         SystemsOfSystems.LinearInterpolation
     @test direct_history.continuous_states.x.groups == described_state.groups
@@ -504,6 +509,7 @@ end
     @test saved_history.continuous_states.x.interpolator.offset == 5.
     @test saved_history.continuous_states.x.path == "/x"
     @test saved_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(saved_history.models) == (:child, :zebra, :alpha)
     @test saved_history.continuous_states.y.interpolator isa
         SystemsOfSystems.LinearInterpolation
     @test saved_history.continuous_states.x.groups == described_state.groups
