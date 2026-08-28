@@ -35,6 +35,14 @@ function (interpolator::ConstantInterpolation)(ts, t)
     return interpolator.value
 end
 
+# This lets us exercise SystemsOfSystems' unsupported-constant handling without depending
+# on the implementation details of HDF5Vectors' built-in type support.
+struct UnsupportedHDF5Constant end
+
+function HDF5Vectors.storage_style(::Type{UnsupportedHDF5Constant}; kwargs...)
+    error("Intentional unsupported constant for testing.")
+end
+
 struct IMUMeasurement
     accelerometer::Float64
     angular_rate::Float64
@@ -527,6 +535,44 @@ end
     @test saved_constant.interpolator isa OffsetLinearInterpolation
     @test saved_constant.interpolator.offset == 5.
     Logs.close_log(saved_log)
+
+end
+
+@testset "unsupported HDF5 constants" begin
+
+    model_description = SystemsOfSystems.ModelDescription(;
+        constants = (;
+            unsupported = UnsupportedHDF5Constant(),
+        ),
+    )
+    time_dimension = SystemsOfSystems.Dimension("time", "s")
+    warning = r"/unsupported constant of type .*UnsupportedHDF5Constant"
+
+    # Direct logging should keep the live initialization history usable while warning that
+    # the constant will not be present when the file is loaded.
+    direct_filename = joinpath(out_dir, "unsupported_direct_constant.h5")
+    direct_log, direct_history = @test_logs (:warn, warning) Logs.create_log(
+        Logs.HDF5LogOptions(direct_filename),
+        model_description,
+        time_dimension,
+    )
+    @test haskey(direct_history.constants, :unsupported)
+    Logs.close_log(direct_log)
+    loaded_direct_log, loaded_direct_history = Logs.load_hdf5_log(direct_filename)
+    @test !haskey(loaded_direct_history.constants, :unsupported)
+    Logs.close_log(loaded_direct_log)
+
+    # Saving an in-memory log follows the same best-effort rule and diagnostic path.
+    basic_log, = Logs.create_log(
+        Logs.BasicLogOptions(),
+        model_description,
+        time_dimension,
+    )
+    saved_filename = joinpath(out_dir, "unsupported_saved_constant.h5")
+    @test_logs (:warn, warning) Logs.save_log_to_hdf5(saved_filename, basic_log)
+    loaded_saved_log, loaded_saved_history = Logs.load_hdf5_log(saved_filename)
+    @test !haskey(loaded_saved_history.constants, :unsupported)
+    Logs.close_log(loaded_saved_log)
 
 end
 

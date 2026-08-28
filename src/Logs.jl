@@ -542,9 +542,10 @@ A container for HDF5-backed log options, where `filename` is the output file.
 `logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
 
-An HDF5 log records the same selected continuous and discrete states, outputs, constants,
-and metadata as a `BasicLog`, but stores time-series data on disk. This supports histories
-that would not fit in RAM, at the cost of slower logging.
+An HDF5 log records the same selected continuous and discrete states, outputs, and metadata
+as a `BasicLog`, but stores time-series data on disk. Constants that cannot be represented
+by HDF5Vectors are omitted with a warning. This supports histories that would not fit in
+RAM, at the cost of slower logging.
 
 If the selected history fits in memory and only the final artifact needs to be HDF5, it is
 faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
@@ -577,6 +578,8 @@ end
     save_log_to_hdf5(filename, log)
 
 Saves a log to an HDF5 file in the same format used by the HDF5Log.
+
+Constants that cannot be represented by HDF5Vectors are omitted with a warning.
 """
 function save_log_to_hdf5(filename, log)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_log_to_hdf5`.")

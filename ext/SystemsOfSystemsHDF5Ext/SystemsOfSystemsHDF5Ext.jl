@@ -17,9 +17,10 @@ import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
 """
     HDF5Log(; fid, model_history_dict)
 
-A container for the same continuous and discrete states, outputs, constants, and metadata as
-a `BasicLog`, with an HDF5 file as the underlying storage. This prevents the complete log
-from being stored in RAM, which is critical for very long simulations. However, it is much
+A container for the same continuous and discrete states, outputs, and metadata as a
+`BasicLog`, with an HDF5 file as the underlying storage. Constants that cannot be
+represented by HDF5Vectors are omitted with a warning. This prevents the complete log from
+being stored in RAM, which is critical for very long simulations. However, it is much
 slower than a `BasicLog`.
 
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
@@ -224,8 +225,11 @@ function record_model_description(
             record_constant(constant_group, v, breadcrumbs, k)
             push!(saved_constants, string(k))
         catch err
+            trace = catch_backtrace()
             p = join("/" * el for el in breadcrumbs) * "/$k"
-            @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
+            message = "Failed to record the $p constant of type $(typeof(v)) in the " *
+                "HDF5 output file. Skipping."
+            @warn message exception = (err, trace)
             HDF5.delete_object(constant_group)
         end
     end
@@ -515,9 +519,12 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
         try
             record_constant(constant_group, constant, breadcrumbs, string(name))
             push!(saved_constants, string(name))
-        catch
+        catch err
+            trace = catch_backtrace()
             p = join("/" * el for el in breadcrumbs) * "/$name"
-            @warn "Failed to record the $p constant in the HDF5 output file. Skipping."
+            message = "Failed to record the $p constant of type $(typeof(constant)) in " *
+                "the HDF5 output file. Skipping."
+            @warn message exception = (err, trace)
             HDF5.delete_object(constant_group)
         end
     end
@@ -552,6 +559,8 @@ end
 
 Saves any other type of log in the same format used by HDF5Log so that it can be loaded as
 an HDF5Log or loaded outside of Julia. Returns nothing.
+
+Constants that cannot be represented by HDF5Vectors are omitted with a warning.
 
 Any additional keyword arguments are passed through to `HDF5Vectors.copy_to_hdf5_vector`.
 These can allow better control over how the data is stored in the HDF5 file. See that
