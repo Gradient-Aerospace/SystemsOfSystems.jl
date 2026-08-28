@@ -303,6 +303,52 @@ end
 
 end
 
-# TODO: Test continuous variables that _don't_ have rates outputs sometimes.
+@testset "omitted continuous rates preserve states" begin
+
+    # Continuous states and submodels without active dynamics may be omitted from a
+    # RatesOutput. A discrete state changes the rates structure only between accepted
+    # steps, keeping every Runge-Kutta attempt internally consistent.
+    history = simulate(
+        nothing;
+        t = (0, 2),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0., y = 0.),
+            discrete_states = (; auxiliary_dynamics_active = true,),
+            models = (;
+                child = ModelDescription(;
+                    continuous_states = (; z = 0.,),
+                ),
+            ),
+        ),
+        rates_fcn = (t, model) -> if model.auxiliary_dynamics_active
+            RatesOutput(;
+                rates = (; x = 1., y = 2.),
+                models = (;
+                    child = RatesOutput(; rates = (; z = 3.,)),
+                ),
+            )
+        else
+            RatesOutput(; rates = (; x = 1.,))
+        end,
+        updates_fcn = (t, model) -> if t == 1
+            UpdatesOutput(; updates = (; auxiliary_dynamics_active = false,),)
+        else
+            nothing
+        end,
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    # All three states propagate over the first second. Thereafter x continues, while the
+    # omitted y derivative and child RatesOutput leave their states unchanged.
+    @test history.model.x ≈ 2.
+    @test history.model.y ≈ 2.
+    @test history.model.child.z ≈ 3.
+    @test history["/"]["x"].data ≈ [0., 1., 2.]
+    @test history["/"]["y"].data ≈ [0., 2., 2.]
+    @test history["/child"]["z"].data ≈ [0., 3., 3.]
+
+end
 
 end # TestBasicSimulations
