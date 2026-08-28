@@ -59,6 +59,45 @@ using SystemsOfSystems: ContinuousProblems, Solvers
 
 end
 
+@testset "Dormand-Prince maximum step size" begin
+
+    function run_constant_rate(max_dt)
+
+        return simulate(
+            nothing;
+            t = (0, 2),
+            init_fcn = (args...) -> ModelDescription(;
+                continuous_states = (; x = 0.,),
+            ),
+            rates_fcn = (t, model) -> RatesOutput(;
+                rates = (; x = 1.,),
+            ),
+            options = SimOptions(;
+                solver = Solvers.DormandPrince54Options(;
+                    initial_dt = 1//4,
+                    max_dt,
+                ),
+            ),
+        )
+
+    end
+
+    # With no integration error, the adaptive controller grows its step after the first
+    # quarter second. A large finite limit should therefore behave exactly like no limit.
+    uncapped = run_constant_rate(1//0)
+    large_cap = run_constant_rate(10//1)
+    @test uncapped["/"]["x"].time == [0., 0.25, 2.]
+    @test large_cap["/"]["x"].time == uncapped["/"]["x"].time
+    @test large_cap.model.x ≈ uncapped.model.x ≈ 2.
+
+    # A half-second limit constrains every step after the initial quarter-second request;
+    # the final shortened step lands exactly on the requested end time.
+    capped = run_constant_rate(1//2)
+    @test capped["/"]["x"].time == [0., 0.25, 0.75, 1.25, 1.75, 2.]
+    @test capped.model.x ≈ 2.
+
+end
+
 @testset "failed steps in DP54 for max_dt = $max_dt" for max_dt in (10//1, 1//10)
 
     # This should generate a sinusoid. When the time step is really large, it should fail

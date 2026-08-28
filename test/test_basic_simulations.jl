@@ -31,7 +31,7 @@ end
 
     fixed_dt = 0.1
     solver = if solver_type == "dp54"
-        Solvers.DormandPrince54Options() # TODO: Test that max_dt limits/doesn't limit.
+        Solvers.DormandPrince54Options()
     elseif solver_type == "rk2"
         Solvers.Ralston2Options(; dt = fixed_dt)
     elseif solver_type == "rk4"
