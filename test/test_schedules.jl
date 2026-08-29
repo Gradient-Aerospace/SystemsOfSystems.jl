@@ -314,4 +314,52 @@ end
 
 end
 
+@testset "coincident requests and dynamic time cancellation" begin
+
+    coincident_time = 1//2
+    cancellation_time = 5//8
+    canceled_time = 3//4
+    schedule = ExplicitTestSchedule((coincident_time,))
+    update_times = Rational{Int64}[]
+
+    history = simulate(
+        nothing;
+        t = (0, coincident_time, cancellation_time, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            discrete_states = (; count = 0,),
+            schedules = (; schedule,),
+            t_next = coincident_time,
+        ),
+        updates_fcn = (t, model) -> begin
+
+            push!(update_times, t)
+            replacement = if t == coincident_time
+                canceled_time
+            elseif t == cancellation_time
+                NO_T_NEXT
+            else
+                KEEP_T_NEXT
+            end
+            return UpdatesOutput(;
+                updates = (; count = model.count + 1,),
+                t_next = replacement,
+            )
+
+        end,
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    # The user, schedule, and initial dynamic request all select one half-second sample.
+    # That update requests three quarters, but the later user sample cancels it before it
+    # occurs. The canceled time therefore produces neither a step nor an update.
+    @test update_times == [coincident_time, cancellation_time, 1//1]
+    @test count(==(coincident_time), update_times) == 1
+    @test canceled_time ∉ update_times
+    @test history.model.count == 3
+    @test history.stop isa SystemsOfSystems.ReachedEndTime
+
+end
+
 end # TestSchedules
