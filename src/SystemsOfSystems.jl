@@ -12,6 +12,7 @@ export ModelDescription, VariableDescription, RandomVariableDescription,
 # Utilities
 export Dimension,
     BranchingSeed, branch,
+    normalized_scalar_error, normalized_variable_error,
     TimeSeries, AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation, select,
     plot_ts,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
@@ -21,6 +22,7 @@ export Dimension,
     is_regular_step_triggering, # backward compatibility
     Samplers, LoggingPolicies
 
+using Dimensions: eachdim
 using Random: Xoshiro, randn
 
 include("SimulationTimes.jl")
@@ -789,6 +791,48 @@ describe(stop::EncounteredError) =
 # concrete hierarchical method remains with the simulation's random-variable machinery,
 # below.
 function draw_wc end
+
+"""
+    normalized_scalar_error(value, embedded_value, absolute_tolerance, relative_tolerance)
+
+Return the normalized error between two scalar values. The allowable error is the larger
+of the absolute tolerance and the relative tolerance times `abs(value)`. A result no
+greater than one satisfies the tolerances.
+"""
+function normalized_scalar_error(
+    value,
+    embedded_value,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    allowable_error = max(absolute_tolerance, abs(value) * relative_tolerance)
+    return abs(value - embedded_value) / allowable_error
+end
+
+"""
+    normalized_variable_error(value, embedded_value, absolute_tolerance, relative_tolerance)
+
+Return the maximum normalized scalar error between two values. The default method compares
+the scalar components returned by `Dimensions.eachdim`. Types that do not support `eachdim`
+can define a specialized method.
+"""
+function normalized_variable_error(
+    value,
+    embedded_value,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    return maximum(
+        normalized_scalar_error(
+            component,
+            embedded_component,
+            absolute_tolerance,
+            relative_tolerance,
+        )
+        for (component, embedded_component) in zip(eachdim(value), eachdim(embedded_value));
+        init = 0.,
+    )
+end
 
 include("Logs.jl")
 include("SimulationLogging.jl")

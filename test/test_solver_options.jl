@@ -1,8 +1,53 @@
 module TestSolverOptions
 
+using StaticArrays: SVector
 using Test
 using SystemsOfSystems
 using SystemsOfSystems: ContinuousProblems, Solvers
+
+struct OscillatorState
+    position::Float64
+    velocity::Float64
+end
+
+function Base.:+(a::OscillatorState, b::OscillatorState)
+    return OscillatorState(
+        a.position + b.position,
+        a.velocity + b.velocity,
+    )
+end
+
+function Base.:*(scale::Number, state::OscillatorState)
+    return OscillatorState(
+        scale * state.position,
+        scale * state.velocity,
+    )
+end
+
+function SystemsOfSystems.normalized_variable_error(
+    value::OscillatorState,
+    embedded_value::OscillatorState,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    return max(
+        normalized_scalar_error(
+            value.position,
+            embedded_value.position,
+            absolute_tolerance,
+            relative_tolerance,
+        ),
+        normalized_scalar_error(
+            value.velocity,
+            embedded_value.velocity,
+            absolute_tolerance,
+            relative_tolerance,
+        ),
+    )
+end
+
+oscillator_components(state::SVector{2, Float64}) = Tuple(state)
+oscillator_components(state::OscillatorState) = (state.position, state.velocity)
 
 @testset "wide model propagation" begin
 
@@ -56,6 +101,52 @@ using SystemsOfSystems: ContinuousProblems, Solvers
         end
         @test propagated[index].continuous_states.x == expected_value
     end
+
+end
+
+@testset "structured continuous state using $label" for (label, make_state) in (
+    ("SVector", (position, velocity) -> SVector{2, Float64}(position, velocity)),
+    ("custom struct", OscillatorState),
+)
+
+    initial_state = make_state(1., 0.)
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (;
+                oscillator = VariableDescription(
+                    initial_state;
+                    title = "Oscillator State",
+                    dimensions = ["position" => "m", "velocity" => "m/s"],
+                ),
+            ),
+        ),
+        rates_fcn = (t, model) -> begin
+
+            position, velocity = oscillator_components(model.oscillator)
+            return RatesOutput(;
+                rates = (;
+                    oscillator = make_state(velocity, -position),
+                ),
+            )
+
+        end,
+        options = SimOptions(;
+            solver = Solvers.DormandPrince54Options(;
+                abs_tol = 1e-9,
+                rel_tol = 1e-9,
+            ),
+        ),
+    )
+
+    # Both representations follow the same harmonic-oscillator solution while retaining
+    # their concrete type through propagation and logging.
+    position, velocity = oscillator_components(history.model.oscillator)
+    @test position ≈ cos(1.) atol = 1e-8
+    @test velocity ≈ -sin(1.) atol = 1e-8
+    @test history.model.oscillator isa typeof(initial_state)
+    @test all(value isa typeof(initial_state) for value in history["/"]["oscillator"].data)
 
 end
 

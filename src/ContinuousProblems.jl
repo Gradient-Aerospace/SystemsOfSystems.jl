@@ -16,7 +16,7 @@ method.
 module ContinuousProblems
 
 using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
-    copy_model_state_description_except, draw_wc, model
+    copy_model_state_description_except, draw_wc, model, normalized_variable_error
 
 """
     ContinuousProblem(description, rates_fcn)
@@ -278,34 +278,9 @@ function propagate(
     )
 end
 
-# The default error policy is the existing componentwise infinity norm. Traversal belongs
-# here because the adapter understands which pieces of ModelStateDescription are continuous
-# state. The adaptive controller only needs the final scalar ratio. A future variable-level
-# normalized-error function can be selected by problem.error_policy without changing the
-# controller or any numerical method.
-
-function normalized_component_error(value, error, absolute_tolerance, relative_tolerance)
-    allowable_error = max(absolute_tolerance, abs(value) * relative_tolerance)
-    return abs(error) / allowable_error
-end
-
-function normalized_variable_error(
-    value,
-    embedded_value,
-    absolute_tolerance,
-    relative_tolerance,
-)
-    return maximum(
-        normalized_component_error(
-            component,
-            component - embedded_component,
-            absolute_tolerance,
-            relative_tolerance,
-        )
-        for (component, embedded_component) in zip(value, embedded_value);
-        init = 0.,
-    )
-end
+# The adaptive controller receives one normalized error per continuous variable through
+# the public `normalized_variable_error` interface. This adapter traverses the continuous
+# state hierarchy and takes the maximum across variables and submodels.
 
 """
     normalized_error(problem, state, embedded_state, absolute_tolerance, relative_tolerance)
