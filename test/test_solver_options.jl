@@ -49,6 +49,30 @@ end
 oscillator_components(state::SVector{2, Float64}) = Tuple(state)
 oscillator_components(state::OscillatorState) = (state.position, state.velocity)
 
+struct RecordingSolverOptions{O} <: Solvers.AbstractSolverOptions
+    solver::O
+    step_count::Base.RefValue{Int}
+end
+
+struct RecordingIntegrator{I} <: Solvers.AbstractIntegrator
+    integrator::I
+    step_count::Base.RefValue{Int}
+end
+
+function Solvers.create_integrator(
+    options::RecordingSolverOptions,
+    problem,
+    initial_state,
+)
+    integrator = Solvers.create_integrator(options.solver, problem, initial_state)
+    return RecordingIntegrator(integrator, options.step_count)
+end
+
+function Solvers.step!(integrator::RecordingIntegrator, problem, request)
+    integrator.step_count[] += 1
+    return Solvers.step!(integrator.integrator, problem, request)
+end
+
 @testset "wide model propagation" begin
 
     # A wide, flat model hierarchy is where recursive Base.tail tuple processing becomes
@@ -101,6 +125,35 @@ oscillator_components(state::OscillatorState) = (state.position, state.velocity)
         end
         @test propagated[index].continuous_states.x == expected_value
     end
+
+end
+
+@testset "user-defined solver interface" begin
+
+    # A user-defined solver only needs to supply options, a runtime integrator, and the two
+    # solver protocol methods. This small wrapper makes those calls observable while
+    # delegating the numerical method itself to the built-in RK4 integrator.
+    step_count = Ref(0)
+    solver = RecordingSolverOptions(
+        Solvers.RungeKutta4Options(; dt = 1//4),
+        step_count,
+    )
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.,),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (; x = 2.,),
+        ),
+        options = SimOptions(; solver),
+    )
+
+    @test step_count[] == 4
+    @test history["/"]["x"].time == collect(0. : 0.25 : 1.)
+    @test history.model.x ≈ 2.
+    @test history.t_stop == 1
 
 end
 
