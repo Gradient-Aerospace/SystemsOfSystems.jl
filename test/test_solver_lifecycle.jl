@@ -4,6 +4,24 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Solvers
 
+struct UnconvergeableState
+    value::Float64
+end
+
+Base.:+(a::UnconvergeableState, b::UnconvergeableState) =
+    UnconvergeableState(a.value + b.value)
+Base.:*(scale::Number, state::UnconvergeableState) =
+    UnconvergeableState(scale * state.value)
+
+function SystemsOfSystems.normalized_variable_error(
+    value::UnconvergeableState,
+    embedded_value::UnconvergeableState,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    return 2.
+end
+
 # These tests describe the boundary between the continuous solver and the hybrid simulation
 # loop. In particular, a solver step is not merely an internal numerical detail: every
 # accepted step is followed by hooks, discrete random draws, and the model's discrete
@@ -153,6 +171,41 @@ end
     @test history.stop isa Solvers.SolverStepSizeUnderflow
     @test length(x_history.time) == 2
     @test x_history.data[end] == history.model.x
+
+end
+
+@testset "Dormand-Prince reports failure after exhausting rejected attempts" begin
+
+    # A user-defined error policy can reject every numerical attempt. This deterministic
+    # policy exercises the retry limit without relying on floating-point underflow or a
+    # specially tuned differential equation.
+    initial_state = UnconvergeableState(0.)
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = initial_state,),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (; x = UnconvergeableState(1.),),
+        ),
+        options = SimOptions(;
+            log = nothing,
+            solver = Solvers.DormandPrince54Options(;
+                initial_dt = 1,
+                max_dt = 1,
+                abs_tol = 1.,
+                rel_tol = 0.,
+            ),
+        ),
+    )
+
+    @test history.t_stop == 0
+    @test history.model.x == initial_state
+    @test history.stop isa Solvers.SolverFailedToConverge
+    @test !succeeded(history)
+    @test SystemsOfSystems.describe(history.stop) ==
+        "The solver failed to converge at time 0.0."
 
 end
 

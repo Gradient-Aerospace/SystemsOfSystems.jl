@@ -242,6 +242,41 @@ end
 
 end
 
+@testset "Dormand-Prince tolerance controls accuracy" begin
+
+    function run_exponential(absolute_tolerance)
+        return simulate(
+            nothing;
+            t = (0, 1),
+            init_fcn = (args...) -> ModelDescription(;
+                continuous_states = (; x = 1.),
+            ),
+            rates_fcn = (t, model) -> RatesOutput(;
+                rates = (; x = model.x,),
+            ),
+            options = SimOptions(;
+                solver = Solvers.DormandPrince54Options(;
+                    initial_dt = 1,
+                    max_dt = 1,
+                    abs_tol = absolute_tolerance,
+                    rel_tol = 0.,
+                ),
+            ),
+        )
+    end
+
+    loose = run_exponential(1e-3)
+    tight = run_exponential(1e-9)
+    loose_error = abs(loose.model.x - exp(1.))
+    tight_error = abs(tight.model.x - exp(1.))
+
+    # Tightening the requested local error should make the controller accept more steps
+    # and produce a substantially more accurate final value.
+    @test length(tight["/"]["x"].time) > length(loose["/"]["x"].time)
+    @test tight_error < loose_error / 1_000
+
+end
+
 @testset "failed steps in DP54 for max_dt = $max_dt" for max_dt in (10//1, 1//10)
 
     # This should generate a sinusoid. When the time step is really large, it should fail
