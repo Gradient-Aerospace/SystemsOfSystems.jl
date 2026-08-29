@@ -258,6 +258,26 @@ end
 
 end
 
+@testset "do-block initialization closes resources after errors" begin
+
+    resource_was_closed = Ref(false)
+    description = ModelDescription(;
+        resources = (;
+            resource = Resource(;
+                open_args = (),
+                open_fcn = inputs -> nothing,
+                close_fcn = payload -> (resource_was_closed[] = true),
+            ),
+        ),
+    )
+
+    @test_throws "Expected" initialize(description) do model
+        error("Expected")
+    end
+    @test resource_was_closed[]
+
+end
+
 @testset "Close gets called in case of error" begin
 
     # It doesn't matter which resource type we use for this, so we'll use a generic

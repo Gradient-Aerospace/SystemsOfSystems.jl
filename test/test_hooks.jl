@@ -76,4 +76,35 @@ end
 
 end
 
+@testset "Hooks close after simulation errors" begin
+
+    t_storage = Float64[]
+    x_storage = Float64[]
+    t_final_storage = Float64[]
+    x_final_storage = Float64[]
+    history = @test_logs (:error,) simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.,),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(;
+            rates = (; x = 1.,),
+        ),
+        updates_fcn = (t, model) -> error("Expected"),
+        options = SimOptions(;
+            hooks = [
+                StorageHookOptions(t_storage, x_storage, t_final_storage, x_final_storage),
+            ],
+        ),
+    )
+
+    # The failure is caught by the simulation, but teardown must still close the hook with
+    # the last committed time and model.
+    @test !succeeded(history)
+    @test only(t_final_storage) == history.t_stop
+    @test only(x_final_storage) == history.model.x
+
+end
+
 end
