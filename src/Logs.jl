@@ -226,18 +226,13 @@ end
 export AbstractLogOptions, AbstractLog, create_log, close_log, gather_all_time_series
 
 """
-A set of options for setting up the log of the appropriate type.
+The common supertype for options that select a log implementation.
 """
 abstract type AbstractLogOptions end
 
 """
-All AbstractLog types are expected to obey this interface to work with simulations in
-SystemsOfSystems.
-
-Functions:
-* `create_log`
-* `close_log`
-* `getindex`, `setindex!`, `keys`, `values`, `pairs`
+The common supertype for log implementations provided by SystemsOfSystems and its package
+extensions. Logs support dictionary-like access to their model histories.
 """
 abstract type AbstractLog end
 

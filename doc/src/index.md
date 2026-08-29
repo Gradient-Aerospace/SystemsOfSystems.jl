@@ -178,8 +178,6 @@ There are three types of logs today:
 * [`NullLogOptions`](@ref SystemsOfSystems.Logs.NullLogOptions): Logs nothing. This is good for speed when all that's needed from the sim is the final state of the models.
 * [`HDF5LogOptions`](@ref SystemsOfSystems.Logs.HDF5LogOptions): Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
 
-Users can implement their own logs according to the log interface.
-
 ### LoggingPolicies
 
 Logging policies provide a way to control which variables of which models get logged and when. This becomes useful as the tree of models becomes very large, and models mix many different levels of dynamics (some very fast, some slow). We can save runtime, RAM, and disk space (if we save the log to disk) by controlling the logging policies.
