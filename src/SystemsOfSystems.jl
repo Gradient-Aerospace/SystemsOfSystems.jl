@@ -494,23 +494,56 @@ This is mutable only to put it on the heap.
 end
 
 # User-function outputs are sparse, but any names they do contain must belong to the model
-# description. Named-tuple keys are part of their concrete types, allowing the compiler to
-# specialize these small inline checks for each output shape.
+# description. Named-tuple keys are part of their concrete types, so these checks can be
+# resolved when each output shape is compiled instead of repeated at runtime.
 
-@inline function validate_output_names(
-    values,
-    expected_names::Tuple,
+@generated function validate_output_names(
+    values::V,
+    expected::E,
     model_path,
     section,
-)
-    for name in keys(values)
-        if name ∉ expected_names
-            throw(ArgumentError(
-                "Model $model_path returned unexpected field `$name` in `$section`.",
-            ))
-        end
+) where {V <: NamedTuple, E <: NamedTuple}
+    unexpected_names = setdiff(fieldnames(V), fieldnames(E))
+    if isempty(unexpected_names)
+        return :(nothing)
     end
-    return nothing
+
+    name = first(unexpected_names)
+    message = " returned unexpected field `$name` in `"
+    return :(throw(ArgumentError(string("Model ", model_path, $message, section, "`."))))
+end
+
+@generated function validate_output_names(
+    values::V,
+    expected_1::E1,
+    expected_2::E2,
+    model_path,
+    section,
+) where {V <: NamedTuple, E1 <: NamedTuple, E2 <: NamedTuple}
+    expected_names = (fieldnames(E1)..., fieldnames(E2)...)
+    unexpected_names = setdiff(fieldnames(V), expected_names)
+    if isempty(unexpected_names)
+        return :(nothing)
+    end
+
+    name = first(unexpected_names)
+    message = " returned unexpected field `$name` in `"
+    return :(throw(ArgumentError(string("Model ", model_path, $message, section, "`."))))
+end
+
+@generated function validate_model_outputs(
+    validate,
+    descriptions::D,
+    outputs::O,
+) where {D <: NamedTuple, O <: NamedTuple}
+    names = intersect(fieldnames(D), fieldnames(O))
+    validations = map(names) do name
+        return :(validate(
+            getfield(descriptions, $(QuoteNode(name))),
+            getfield(outputs, $(QuoteNode(name))),
+        ))
+    end
+    return Expr(:block, validations..., :(nothing))
 end
 
 @inline function validate_rates_output(
@@ -519,25 +552,23 @@ end
 )
     validate_output_names(
         output.rates,
-        keys(description.continuous_states),
+        description.continuous_states,
         description.model_path,
         "RatesOutput.rates",
     )
     validate_output_names(
         output.outputs,
-        keys(description.continuous_outputs),
+        description.continuous_outputs,
         description.model_path,
         "RatesOutput.outputs",
     )
     validate_output_names(
         output.models,
-        keys(description.models),
+        description.models,
         description.model_path,
         "RatesOutput.models",
     )
-    for name in keys(output.models)
-        validate_rates_output(description.models[name], output.models[name])
-    end
+    validate_model_outputs(validate_rates_output, description.models, output.models)
     return nothing
 end
 
@@ -546,28 +577,26 @@ validate_updates_output(::TypedModelDescription, ::Nothing) = nothing
     description::TypedModelDescription,
     output::UpdatesOutput,
 )
-    state_names = (
-        keys(description.continuous_states)...,
-        keys(description.discrete_states)...,
-    )
     validate_output_names(
-        output.updates, state_names, description.model_path, "UpdatesOutput.updates",
+        output.updates,
+        description.continuous_states,
+        description.discrete_states,
+        description.model_path,
+        "UpdatesOutput.updates",
     )
     validate_output_names(
         output.outputs,
-        keys(description.discrete_outputs),
+        description.discrete_outputs,
         description.model_path,
         "UpdatesOutput.outputs",
     )
     validate_output_names(
         output.models,
-        keys(description.models),
+        description.models,
         description.model_path,
         "UpdatesOutput.models",
     )
-    for name in keys(output.models)
-        validate_updates_output(description.models[name], output.models[name])
-    end
+    validate_model_outputs(validate_updates_output, description.models, output.models)
     return nothing
 end
 
