@@ -56,6 +56,17 @@ end
 Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
     Dimensions.StructDimensionStyle()
 
+function scalar_time_series(time, data; discrete = false)
+    return SystemsOfSystems.TimeSeries(;
+        title = "Scalar",
+        time,
+        data,
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        path = "/scalar",
+        discrete,
+    )
+end
+
 @testset "TimeSeries indexing" begin
 
     ts = SystemsOfSystems.TimeSeries(;
@@ -185,6 +196,32 @@ Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
+
+end
+
+@testset "TimeSeries interpolation boundaries" begin
+
+    # Built-in interpolation requires at least one sample. A single sample remains valid at
+    # its exact time for either policy.
+    for discrete in (false, true)
+        empty_series = scalar_time_series(Float64[], Float64[]; discrete)
+        single_series = scalar_time_series([1.], [7.]; discrete)
+
+        @test_throws "Cannot evaluate an empty TimeSeries." empty_series(0.)
+        @test single_series(1.) == 7.
+    end
+
+    # Repeated times represent a discontinuity. Evaluation at that time returns the last
+    # stored value, so the series switches from the pre-update to the post-update branch.
+    continuous = scalar_time_series([0., 1., 1., 2.], [0., 1., 10., 20.])
+    discrete = scalar_time_series(
+        [0., 1., 1., 2.], [0., 1., 10., 20.]; discrete = true,
+    )
+    @test continuous(0.5) == 0.5
+    @test continuous(1.) == 10.
+    @test continuous(1.5) == 15.
+    @test discrete(prevfloat(1.)) == 0.
+    @test discrete(1.) == 10.
 
 end
 
