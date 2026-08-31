@@ -526,7 +526,8 @@ end
 # HDF5Log #
 ###########
 
-export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
+export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5,
+    save_time_series_to_hdf5, load_time_series_from_hdf5
 
 """
     HDF5LogOptions(; filename, logging_policy)
@@ -580,8 +581,26 @@ function save_log_to_hdf5(filename, log)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_log_to_hdf5`.")
 end
 
+"""
+    save_time_series_to_hdf5(fid, path, time_series; kwargs...)
+
+Saves a `TimeSeries` beneath `path` in an open HDF5 file. Additional keyword arguments are
+passed to HDF5Vectors when storing the time and data vectors.
+"""
 function save_time_series_to_hdf5(args...; kwargs...)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_time_series_to_hdf5`.")
+end
+
+"""
+    load_time_series_from_hdf5(fid, path)
+
+Loads the `TimeSeries` stored beneath `path` in an open HDF5 file. Its time and data remain
+backed by that file, which must remain open while the returned series is in use. The
+interpolator is restored using Julia serialization, so files should come only from trusted
+sources and custom interpolator types must be available in the loading environment.
+"""
+function load_time_series_from_hdf5(args...)
+    error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_time_series_from_hdf5`.")
 end
 
 end

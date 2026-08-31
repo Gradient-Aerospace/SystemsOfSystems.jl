@@ -12,7 +12,8 @@ using SystemsOfSystems.Logs: ModelHistory, AbstractLogOptions, AbstractLog,
 
 import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
     record_model_description, close_log,
-    load_hdf5_log, save_log_to_hdf5, save_time_series_to_hdf5
+    load_hdf5_log, save_log_to_hdf5,
+    save_time_series_to_hdf5, load_time_series_from_hdf5
 
 """
     HDF5Log(; fid, model_history_dict)
@@ -87,6 +88,8 @@ end
 function record_time_series_metadata(group, ts)
 
     group["title"] = ts.title
+    group["path"] = ts.path
+    group["discrete"] = ts.discrete
     group["time_label"] = ts.time_dimension.label
     group["time_units"] = ts.time_dimension.units
     record_dimensions(group, ts.dimensions)
@@ -322,9 +325,8 @@ function load_interpolator(group)
 
 end
 
-function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
-    slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    ts = TimeSeries(;
+function load_hdf5_timeseries(group)
+    return TimeSeries(;
         title = read(group["title"]),
         time = load_hdf5_vector(group["time"]),
         data = load_hdf5_vector(group["data"]),
@@ -333,13 +335,14 @@ function load_hdf5_timeseries(group, breadcrumbs, var_name; discrete)
             Dimension(label, units)
             for (label, units) in zip(read(group["labels"]), read(group["units"]))
         ],
-        path = slug,
-        discrete,
+        path = read(group["path"]),
+        discrete = read(group["discrete"]),
         interpolator = load_interpolator(group),
         groups = load_groups(group),
     )
-    return ts
 end
+
+load_time_series_from_hdf5(fid, path) = load_hdf5_timeseries(fid[path])
 
 function load_hdf5_constant(group)
 
@@ -435,19 +438,19 @@ function load_hdf5_model!(mhd, group, breadcrumbs)
             for k in constant_names
         ),
         continuous_states = NamedTuple(
-            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = false)
+            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k])
             for k in continuous_state_names
         ),
         discrete_states = NamedTuple(
-            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = true)
+            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k])
             for k in discrete_state_names
         ),
         continuous_outputs = NamedTuple(
-            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = false)
+            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k])
             for k in continuous_output_names
         ),
         discrete_outputs = NamedTuple(
-            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k], breadcrumbs, k; discrete = true)
+            Symbol(k) => load_hdf5_timeseries(group["timeseries"][k])
             for k in discrete_output_names
         ),
         models,
