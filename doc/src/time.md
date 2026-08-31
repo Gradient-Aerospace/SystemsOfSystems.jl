@@ -1,6 +1,6 @@
 # Simulation Time
 
-SystemsOfSystems distinguishes exact, official simulation times from the floating-point times used for numerical integration. User-requested times, schedule occurrences, and model-requested `t_next` values are official times. This allows unrelated periodic systems to remain aligned without accumulating floating-point from step to step.
+SystemsOfSystems distinguishes exact, official simulation times from the floating-point times used for numerical integration. User-requested times, schedule occurrences, and model-requested `t_next` values are official times. This allows unrelated periodic systems to remain aligned without accumulating floating-point roundoff errors from step to step.
 
 The numerical solver evaluates `rates_fcn` at floating-point times between official samples. In contrast, `init_fcn`, `updates_fcn`, schedules, and `t_next` use exact times at the simulation boundary.
 
