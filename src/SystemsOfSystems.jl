@@ -245,14 +245,15 @@ end
 """
 A container for a model's continuous-time derivatives and outputs.
 
-* `rates`: A named tuple corresponding with the continuous variables, where each field
-  contains the rate of change of that continuous variable.
-* `outputs`: A named tuple of continuous-time outputs (must match the original
-  `ModelDescription`).
-* `models`: A named tuple containing the `RatesOutput` for each submodel.
+* `rates`: A named tuple mapping continuous-state names to their rates of change.
+* `outputs`: A named tuple mapping continuous-output names to their values.
+* `models`: A named tuple mapping submodel names to their `RatesOutput` values.
 * `stop`: Set to true to request that the simulation stop after this accepted sample
   completes. Stop requests from rejected solver attempts and intermediate Runge-Kutta
   stages are ignored.
+
+Each named tuple may omit fields that have nothing to report, but cannot contain names that
+are absent from the corresponding section of the original `ModelDescription`.
 """
 struct RatesOutput{RT, OT, MT}
     rates::RT
@@ -272,14 +273,15 @@ A container for a model's discrete-time updates and outputs. A model that has no
 outputs, replacement `t_next`, or stop request at a sample may return `nothing` instead of
 an empty `UpdatesOutput()`.
 
-* `updates`: A named tuple mapping state name (can be a continuous or discrete state) to the
-   updated value
-* `outputs`: A named tuple of discrete-time outputs (must match the original
-  `ModelDescription`).
-* `models`: A named tuple containing the `UpdatesOutput` or `nothing` for each submodel.
+* `updates`: A named tuple mapping continuous- or discrete-state names to updated values.
+* `outputs`: A named tuple mapping discrete-output names to their values.
+* `models`: A named tuple mapping submodel names to their `UpdatesOutput` or `nothing`.
 * `t_next`: A replacement for the model's next requested time. When omitted, it defaults to
   `KEEP_T_NEXT` and retains the previous request. `NO_T_NEXT` cancels a finite request.
 * `stop`: Set to true to request that the simulation stop after this update is accepted.
+
+Each named tuple may omit fields that have nothing to report, but cannot contain names that
+are absent from the corresponding section of the original `ModelDescription`.
 """
 struct UpdatesOutput{UT, OT, MT}
     updates::UT
@@ -469,10 +471,13 @@ end
 An internal model description with the `VariableDescription` metadata removed and all types
 fixed as type parameters. This is used by the simulation loop.
 
+The model path is retained for runtime diagnostics.
+
 This is mutable only to put it on the heap.
 """
 @kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
+    model_path::String
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
@@ -486,6 +491,84 @@ This is mutable only to put it on the heap.
     models_have_discrete_random_variables::Bool
     resources::RT
     t_next::ExactTime
+end
+
+# User-function outputs are sparse, but any names they do contain must belong to the model
+# description. Named-tuple keys are part of their concrete types, allowing the compiler to
+# specialize these small inline checks for each output shape.
+
+@inline function validate_output_names(
+    values,
+    expected_names::Tuple,
+    model_path,
+    section,
+)
+    for name in keys(values)
+        if name ∉ expected_names
+            throw(ArgumentError(
+                "Model $model_path returned unexpected field `$name` in `$section`.",
+            ))
+        end
+    end
+    return nothing
+end
+
+@inline function validate_rates_output(
+    description::TypedModelDescription,
+    output::RatesOutput,
+)
+    validate_output_names(
+        output.rates,
+        keys(description.continuous_states),
+        description.model_path,
+        "RatesOutput.rates",
+    )
+    validate_output_names(
+        output.outputs,
+        keys(description.continuous_outputs),
+        description.model_path,
+        "RatesOutput.outputs",
+    )
+    validate_output_names(
+        output.models,
+        keys(description.models),
+        description.model_path,
+        "RatesOutput.models",
+    )
+    for name in keys(output.models)
+        validate_rates_output(description.models[name], output.models[name])
+    end
+    return nothing
+end
+
+validate_updates_output(::TypedModelDescription, ::Nothing) = nothing
+@inline function validate_updates_output(
+    description::TypedModelDescription,
+    output::UpdatesOutput,
+)
+    state_names = (
+        keys(description.continuous_states)...,
+        keys(description.discrete_states)...,
+    )
+    validate_output_names(
+        output.updates, state_names, description.model_path, "UpdatesOutput.updates",
+    )
+    validate_output_names(
+        output.outputs,
+        keys(description.discrete_outputs),
+        description.model_path,
+        "UpdatesOutput.outputs",
+    )
+    validate_output_names(
+        output.models,
+        keys(description.models),
+        description.model_path,
+        "UpdatesOutput.models",
+    )
+    for name in keys(output.models)
+        validate_updates_output(description.models[name], output.models[name])
+    end
+    return nothing
 end
 
 strip_fluff_from_variable(var) = var
@@ -602,6 +685,7 @@ function create_typed_model_description!(
     # Strip the "fluff" from everything, returning just the types we'll need in the loop.
     return TypedModelDescription(;
         type = desc.type,
+        model_path = isempty(model_path) ? "/" : model_path,
         constants = map(strip_fluff_from_variable, desc.constants),
         continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
         discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
@@ -1255,6 +1339,7 @@ function step!(
 
     # Perform the discrete update from t_next^- to t_next^+.
     updates = updates_fcn(t_next, model(msd))
+    validate_updates_output(ommd, updates)
 
     # A model's first update stop is considered only if an earlier accepted rates evaluation
     # or hook has not already supplied the reason for this sample to be the last.
