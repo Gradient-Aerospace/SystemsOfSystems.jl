@@ -993,7 +993,7 @@ Base.getindex(history::SimHistory, k) = history.log[k]
 Base.keys(history::SimHistory) = keys(history.log)
 Base.values(history::SimHistory) = values(history.log)
 Base.pairs(history::SimHistory) = pairs(history.log)
-# TODO: There's more stuff we could pass through.
+Logs.gather_all_time_series(history::SimHistory) = Logs.gather_all_time_series(history.log)
 
 # We could allow a user to "close" a history, just passing along the call to the log,
 # so that they don't have to worry about the internal log, but I'm not sure what the point
