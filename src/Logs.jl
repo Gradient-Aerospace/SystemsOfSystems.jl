@@ -215,6 +215,13 @@ function gather_all_time_series!(tss, mh::ModelHistory, slug)
     end
 end
 
+"""
+    gather_all_time_series(history)
+
+Collects every `TimeSeries` below a `ModelHistory`, `AbstractLog`, or `SimHistory` into an
+ordered dictionary. Keys identify both the model and variable, such as
+`"/aircraft/imu:angular_velocity"`.
+"""
 function gather_all_time_series(mh::ModelHistory)
     tss = OrderedDict{String, TimeSeries}()
     gather_all_time_series!(tss, mh, "")
@@ -563,10 +570,13 @@ HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 """
     load_hdf5_log(filename)
 
-Loads a log from an HDF5 file. Interpolators and model types are restored using Julia
-serialization, so files should come only from trusted sources. Custom interpolator types
-must be available in the loading environment. An unavailable model type produces a warning
-and is represented by `Missing` without preventing the remaining history from loading.
+Loads a log from an HDF5 file and returns `(log, root_model_history)`. The log owns the open
+file and should be closed with `close_log` when it is no longer needed.
+
+Interpolators and model types are restored using Julia serialization, so files should come
+only from trusted sources. Custom interpolator types must be available in the loading
+environment. An unavailable model type produces a warning and is represented by `Missing`
+without preventing the remaining history from loading.
 """
 function load_hdf5_log(filename)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_hdf5_log`.")

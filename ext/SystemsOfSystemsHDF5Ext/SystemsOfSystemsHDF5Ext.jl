@@ -467,7 +467,8 @@ end
 """
     load_hdf5_log(filename::AbstractString)
 
-Loads an HDF5Log from the given HDF5 file. Returns (log, model_history).
+Loads an `HDF5Log` from the given HDF5 file and returns `(log, root_model_history)`. The log
+owns the open file and should be closed with `close_log` when it is no longer needed.
 """
 function load_hdf5_log(filename::AbstractString)
     fid = HDF5.h5open(filename)

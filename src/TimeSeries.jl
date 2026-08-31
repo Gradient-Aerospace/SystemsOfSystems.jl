@@ -242,7 +242,7 @@ Keyword arguments:
 Example:
 
 ```
-accelerometer_ts = select(measurements_ts) do measurement
+accelerometer_ts = SystemsOfSystems.select(measurements_ts) do measurement
     measurement.accelerometer
 end
 ```
@@ -460,12 +460,30 @@ function Base.show(io::IO, ::MIME"text/plain", ts::TimeSeries)
     end
 end
 
-# SystemsOfSystemsMakieExt picks this up:
+"""
+    plot_ts(time_series; kwargs...)
+
+Creates a Makie figure containing one or more time series. A Makie backend such as GLMakie
+or CairoMakie must be loaded before calling this function.
+"""
 function plot_ts(ts; kwargs...)
-    error("There is no implementation of plot_ts. Import GLMakie (or any Makie package) to use plot_ts.")
+    error(
+        "There is no implementation of plot_ts. Import GLMakie (or any Makie package) " *
+        "to use plot_ts.",
+    )
 end
+
+"""
+    plot_ts!(target, time_series; kwargs...)
+
+Adds one or more time series to an existing Makie figure or layout target. A Makie backend
+such as GLMakie or CairoMakie must be loaded before calling this function.
+"""
 function plot_ts!(f, ts; kwargs...)
-    error("There is no implementation of plot_ts!. Import GLMakie (or any Makie package) to use plot_ts.")
+    error(
+        "There is no implementation of plot_ts!. Import GLMakie (or any Makie package) " *
+        "to use plot_ts!.",
+    )
 end
 
 end

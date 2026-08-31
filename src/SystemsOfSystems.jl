@@ -1,3 +1,7 @@
+"""
+SystemsOfSystems is a simulation engine for hierarchical models with continuous and
+discrete dynamics, events, random variables, resources, and configurable logging.
+"""
 module SystemsOfSystems
 
 # Running simulations
@@ -890,6 +894,11 @@ struct EncounteredError <: AbstractFailureReason
     trace::Any
 end
 
+"""
+    describe(reason::AbstractTerminationReason)
+
+Returns a concise, human-readable description of why a simulation stopped.
+"""
 describe(reason::AbstractTerminationReason) =
     string(typeof(reason))
 describe(stop::UnknownStopReason) =
