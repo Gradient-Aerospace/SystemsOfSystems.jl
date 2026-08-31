@@ -12,15 +12,22 @@ export ModelDescription, VariableDescription, RandomVariableDescription,
 # Utilities
 export Dimension,
     BranchingSeed, branch,
-    normalized_scalar_error, normalized_variable_error,
-    TimeSeries, AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation, select,
-    plot_ts,
+    TimeSeries, SampleAndHold, LinearInterpolation,
+    plot_ts, plot_ts!,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
     on_triggering, is_triggering, next_trigger_time, next_regular_time,
+    Samplers, LoggingPolicies
+
+# Qualified public interfaces
+public SimulationTimes,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, # backward compatibility
-    Samplers, LoggingPolicies
+    AbstractTimeSeriesInterpolator, select,
+    normalized_scalar_error, normalized_variable_error,
+    AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
+    ReachedEndTime, ModelRequestedStop, HookRequestedStop, EncounteredError,
+    describe
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn

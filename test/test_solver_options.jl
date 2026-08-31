@@ -31,13 +31,13 @@ function SystemsOfSystems.normalized_variable_error(
     relative_tolerance,
 )
     return max(
-        normalized_scalar_error(
+        SystemsOfSystems.normalized_scalar_error(
             value.position,
             embedded_value.position,
             absolute_tolerance,
             relative_tolerance,
         ),
-        normalized_scalar_error(
+        SystemsOfSystems.normalized_scalar_error(
             value.velocity,
             embedded_value.velocity,
             absolute_tolerance,

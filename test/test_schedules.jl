@@ -26,7 +26,7 @@ function SystemsOfSystems.next_trigger_time(schedule::ExplicitTestSchedule, t)
             return trigger_time
         end
     end
-    return NO_T_NEXT
+    return SystemsOfSystems.NO_T_NEXT
 end
 
 """
@@ -71,8 +71,11 @@ end
     # negative, and infinite periods are invalid declarations.
     @test_throws ArgumentError RegularSchedule(; period = 0)
     @test_throws ArgumentError RegularSchedule(; period = -1//10)
-    @test_throws ArgumentError RegularSchedule(; period = NO_T_NEXT)
-    @test_throws ArgumentError OffsetRegularSchedule(1//10, NO_T_NEXT)
+    @test_throws ArgumentError RegularSchedule(; period = SystemsOfSystems.NO_T_NEXT)
+    @test_throws ArgumentError OffsetRegularSchedule(
+        1//10,
+        SystemsOfSystems.NO_T_NEXT,
+    )
 
 end
 
@@ -336,9 +339,9 @@ end
             replacement = if t == coincident_time
                 canceled_time
             elseif t == cancellation_time
-                NO_T_NEXT
+                SystemsOfSystems.NO_T_NEXT
             else
-                KEEP_T_NEXT
+                SystemsOfSystems.KEEP_T_NEXT
             end
             return UpdatesOutput(;
                 updates = (; count = model.count + 1,),

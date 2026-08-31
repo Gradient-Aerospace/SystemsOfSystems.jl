@@ -8,6 +8,10 @@ See `AbstractHook` for more.
 """
 module Hooks
 
+public AbstractHookOptions, AbstractHook, HookOutputs,
+    create_hook, update_hook!, close_hook!,
+    ProgressBarOptions, SimTimeoutOptions, ClockSyncOptions
+
 using ProgressMeter: Progress, update!, finish!
 using ..SimulationTimes: ExactTime, float_duration
 

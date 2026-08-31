@@ -262,7 +262,7 @@ end
             )
         end,
         updates_fcn = (t, model) -> begin
-            if is_regular_step_triggering(t, model.dt)
+            if Schedules.is_regular_step_triggering(t, model.dt)
                 UpdatesOutput(
                     updates = (;
                         force = -model.kp * model.position - model.kd * model.velocity,

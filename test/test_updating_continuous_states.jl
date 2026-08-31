@@ -33,7 +33,7 @@ end
                 x_dot = -9.81,
             ),
         ),
-        updates_fcn = (t, model) -> if is_regular_step_triggering(t, 1//1)
+        updates_fcn = (t, model) -> if Schedules.is_regular_step_triggering(t, 1//1)
             UpdatesOutput(;
                 updates = (;
                     x = 1.,

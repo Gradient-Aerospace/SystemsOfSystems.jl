@@ -4,6 +4,8 @@ using Test
 using SystemsOfSystems
 
 const SimulationTimes = SystemsOfSystems.SimulationTimes
+const KEEP_T_NEXT = SimulationTimes.KEEP_T_NEXT
+const NO_T_NEXT = SimulationTimes.NO_T_NEXT
 
 @testset "overflow-safe floating durations" begin
 
@@ -120,7 +122,11 @@ end
     # periodic sequence.
     @test_throws ArgumentError next_regular_time(NO_T_NEXT, 1//10)
     @test_throws ArgumentError next_regular_time(0//1, NO_T_NEXT)
-    @test_throws ArgumentError is_regular_step_triggering(0//1, 1//10, NO_T_NEXT)
+    @test_throws ArgumentError Schedules.is_regular_step_triggering(
+        0//1,
+        1//10,
+        NO_T_NEXT,
+    )
 
 end
 
@@ -187,7 +193,11 @@ end
         ),
         updates_fcn = (t, model) -> begin
 
-            update_a = if is_regular_step_triggering(t, period_a, offset_a)
+            update_a = if Schedules.is_regular_step_triggering(
+                t,
+                period_a,
+                offset_a,
+            )
                 push!(triggers_a, t)
                 UpdatesOutput(;
                     updates = (; n = model.a.n + 1,),
@@ -196,7 +206,11 @@ end
             else
                 nothing
             end
-            update_b = if is_regular_step_triggering(t, period_b, offset_b)
+            update_b = if Schedules.is_regular_step_triggering(
+                t,
+                period_b,
+                offset_b,
+            )
                 push!(triggers_b, t)
                 UpdatesOutput(;
                     updates = (; n = model.b.n + 1,),
