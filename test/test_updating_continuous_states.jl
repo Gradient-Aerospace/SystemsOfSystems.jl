@@ -18,7 +18,7 @@ end
 # and velocity.
 @testset "updating continuous states" begin
 
-    history, _, _ = simulate(
+    history = simulate(
         nothing;
         t = 0//1 : 1//2 : 5//1,
         init_fcn = (t, params, seed) -> ModelDescription(;
@@ -71,19 +71,19 @@ end
 
 end
 
-# A hook can end the simulation on the same step as a continuous state update. Since there
-# won't be another solver step to log the updated state, the update itself must add the
-# final sample to the history.
+# A hook can end the simulation on the same step as a continuous state update. The terminal
+# state phase must log the complete final state, including both the updated variable and
+# continuous variables absent from the sparse UpdatesOutput.
 @testset "updating continuous states when a hook stops the simulation" begin
 
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = 0//1 : 1//2 : 5//1,
         init_fcn = (t, params, seed) -> ModelDescription(;
-            continuous_states = (; x = 0.),
+            continuous_states = (; x = 0., y = 0.),
         ),
         rates_fcn = (t, model) -> RatesOutput(;
-            rates = (; x = 1.),
+            rates = (; x = 1., y = 2.),
         ),
         updates_fcn = (t, model) -> if t == 1
             UpdatesOutput(;
@@ -98,14 +98,19 @@ end
     )
 
     # The hook stops at 1 s, after which the update changes x from its integrated value of
-    # 1 to 10. The final history must contain both sides of the discontinuity and select
-    # the updated value at the exact event time.
+    # 1 to 10. The final history must contain both sides of that discontinuity. It must also
+    # contain y = 2 even though y was absent from the update.
     x_history = history["/"]["x"]
-    @test t_final == 1
-    @test model_final.x == 10.
+    y_history = history["/"]["y"]
+    @test history.t_stop == 1
+    @test history.model.x == 10.
+    @test history.model.y ≈ 2.
     @test x_history.time[end-1:end] == [1., 1.]
     @test x_history.data[end-1:end] ≈ [1., 10.]
-    @test x_history(t_final) == model_final.x
+    @test x_history(history.t_stop) == history.model.x
+    @test y_history.time[end] == 1.
+    @test y_history.data[end] == history.model.y
+    @test y_history(history.t_stop) == history.model.y
 
 end
 

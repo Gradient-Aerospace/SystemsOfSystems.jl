@@ -1,7 +1,8 @@
 module SystemsOfSystems
 
 # Running simulations
-export initialize, simulate, SimOptions, Schedules, Solvers, Hooks, Logs, Resources
+export initialize, simulate, SimHistory, SimOptions, succeeded,
+    Schedules, Solvers, Hooks, Logs, Resources
 
 # Model descriptions
 export ModelDescription, VariableDescription, RandomVariableDescription,
@@ -11,6 +12,7 @@ export ModelDescription, VariableDescription, RandomVariableDescription,
 # Utilities
 export Dimension,
     BranchingSeed, branch,
+    normalized_scalar_error, normalized_variable_error,
     TimeSeries, AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation, select,
     plot_ts,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
@@ -20,6 +22,7 @@ export Dimension,
     is_regular_step_triggering, # backward compatibility
     Samplers, LoggingPolicies
 
+using Dimensions: eachdim
 using Random: Xoshiro, randn
 
 include("SimulationTimes.jl")
@@ -64,8 +67,9 @@ contains:
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
 * `discrete_outputs`: A named tuple of each of the discrete outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
-   the model. Each element can be a function mapping `(rng, t_last, t_next)` to a value, or
-   a `RandomVariableDescription`.
+  the model. Each element can be a function mapping `(rng, t_km1, dt_f)` to a value, or a
+  `RandomVariableDescription`. The interval starts at the exact time `t_km1` and has the
+  floating-point duration `dt_f`.
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
@@ -89,6 +93,10 @@ VariableDescription(
     dimensions = ["m" => "kg",],
 )
 ```
+
+Within each model, names must be unique across constants, states, outputs, random variables,
+schedules, submodels, and resources. Initialization throws an `ArgumentError` describing
+any conflicts before opening model resources.
 """
 struct ModelDescription
     type
@@ -127,28 +135,55 @@ ModelDescription(;
 )
 
 """
-    validate_model_schedules(description, model_path = "/")
+    validate_model_description(description, model_path = "/")
 
-Validates every declared schedule before simulation resources are opened.
+Validates the names and schedules declared by every model before simulation resources are
+opened.
 
-Schedules must implement `AbstractSchedule`, and their names must not collide with another
-member exposed on the same constructed model. Detecting those mistakes during initialization
-produces a focused error instead of relying on named-tuple or model-constructor behavior.
+Variable names must be unique across every named category in a model. Schedules must also
+implement `AbstractSchedule`. Detecting these mistakes during initialization produces a
+focused error instead of relying on named-tuple, history-lookup, or model-constructor
+behavior.
 """
-function validate_model_schedules(description::ModelDescription, model_path = "/")
+function validate_model_description(description::ModelDescription, model_path = "/")
 
-    schedule_names = fieldnames(typeof(description.schedules))
-    other_model_member_names = (
-        fieldnames(typeof(description.constants))...,
-        fieldnames(typeof(description.continuous_states))...,
-        fieldnames(typeof(description.discrete_states))...,
-        fieldnames(typeof(description.continuous_random_variables))...,
-        fieldnames(typeof(description.discrete_random_variables))...,
-        fieldnames(typeof(description.models))...,
-        fieldnames(typeof(description.resources))...,
+    categories = (;
+        constants = fieldnames(typeof(description.constants)),
+        continuous_states = fieldnames(typeof(description.continuous_states)),
+        discrete_states = fieldnames(typeof(description.discrete_states)),
+        continuous_outputs = fieldnames(typeof(description.continuous_outputs)),
+        discrete_outputs = fieldnames(typeof(description.discrete_outputs)),
+        continuous_random_variables =
+            fieldnames(typeof(description.continuous_random_variables)),
+        discrete_random_variables =
+            fieldnames(typeof(description.discrete_random_variables)),
+        schedules = fieldnames(typeof(description.schedules)),
+        models = fieldnames(typeof(description.models)),
+        resources = fieldnames(typeof(description.resources)),
     )
 
-    for name in schedule_names
+    all_names = Symbol[]
+    for names in categories
+        append!(all_names, names)
+    end
+    for name in unique(all_names)
+        conflicting_categories = Symbol[
+            category
+            for category in keys(categories) if name in categories[category]
+        ]
+        if length(conflicting_categories) > 1
+            category_list = join(
+                ("`$category`" for category in conflicting_categories),
+                ", ",
+            )
+            throw(ArgumentError(
+                "Model $model_path uses the name `$name` in multiple categories: " *
+                "$category_list. Variable names must be unique within each model.",
+            ))
+        end
+    end
+
+    for name in fieldnames(typeof(description.schedules))
 
         schedule = strip_fluff_from_variable(description.schedules[name])
         if !(schedule isa AbstractSchedule)
@@ -160,19 +195,11 @@ function validate_model_schedules(description::ModelDescription, model_path = "/
             ))
         end
 
-        if name in other_model_member_names
-            schedule_path = model_path == "/" ? "/schedules/$name" :
-                "$model_path/schedules/$name"
-            throw(ArgumentError(
-                "Schedule $schedule_path conflicts with another model member named $name.",
-            ))
-        end
-
     end
 
     for name in fieldnames(typeof(description.models))
         submodel_path = model_path == "/" ? "/models/$name" : "$model_path/models/$name"
-        validate_model_schedules(description.models[name], submodel_path)
+        validate_model_description(description.models[name], submodel_path)
     end
 
     return nothing
@@ -347,10 +374,11 @@ end
 
 A container for a random variable of type `T`. The `f` field is a function or callable type
 satisfying `f(rng, t)::T` for a discrete random variable or
-`f(rng, t_last, t_next)::T` for a continuous random variable. It also stores a
-`seed::BranchingSeed` for its own random number generator, which is useful when a model
-description needs to reproduce the same draw outside of its usual parent model. The
-remaining fields, `title`, `dimensions`, and `groups`, are the same as for
+`f(rng, t_km1, dt_f)::T` for a continuous random variable, where `t_km1` is the exact
+simulation time at the beginning of the interval and `dt_f` is its floating-point duration.
+It also stores a `seed::BranchingSeed` for its own random number generator, which is useful
+when a model description needs to reproduce the same draw outside of its usual parent
+model. The remaining fields, `title`, `dimensions`, and `groups`, are the same as for
 `VariableDescription`.
 """
 struct RandomVariableDescription{T}
@@ -400,14 +428,15 @@ An example:
 ```
 rng = Xoshiro(1)
 process = ContinuousWhiteNoise(SA[1., 2.])
-process(rng, t_last, t_next) # Yields appropriate random draws.
+process(rng, t_km1, dt_f) # Yields appropriate random draws.
 ```
 """
 @kwdef struct ContinuousWhiteNoise{T}
     sigma::T
 end
-function (nu::ContinuousWhiteNoise{T})(rng, t_km1, t_k) where {T}
-    return nu.sigma ./ sqrt(t_k - t_km1) .* randn(rng, T)
+function (nu::ContinuousWhiteNoise{T})(rng, t_km1, dt_f) where {T}
+    dt_f > 0 || throw(ArgumentError("ContinuousWhiteNoise requires a positive duration."))
+    return nu.sigma ./ sqrt(dt_f) .* randn(rng, T)
 end
 
 """
@@ -763,6 +792,48 @@ describe(stop::EncounteredError) =
 # below.
 function draw_wc end
 
+"""
+    normalized_scalar_error(value, embedded_value, absolute_tolerance, relative_tolerance)
+
+Return the normalized error between two scalar values. The allowable error is the larger
+of the absolute tolerance and the relative tolerance times `abs(value)`. A result no
+greater than one satisfies the tolerances.
+"""
+function normalized_scalar_error(
+    value,
+    embedded_value,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    allowable_error = max(absolute_tolerance, abs(value) * relative_tolerance)
+    return abs(value - embedded_value) / allowable_error
+end
+
+"""
+    normalized_variable_error(value, embedded_value, absolute_tolerance, relative_tolerance)
+
+Return the maximum normalized scalar error between two values. The default method compares
+the scalar components returned by `Dimensions.eachdim`. Types that do not support `eachdim`
+can define a specialized method.
+"""
+function normalized_variable_error(
+    value,
+    embedded_value,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    return maximum(
+        normalized_scalar_error(
+            component,
+            embedded_component,
+            absolute_tolerance,
+            relative_tolerance,
+        )
+        for (component, embedded_component) in zip(eachdim(value), eachdim(embedded_value));
+        init = 0.,
+    )
+end
+
 include("Logs.jl")
 include("SimulationLogging.jl")
 include("ContinuousProblems.jl")
@@ -793,8 +864,10 @@ end
 """
 A container for simulation results, including fields for:
 
-* `model`: The final model constructed in the sim
+* `t_start`: The simulation's start time
+* `t_stop`: The last time completed by the simulation
 * `log`: The log containing the time series for each variable of each model
+* `model`: The final model constructed in the sim
 * `stop`: The normal stop or failure reason that ended the simulation
 
 This type acts like a log itself, so for instance these do the same thing:
@@ -806,11 +879,21 @@ history.log["/models/plant"]["position"]
 
 The `keys`, `values`, and `pairs` functions also pass through to the underlying log.
 """
-struct SimHistory
-    model::ModelDescription
+struct SimHistory{M}
+    t_start::ExactTime
+    t_stop::ExactTime
     log::Logs.AbstractLog
+    model::M
     stop::AbstractTerminationReason
 end
+
+"""
+    succeeded(h::SimHistory)
+
+Returns true if the simulation ended without throwing an error or failing to converge on a
+solution.
+"""
+succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
 function Base.show(io::IO, mime::MIME"text/plain", history::SimHistory)
     println(io, "Simulation History:")
@@ -839,9 +922,9 @@ Base.pairs(history::SimHistory) = pairs(history.log)
 #########
 
 # Functions for drawing from the sets of random variables
-function draw_crvs(crvs, t_last, t_next)
+function draw_crvs(crvs, t_km1, dt_f)
     return map(crvs) do rv
-        return rv.f(rv.rng, t_last, t_next)
+        return rv.f(rv.rng, t_km1, dt_f)
     end
 end
 function draw_drvs(drvs, t)
@@ -852,8 +935,8 @@ end
 
 # We turn off inlining here. This appears to help keep this allocation-free.
 @noinline function draw_wc(
-    t_last,
-    t_next,
+    t_km1,
+    dt_f,
     ommd::TypedModelDescription,
     msd::ModelStateDescription,
 )
@@ -867,7 +950,7 @@ end
 
     models = if ommd.models_have_continuous_random_variables
         map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wc(t_last, t_next, ommd_submodel, msd_submodel)
+            draw_wc(t_km1, dt_f, ommd_submodel, msd_submodel)
         end
     else
         msd.models
@@ -875,7 +958,7 @@ end
 
     return copy_model_state_description_except(msd;
         continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, t_last, t_next,
+            ommd.continuous_random_variables, t_km1, dt_f,
         ),
         models,
     )
@@ -918,7 +1001,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.continuous_states,
         ommd.discrete_states,
         continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, float(t), float(t) + 1., # Placeholder value
+            ommd.continuous_random_variables, t, 1., # Placeholder duration
         ),
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         ommd.schedules,
@@ -1070,13 +1153,25 @@ first_stop(current, candidate) = isnothing(current) ? candidate : current
 
 Processes one complete accepted hybrid-system sample.
 
-The integrator first advances continuous state by exactly one accepted numerical step. The
-function then logs its authoritative beginning sample, runs hooks, draws discrete random
-variables, and accepts the discrete update at the rational endpoint. Returning establishes
-that endpoint as the simulation loop's latest committed time and state. Terminal rate
-sampling occurs afterward in `loop!`, where an exception cannot hide the committed sample.
+The function first records the known continuous state, then asks the integrator to advance
+it by exactly one accepted numerical step. An accepted result supplies the corresponding
+continuous outputs. The function then runs hooks, draws discrete random variables, and
+accepts the discrete update at the rational endpoint. Returning establishes that endpoint
+as the simulation loop's latest committed time and state. Terminal rate sampling occurs
+afterward in `loop!`, where an exception cannot hide the committed sample.
 """
-function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integrator, hooks)
+function step!(
+    logging_runtime,
+    t,
+    schedules,
+    ommd,
+    problem,
+    updates_fcn,
+    t_last,
+    msd,
+    integrator,
+    hooks,
+)
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
     # belong to the runtime integrator; the scheduler owns only exact external boundaries.
@@ -1109,8 +1204,14 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
         earlier_time(t_next_from_models, t_next_from_schedules),
     )
 
+    # Record the committed state before entering the fallible solver. The matching output
+    # is recorded only if the solver returns authoritative beginning-of-step rates.
+    SimulationLogging.log_continuous_state_stuff!(
+        t_last, float(t_last), logging_runtime, msd,
+    )
+
     # Ask the integrator for one accepted numerical step. A failure has no accepted
-    # endpoint, so hooks and discrete updates must not run for it.
+    # endpoint, so outputs, hooks, and discrete updates must not run for it.
     result = Solvers.step!(
         integrator,
         problem,
@@ -1123,13 +1224,10 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     t_next = result.t_end
     msd = result.state_at_end
 
-    # The beginning state and rates come from the accepted attempt. Rejected attempts and
-    # intermediate Runge-Kutta stages never reach logging or model stop handling.
-    SimulationLogging.log_continuous_stuff!(
-        t_last, float(t_last),
-        mh,
-        result.state_at_start,
-        result.rates_at_start,
+    # The beginning rates come from the accepted attempt. Rejected attempts and intermediate
+    # Runge-Kutta stages never reach output logging or model stop handling.
+    SimulationLogging.log_continuous_output_stuff!(
+        float(t_last), logging_runtime, result.rates_at_start,
     )
     stop = find_model_requested_stop(result.rates_at_start)
 
@@ -1171,12 +1269,12 @@ function step!(mh, t, schedules, ommd, problem, updates_fcn, t_last, msd, integr
     # Log the update events and any state snapshots selected at this time.
     #
     # If a discrete update changes continuous state, this records the pre-update side of the
-    # discontinuity. The next accepted rates sample, or the explicit terminal sample below,
-    # records the post-update side together with matching continuous outputs.
+    # discontinuity. The next continuous state sample records the post-update side. Its
+    # matching output is recorded separately after rates have been evaluated successfully.
     #
     SimulationLogging.log_discrete_stuff!(
-        t_next, float(t_next), mh,
-        updates, msd, updated_msd, false,
+        t_next, float(t_next), logging_runtime,
+        updates, msd, updated_msd,
     )
 
     # Now accept the update.
@@ -1218,10 +1316,10 @@ function create_initialization_artifacts(
     context,
 )
 
-    # Schedules are immutable declarations, so validate and collect them before opening any
-    # model resources. The concrete, deduplicated tuple becomes simulation-level scheduler
-    # metadata, while each named declaration also remains available on its model form.
-    validate_model_schedules(model_description)
+    # Validate the model description before opening any resources. The concrete,
+    # deduplicated schedule tuple then becomes simulation-level scheduler metadata, while
+    # each named schedule declaration also remains available on its model form.
+    validate_model_description(model_description)
     schedules = collect_unique_schedules(model_description)
 
     # We'll keep track of resources we create along the way so that we can close them.
@@ -1296,12 +1394,35 @@ function close_hooks(hooks, t_end, final_model)
     end
 end
 
+function validate_requested_times(t)
+
+    length(t) >= 2 || throw(ArgumentError(
+        "t must contain at least a start time and a stop time.",
+    ))
+
+    for k in eachindex(t)
+
+        isfinite(t[k]) || throw(ArgumentError("t[$k] must be finite."))
+        if k != firstindex(t) && !time_isless(t[k - 1], t[k])
+            throw(ArgumentError(
+                "t must be strictly increasing, but t[$(k - 1)] = $(t[k - 1]) " *
+                "and t[$k] = $(t[k]).",
+            ))
+        end
+
+    end
+
+    return nothing
+
+end
+
 # Build all of the things necessary for the loop and subsequent tear-down.
 function make_runtime(inputs)
 
     # This might be a tuple with (t_start, t_end), but it can also be any collection of
-    # monotonic times.
+    # strictly increasing times.
     t = [exact_time(el) for el in inputs.t]
+    validate_requested_times(t)
     t_start = first(t)
 
     # Pull out the full model description from the initialization function, as well as the
@@ -1325,9 +1446,10 @@ function make_runtime(inputs)
         log, mh = Logs.create_log(
             inputs.options.log, model_description, inputs.options.time_dimension,
         )
+        logging_runtime = Logs.create_model_logging_runtime(mh, inputs.options.log)
 
         # Log the initial stuff.
-        SimulationLogging.log_initial_discrete_stuff!(t_start, mh, ommd)
+        SimulationLogging.log_initial_discrete_stuff!(t_start, logging_runtime, ommd)
 
         # Adapt the hierarchical model to the small mathematical interface consumed by
         # continuous-time integrators, then create runtime solver state for this simulation.
@@ -1348,11 +1470,11 @@ function make_runtime(inputs)
         end
 
         return (;
-            inputs.updates_fcn, inputs.close_fcn,
-            model_description, ommd,
+            inputs.updates_fcn,
+            ommd,
             t, schedules,
             msd,
-            log, mh,
+            log, logging_runtime,
             problem, integrator,
             hooks, manager,
         )
@@ -1379,7 +1501,7 @@ so resources, hooks, and logs can still be closed by `simulate`.
 function loop!(runtime)
 
     # Pull these out here so we aren't constantly pulling them in the loop.
-    mh = runtime.mh
+    logging_runtime = runtime.logging_runtime
     t = runtime.t
     schedules = runtime.schedules
     ommd = runtime.ommd
@@ -1403,7 +1525,8 @@ function loop!(runtime)
             # update are complete. Assigning its result here is the simulation's commit
             # point: later failures must retain this time and state.
             t_completed, msd, stop = step!(
-                mh, t, schedules, ommd, problem, updates_fcn, t_completed, msd,
+                logging_runtime,
+                t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks
             )
 
@@ -1420,14 +1543,16 @@ function loop!(runtime)
                 # is an internal loop sentinel, not a reason that should take precedence
                 # over a terminal model request or `ReachedEndTime`.
                 terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                SimulationLogging.log_continuous_state_stuff!(
+                    t_completed, float(t_completed), logging_runtime, msd,
+                )
                 terminal_rates = ContinuousProblems.evaluate_rates(
                     problem,
                     float(t_completed),
                     msd,
                 )
-                SimulationLogging.log_continuous_stuff!(
-                    t_completed, float(t_completed),
-                    mh, msd, terminal_rates,
+                SimulationLogging.log_continuous_output_stuff!(
+                    float(t_completed), logging_runtime, terminal_rates,
                 )
                 terminal_stop = first_stop(
                     terminal_stop,
@@ -1459,11 +1584,12 @@ function tear_down(runtime, loop_outputs)
     final_model = nothing
     try
         final_model = model(loop_outputs.msd)
-        runtime.close_fcn(loop_outputs.t_completed, final_model)
-        return (;
-            history = SimHistory(runtime.model_description, runtime.log, loop_outputs.stop),
-            t_final = loop_outputs.t_completed,
+        return SimHistory(
+            first(runtime.t),
+            loop_outputs.t_completed,
+            runtime.log,
             final_model,
+            loop_outputs.stop,
         )
     finally
         close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
@@ -1569,22 +1695,21 @@ function initialize(f::Function, model_description::ModelDescription; kwargs...)
 end
 
 """
-    simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, seed, options)
 
-Runs a simulation, returning the time history, end time, and final model.
+Runs a simulation, returning a `SimHistory` containing its log, start and stop times, final
+model, and termination reason.
 
 * `user_data`: Can be anything used by the `init_fcn`
-* `t`: A collection of monotonic times. The sim will step to exactly each given time, plus
-  as many other steps are required by the solver and models. At the very least, this must
-  contain a start time and end time.
+* `t`: A collection of strictly increasing, finite times. The sim will step to exactly each
+  given time, plus as many other steps as are required by the solver and models. At the very
+  least, this must contain a start time and end time.
 * `init_fcn`: Will be called with `(t_start, user_data, seed)`, where `t_start` is the first
   element of the above `t` input. This must return a `ModelDescription`.
 * `rates_fcn`: Will be called with `(t, model)` and is expected to return a `RatesOutput`.
 * `updates_fcn`: Will be called with `(t, model)` and is expected to return an
   `UpdatesOutput`, or `nothing` when there are no updates, outputs, replacement `t_next`, or
   stop request.
-* `close_fcn`: Will be called when simulation completes (even if an error is caught) with
-  `(t, model)`. No return value is expected.
 * `seed`: A top-level seed (Int) to control all random number generation in the sim. The
   `init_fcn` receives this as a `BranchingSeed`.
 * `options`: See `SimOptions`.
@@ -1595,15 +1720,13 @@ function simulate(
     init_fcn,
     rates_fcn = (args...) -> RatesOutput(),
     updates_fcn = (args...) -> nothing,
-    close_fcn = (t, model) -> nothing,
     seed::Union{Integer, BranchingSeed} = 0,
     options::SimOptions = SimOptions(),
 )
-    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, close_fcn, seed, options)
+    inputs = (; user_data, t, init_fcn, rates_fcn, updates_fcn, seed, options)
     runtime = make_runtime(inputs)
     loop_outputs = loop!(runtime)
-    results = tear_down(runtime, loop_outputs)
-    return (results.history, results.t_final, results.final_model)
+    return tear_down(runtime, loop_outputs)
 end
 
 end # module SystemsOfSystems

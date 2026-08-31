@@ -9,12 +9,29 @@ using SystemsOfSystems: Solvers, Logs, Hooks
 const out_dir = joinpath(@__DIR__, "out")
 mkpath(out_dir)
 
+@testset "log display" begin
+
+    # Property destructuring returns the selected property in the REPL. The compact show
+    # method must therefore summarize the log instead of displaying its full backing
+    # dictionary and every stored sample.
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(),
+    )
+    (; log) = history
+
+    @test sprint(show, log) == "BasicLog with 1 model history"
+    @test sprint(show, MIME"text/plain"(), log) == "Model Histories:\n  /\n"
+
+end
+
 # This is a continuous-only sim.
 @testset failfast = false "exponential with $solver_type solver, $log_type logs" for solver_type in ("rk2", "rk4", "dp54"), log_type in ("ram", "hdf5", "null", "nothing")
 
     fixed_dt = 0.1
     solver = if solver_type == "dp54"
-        Solvers.DormandPrince54Options() # TODO: Test that max_dt limits/doesn't limit.
+        Solvers.DormandPrince54Options()
     elseif solver_type == "rk2"
         Solvers.Ralston2Options(; dt = fixed_dt)
     elseif solver_type == "rk4"
@@ -34,7 +51,7 @@ mkpath(out_dir)
     # We'll simulate a pure exponential decay and compare to the known answer.
     time_constant = 2.
     t_end = 5.
-    history, t, model = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             constants = (;
@@ -61,10 +78,14 @@ mkpath(out_dir)
             hooks = [Hooks.ProgressBarOptions()],
         ),
     )
+    (; t_stop, model) = history
 
     # Test the final state.
-    @test t == t_end
+    @test history.t_start == 0
+    @test t_stop == t_end
     @test model.x ≈ exp(-t_end/time_constant) atol=1e-4
+    @test succeeded(history)
+    @test fieldtype(typeof(history), :model) == typeof(model)
 
     # We can only test logs when we have logs.
     if log_type == "ram" || log_type == "hdf5"
@@ -119,7 +140,7 @@ end
     # halving a sufficiently small fixed step should reduce global error by a factor near
     # four.
     function final_error(dt)
-        _, _, model_final = simulate(
+        history = simulate(
             nothing;
             t = (0, 1),
             init_fcn = (args...) -> ModelDescription(;
@@ -133,7 +154,7 @@ end
                 solver = Solvers.Ralston2Options(; dt),
             ),
         )
-        return abs(model_final.x - exp(1.))
+        return abs(history.model.x - exp(1.))
     end
 
     # Compare a 0.1 s step with a 0.05 s step. Halving the step size of an order-p method
@@ -153,12 +174,10 @@ end
 # Here's a discrete-only sim.
 @testset failfast = false "discrete exponential" begin
 
-    is_closed = [false,]
-
     # We'll simulate a pure (and discrete) exponential decay and compare to the known answer.
     time_constant = 2.
     t_end = 5.
-    history, t, model = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             discrete_states = (;
@@ -174,20 +193,17 @@ end
             ),
             t_next = 1.5 * t, # Just for fun, steps change size.
         ),
-        close_fcn = (t, model) -> begin
-            is_closed[1] = true
-        end,
         t = (0, t_end),
     )
+    (; t_stop, model) = history
 
     # Test the final state.
-    @test t == t_end
+    @test t_stop == t_end
     @test model.x ≈ exp(-t_end/time_constant) atol=1e-4
 
     @test history["/"]["x"].time[1] == 0.
     @test history["/"]["x"].data[1] == 1.
     @test history["/"]["x"].data[end] == model.x
-    @test is_closed[1] == true
 
     x_ts = history["/"]["x"]
     @test x_ts(x_ts.time[1]) == x_ts.data[1]
@@ -195,7 +211,8 @@ end
     @test x_ts(t_mid) == x_ts.data[2]
 
     # Test our weird stepping strategy.
-    history["/"]["x"].time == vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
+    @test history["/"]["x"].time ≈
+        vcat(0., collect(0.1 * 1.5^n for n in 0:9), t_end)
 
 end
 
@@ -205,7 +222,7 @@ end
     # We'll simulate a closed-loop control system to test hybrid systems.
     dt = 0.05
     t_end = 5.
-    history, t, x = simulate(
+    history = simulate(
         nothing;
         init_fcn = (args...) -> ModelDescription(
             constants = (;
@@ -280,6 +297,52 @@ end
 
 end
 
-# TODO: Test continuous variables that _don't_ have rates outputs sometimes.
+@testset "omitted continuous rates preserve states" begin
+
+    # Continuous states and submodels without active dynamics may be omitted from a
+    # RatesOutput. A discrete state changes the rates structure only between accepted
+    # steps, keeping every Runge-Kutta attempt internally consistent.
+    history = simulate(
+        nothing;
+        t = (0, 2),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0., y = 0.),
+            discrete_states = (; auxiliary_dynamics_active = true,),
+            models = (;
+                child = ModelDescription(;
+                    continuous_states = (; z = 0.,),
+                ),
+            ),
+        ),
+        rates_fcn = (t, model) -> if model.auxiliary_dynamics_active
+            RatesOutput(;
+                rates = (; x = 1., y = 2.),
+                models = (;
+                    child = RatesOutput(; rates = (; z = 3.,)),
+                ),
+            )
+        else
+            RatesOutput(; rates = (; x = 1.,))
+        end,
+        updates_fcn = (t, model) -> if t == 1
+            UpdatesOutput(; updates = (; auxiliary_dynamics_active = false,),)
+        else
+            nothing
+        end,
+        options = SimOptions(;
+            solver = Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    # All three states propagate over the first second. Thereafter x continues, while the
+    # omitted y derivative and child RatesOutput leave their states unchanged.
+    @test history.model.x ≈ 2.
+    @test history.model.y ≈ 2.
+    @test history.model.child.z ≈ 3.
+    @test history["/"]["x"].data ≈ [0., 1., 2.]
+    @test history["/"]["y"].data ≈ [0., 2., 2.]
+    @test history["/child"]["z"].data ≈ [0., 3., 3.]
+
+end
 
 end # TestBasicSimulations

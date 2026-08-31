@@ -55,14 +55,17 @@ end
     system_specs = ControlSystemDemo.default_closed_loop_system_specs()
 
     # Run the sim.
-    history, t, system = ControlSystemDemo.simulate_closed_loop_system(;
+    history = ControlSystemDemo.simulate_closed_loop_system(;
         system_specs, log, solver,
     )
+    t = history.t_stop
+    system = history.model
 
     dt_sensor = system_specs.sensor.schedule.period
-    @test t == 10
-    @test history["/sensor"]["measurement"].time == collect(0. : dt_sensor : t)
-    @test history["/sensor"]["measurement"].data[end].t == t
+    @test history.t_stop == 10
+    @test history["/sensor"]["measurement"].time ==
+        collect(0. : dt_sensor : history.t_stop)
+    @test history["/sensor"]["measurement"].data[end].t == history.t_stop
 
     Logs.close_log(history.log)
 
@@ -74,6 +77,7 @@ end
         for model_path in keys(history.log)
             mh = history.log[model_path]
             mh2 = loaded_log[model_path]
+            @test mh.type === mh2.type
             for var_name in keys(mh)
                 var = mh[var_name]
                 # @test haskey(mh2, var_name)
@@ -84,8 +88,15 @@ end
                     @test var.data == collect(var2.data)
                     @test var.title == var2.title
                     @test var.dimensions == collect(var2.dimensions)
+                    @test var.groups == var2.groups
                 elseif var isa VariableDescription # constants
-                    @test var.value == var2 # These are undecorated. TODO: Revisit.
+                    @test var2 isa VariableDescription
+                    @test typeof(var) == typeof(var2)
+                    @test var.value == var2.value
+                    @test var.title == var2.title
+                    @test var.dimensions == var2.dimensions
+                    @test isequal(var.groups, var2.groups)
+                    @test isequal(var.interpolator, var2.interpolator)
                 elseif var isa Logs.ModelHistory # submodels
                     @test var2 isa Logs.ModelHistory
                     @test keys(var) == keys(var2)

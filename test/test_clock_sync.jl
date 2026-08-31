@@ -37,14 +37,14 @@ using SystemsOfSystems
 
     # Run once to burn off compile times.
     t = 0 : 0.1 : 0.1
-    history, t_final, model_final = run_sim(t, [])
+    history = run_sim(t, [])
 
     # Now run for timing's sake.
     t = 0 : 0.1 : 1
-    history, t_final, model_final = run_sim(t, [Hooks.ClockSyncOptions()])
+    history = run_sim(t, [Hooks.ClockSyncOptions()])
 
     # Make sure it went to completion.
-    @test t_final == last(t)
+    @test history.t_stop == last(t)
 
     # Make sure samples never triggered _before_ the appropriate time.
     diffs = history["/"]["current_time_s"].data .- history["/"]["current_time_s"].time

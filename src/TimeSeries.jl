@@ -80,7 +80,8 @@ Fields:
 * `data`: The array of data, with the same length as `time`
 * `time_dimension`: A `Dimension` for time, used as the x-axis label in plots
 * `dimensions`: A vector of `Dimension`, one for each dimension of the `data`
-* `path`: The model path leading up to this time series (e.g., "/aircraft/imu")
+* `path`: The complete signal path, including the variable name (e.g.,
+  "/aircraft/imu/angular_velocity")
 * `discrete`: True if this time series is discrete and false if continuous
 * `interpolator`: Callable policy used to evaluate the time series at a requested time
 * `groups`: Controls how dimensions are grouped into axes in plots (see below)
@@ -108,7 +109,7 @@ struct TimeSeries{TVT, DVT, IT}
     data::DVT
     time_dimension::Dimension
     dimensions::Vector{Dimension}
-    path::String # TODO: Consider "ID" instead of path.
+    path::String
     discrete::Bool
     interpolator::IT
     groups::Vector{Pair{String, Vector{String}}}
@@ -226,13 +227,14 @@ end
     select(f, ts::TimeSeries; kwargs)
 
 Applies `f` to each data element and returns the results as a new `TimeSeries`. Time and
-the associated metadata come from `ts` by default.
+the associated metadata come from `ts` by default. A derived series representing a new
+signal can provide a new `path` and `title`.
 
 Keyword arguments:
 
 * `title`: Title for the new time series
 * `dimensions`: Dimensions for the transformed data
-* `path`: Model path associated with the new time series
+* `path`: Complete signal path associated with the new time series
 * `discrete`: Whether the new time series is discrete
 * `interpolator`: Interpolation policy for the new time series
 * `groups`: Dimension groups for the new time series

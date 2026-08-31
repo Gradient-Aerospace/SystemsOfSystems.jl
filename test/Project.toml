@@ -3,9 +3,9 @@ Dimensions = "5f902022-033a-44bd-a904-0a49265d4d22"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 HDF5Vectors = "7098961b-d60d-42aa-8832-e11a9f96377b"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 SystemsOfSystems = "444f41de-88f0-45df-a3dd-0849e84f1dfe"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [sources]
-Dimensions = {url = "https://github.com/Gradient-Aerospace/Dimensions.jl"}
-HDF5Vectors = {url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}
+HDF5Vectors = {rev = "4c99dbe39d47f2d1bbf81448af418c348a217144", url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}

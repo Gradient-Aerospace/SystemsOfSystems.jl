@@ -39,7 +39,7 @@ function init(t, specs, seed)
 end
 ```
 
-The purpose of a `ModelDescription` is to describe each "variable" in the model, where a variable can be a constant, state, output, sub-model, resource, or schedule. Each variable name must be unique.
+The purpose of a `ModelDescription` is to describe each "variable" in the model, where a variable can be a constant, state, output, random variable, submodel, resource, or schedule. Each variable name must be unique within its model.
 
 The model will be constructed by calling the given `type` with each variable as a keyword argument. If no `type` is given, the model will be a named tuple of all of the variables.
 
@@ -103,7 +103,7 @@ SystemsOfSystems.RandomVariableDescription
 
 ##### Continuous Random Variables
 
-A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_last, t_next)`. SystemsOfSystems draws it for a proposed continuous-time interval and makes the result available as a field of the model during rate calculations.
+A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the proposed interval. SystemsOfSystems draws it for that interval and makes the result available as a field of the model during rate calculations.
 
 [`ContinuousWhiteNoise`](@ref) is the built-in Gaussian white-noise process. Its `sigma` scales a draw that is divided by the square root of the interval, so its integrated effect has the expected continuous-time scaling.
 
@@ -274,6 +274,30 @@ The update above creates a discontinuity. The next continuous-time evaluation st
 ```@docs
 SystemsOfSystems.UpdatesOutput
 ```
+
+### Unavailable Outputs
+
+A model can return `missing` for a continuous or discrete output when no sample is
+available at the current time. The logger skips that value and its timestamp.
+
+When an output has no initial value, a `VariableDescription` can declare its eventual type
+explicitly:
+
+```julia
+discrete_outputs = (;
+    measurement = VariableDescription{Float64}(
+        missing;
+        title = "Measurement",
+        dimensions = ["measurement" => "m"],
+    ),
+)
+```
+
+Skipping a value leaves no marker for the unavailable interval. Linear interpolation will
+bridge the gap between surrounding samples, and sample-and-hold interpolation will return
+the preceding value. The recorded timestamps indicate when the model actually supplied
+values. If `missing` itself must be retained as output data, it can be wrapped in a distinct
+value such as `Some(missing)` or represented by a model-specific type.
 
 ## Custom `t_next`
 

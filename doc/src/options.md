@@ -3,7 +3,7 @@
 The [`simulate`](@ref) function accepts a [`SimOptions`](@ref) value that controls output paths, logging, the continuous-time solver, hooks, and the time label used in plots.
 
 ```julia
-history, final_time, final_model = simulate(
+history = simulate(
     user_data;
     t = (0, 10),
     init_fcn,
@@ -104,7 +104,7 @@ options = SimOptions(;
 )
 ```
 
-`NullLogOptions` turns history logging off. It is useful when only `final_time` and `final_model` are needed.
+`NullLogOptions` turns time-series logging off. It is useful when only fields such as `history.t_stop` and `history.model` are needed.
 
 ```julia
 options = SimOptions(;
@@ -112,7 +112,10 @@ options = SimOptions(;
 )
 ```
 
-`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are too large for RAM, at the cost of slower simulation. HDF5 logging becomes available after importing `HDF5Vectors`.
+`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are
+too large for RAM, at the cost of slower simulation. Constants that cannot be represented
+by HDF5Vectors are omitted with a warning that identifies the constant, its type, and the
+underlying error. HDF5 logging becomes available after importing `HDF5Vectors`.
 
 ```julia
 using HDF5Vectors
@@ -124,7 +127,10 @@ options = SimOptions(;
 )
 ```
 
-If the history fits in memory and only the final artifact needs to be HDF5, a `BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging directly to HDF5.
+If the history fits in memory and only the final artifact needs to be HDF5, a
+`BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging
+directly to HDF5. The same unsupported-constant behavior applies when saving an existing
+log.
 
 ```@docs
 SystemsOfSystems.Logs.BasicLogOptions

@@ -5,7 +5,7 @@ using SystemsOfSystems
 
 @testset "SimTimeout" begin
 
-    history, t_final, model_final = simulate(
+    history = simulate(
         nothing;
         t = 0 : 0.1 : 1,
         init_fcn = (args...) -> ModelDescription(;
@@ -32,13 +32,13 @@ using SystemsOfSystems
     @test history.stop isa SystemsOfSystems.HookRequestedStop
 
     # It should have ended before the last time we asked for.
-    @test t_final < 1
+    @test history.t_stop < 1
 
     # Make sure the stop reason and simulate call fundamentally report the same end time.
-    @test history.stop.t == t_final
+    @test history.stop.t == history.t_stop
 
     # On the last step, the discrete update should have run.
-    @test model_final.t == float(history.stop.t)
+    @test history.model.t == float(history.stop.t)
 
 end
 

@@ -32,7 +32,7 @@ end
 
     model_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_last, t_next) -> randn(rng),
+            w_draw = (rng, t_km1, dt_f) -> randn(rng),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),
@@ -151,7 +151,7 @@ end
 
     leaf_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_last, t_next) -> randn(rng),
+            w_draw = (rng, t_km1, dt_f) -> randn(rng),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),
@@ -228,7 +228,7 @@ end
 
     # Use both initialize and simulate to see if the same draws are happening.
     model = initialize(nothing; init_fcn = init_fcn, seed = 5)
-    history, _, _ = simulate(
+    history = simulate(
         nothing;
         init_fcn = init_fcn,
         rates_fcn = (t, model) -> RatesOutput(;

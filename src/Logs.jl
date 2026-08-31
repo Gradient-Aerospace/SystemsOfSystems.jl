@@ -58,7 +58,7 @@ function get_sampling_group!(sampling_groups, sampler)
 
 end
 
-function collect_sampling_groups_in_subtree(sampling_group, models)
+function collect_sampling_groups_in_subtree(sampling_group, runtimes)
 
     # Begin with this model's group, then append each distinct group used below it. Identity
     # is appropriate because get_sampling_group! has already canonicalized shared samplers.
@@ -67,8 +67,8 @@ function collect_sampling_groups_in_subtree(sampling_group, models)
     # longer tuple types in the loop. The final splat recovers a concretely typed tuple for
     # allocation-free iteration in the simulation loop.
     sampling_groups = Any[sampling_group]
-    for model in models
-        for group in model.sampling_groups_in_subtree
+    for runtime in runtimes
+        for group in runtime.sampling_groups_in_subtree
             if !any(existing === group for existing in sampling_groups)
                 push!(sampling_groups, group)
             end
@@ -86,22 +86,18 @@ end
 """
     ModelHistory
 
-A container for the history and logging configuration of one model.
+A container for the recorded history of one model.
 
 The named-tuple fields contain the model's constants, state and output time series, and
-recursive submodel histories. `path` identifies the model, using `/` for the root. `sampler`
-decides which simulation-loop samples record this model.
+recursive submodel histories. `path` identifies the model, using `/` for the root.
 
 A model logging policy may omit constants and time-series fields from these named tuples.
+Constants preserve their declaration form: raw constants remain raw values, while constants
+declared with `VariableDescription` retain that description and its metadata.
 
 `ModelHistory` is mutable to give large, recursively parameterized histories reference
 semantics. Its fields are established during log construction and are not normally
 reassigned; samples are appended to the contained time series.
-
-The internal `sampling_group` stores this model's current sampling decision. Models with
-the same sampler share a group, so its trigger is evaluated once per logging opportunity.
-`sampling_groups_in_subtree` lets the recursive logger reject inactive subtrees without
-giving a parent sampler semantic control over its children.
 """
 @kwdef mutable struct ModelHistory{ # This is mutable only to put it on the heap.
     CT  <: NamedTuple,
@@ -110,21 +106,25 @@ giving a parent sampler semantic control over its children.
     YCT <: NamedTuple,
     YDT <: NamedTuple,
     MT  <: NamedTuple,
-    ST   <: Samplers.AbstractSampler,
-    SGT,
-    SGST <: Tuple,
 }
     type::Type
     path::String
-    constants::CT # all elements are raw values
+    constants::CT # Elements retain their raw or VariableDescription form.
     continuous_states::XCT # all elements are TimeSeries
     discrete_states::XDT
     continuous_outputs::YCT
     discrete_outputs::YDT
     models::MT
-    sampler::ST = Samplers.CompleteSampler()
-    sampling_group::SGT = nothing # Shared current decision for this model.
-    sampling_groups_in_subtree::SGST = () # Distinct decisions at or below this model.
+end
+
+# This parallel tree contains the compiled logging behavior needed only while a simulation
+# is running. Keeping it separate leaves ModelHistory as a clean persisted result while
+# preserving type-stable traversal of heterogeneous child histories.
+struct ModelLoggingRuntime{HT <: ModelHistory, MT <: NamedTuple, SGT, SGST <: Tuple}
+    history::HT
+    models::MT
+    sampling_group::SGT
+    sampling_groups_in_subtree::SGST
 end
 
 function Base.keys(mh::ModelHistory)
@@ -226,18 +226,13 @@ end
 export AbstractLogOptions, AbstractLog, create_log, close_log, gather_all_time_series
 
 """
-A set of options for setting up the log of the appropriate type.
+The common supertype for options that select a log implementation.
 """
 abstract type AbstractLogOptions end
 
 """
-All AbstractLog types are expected to obey this interface to work with simulations in
-SystemsOfSystems.
-
-Functions:
-* `create_log`
-* `close_log`
-* `getindex`, `setindex!`, `keys`, `values`, `pairs`
+The common supertype for log implementations provided by SystemsOfSystems and its package
+extensions. Logs support dictionary-like access to their model histories.
 """
 abstract type AbstractLog end
 
@@ -246,8 +241,6 @@ function record_model_description(log::AbstractLog, breadcrumbs, md, variable_se
     nothing
 end
 
-# TODO: Should this "decorate" the constants as VariableDescriptions, like we add decorators
-# for the TimeSeries, below?
 function store_constants(constants, variable_set)
     return NamedTuple(
         f => v
@@ -277,32 +270,26 @@ function create_time_series_for_model!(
     md::ModelDescription,
     time_dimension,
     logging_policy::AbstractLoggingPolicy,
-    sampling_groups = Any[],
 )
 
     # Form this model's path.
     model_path = isempty(breadcrumbs) ? "/" : join("/" * el for el in breadcrumbs)
 
-    # See what should be logged (variable set) and when it should be logged (sampler).
+    # See which variables should be logged for this model.
     model_logging_policy = get_model_logging_policy(logging_policy, model_path)
     variable_set = get_variable_set(model_logging_policy)
-    sampler = get_sampler(model_logging_policy)
-    sampling_group = get_sampling_group!(sampling_groups, sampler)
 
     # Record any extra stuff.
     record_model_description(log, breadcrumbs, md, variable_set)
 
-    # Build the child histories first so this model can cache every distinct sampling group
-    # used in its subtree.
+    # Build the child histories.
     models = NamedTuple(
         f => create_time_series_for_model!(
             log, vcat(breadcrumbs, string(f)), m,
-            time_dimension, logging_policy, sampling_groups,
+            time_dimension, logging_policy,
         )
         for (f, m) in pairs(md.models)
     )
-    sampling_groups_in_subtree =
-        collect_sampling_groups_in_subtree(sampling_group, models)
 
     # Create the time histories.
     mh = ModelHistory(;
@@ -327,15 +314,40 @@ function create_time_series_for_model!(
             discrete = true,
         ),
         models,
-        sampler = sampler,
-        sampling_group,
-        sampling_groups_in_subtree,
     )
 
     # Put it in the dictionary of time histories.
     log[model_path] = mh
 
     return mh
+
+end
+
+function create_model_logging_runtime(
+    mh::ModelHistory,
+    logging_policy::AbstractLoggingPolicy,
+    sampling_groups = Any[],
+)
+
+    # Compile this model's sampler into a mutable decision shared by every model assigned
+    # the same sampler object.
+    model_logging_policy = get_model_logging_policy(logging_policy, mh.path)
+    sampler = get_sampler(model_logging_policy)
+    sampling_group = get_sampling_group!(sampling_groups, sampler)
+
+    models = NamedTuple(
+        f => create_model_logging_runtime(m, logging_policy, sampling_groups)
+        for (f, m) in pairs(mh.models)
+    )
+    sampling_groups_in_subtree =
+        collect_sampling_groups_in_subtree(sampling_group, models)
+
+    return ModelLoggingRuntime(
+        mh,
+        models,
+        sampling_group,
+        sampling_groups_in_subtree,
+    )
 
 end
 
@@ -361,7 +373,13 @@ end
 
 gather_all_time_series(log::AbstractLog) = gather_all_time_series(log["/"])
 
-function Base.show(io::IO, mime::MIME"text/plain", log::AbstractLog)
+function Base.show(io::IO, log::AbstractLog)
+    n_model_histories = length(keys(log))
+    label = n_model_histories == 1 ? "model history" : "model histories"
+    print(io, "$(nameof(typeof(log))) with $n_model_histories $label")
+end
+
+function Base.show(io::IO, ::MIME"text/plain", log::AbstractLog)
     println(io, "Model Histories:")
     slugs = sort(collect(keys(log)))
     for slug in slugs
@@ -385,6 +403,10 @@ A container for in-memory `BasicLog` options.
 """
 @kwdef struct BasicLogOptions <: AbstractLogOptions
     logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
+end
+
+function create_model_logging_runtime(mh::ModelHistory, options::BasicLogOptions)
+    return create_model_logging_runtime(mh, options.logging_policy)
 end
 
 """
@@ -414,6 +436,7 @@ function create_time_series_for_var(
 ) where {T}
 
     model_path = join("/" * el for el in breadcrumbs)
+    signal_path = model_path * "/" * var_name
 
     return TimeSeries(;
         var.title,
@@ -421,7 +444,7 @@ function create_time_series_for_var(
         data = T[],
         time_dimension,
         var.dimensions,
-        path = model_path,
+        path = signal_path,
         discrete,
         var.interpolator,
         var.groups,
@@ -446,7 +469,7 @@ function create_time_series_for_var(
         time = Float64[],
         data = T[],
         time_dimension,
-        path = model_path,
+        path = signal_path,
         discrete,
     )
 
@@ -475,6 +498,9 @@ export NullLogOptions
 An empty container for `NullLog` options, which disable history logging.
 """
 struct NullLogOptions <: AbstractLogOptions end
+
+create_model_logging_runtime(::Nothing, ::NullLogOptions) = nothing
+create_model_logging_runtime(::Nothing, ::Nothing) = nothing
 
 """
     NullLog
@@ -511,9 +537,10 @@ A container for HDF5-backed log options, where `filename` is the output file.
 `logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
 
-An HDF5 log records the same selected continuous and discrete states, outputs, constants,
-and metadata as a `BasicLog`, but stores time-series data on disk. This supports histories
-that would not fit in RAM, at the cost of slower logging.
+An HDF5 log records the same selected continuous and discrete states, outputs, and metadata
+as a `BasicLog`, but stores time-series data on disk. Constants that cannot be represented
+by HDF5Vectors are omitted with a warning. This supports histories that would not fit in
+RAM, at the cost of slower logging.
 
 If the selected history fits in memory and only the final artifact needs to be HDF5, it is
 faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
@@ -523,13 +550,20 @@ faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
     logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
 end
 
+function create_model_logging_runtime(mh::ModelHistory, options::HDF5LogOptions)
+    return create_model_logging_runtime(mh, options.logging_policy)
+end
+
 # For backwards compatibility.
 HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 
 """
     load_hdf5_log(filename)
 
-Loads a log from an HDF5 file.
+Loads a log from an HDF5 file. Interpolators and model types are restored using Julia
+serialization, so files should come only from trusted sources. Custom interpolator types
+must be available in the loading environment. An unavailable model type produces a warning
+and is represented by `Missing` without preventing the remaining history from loading.
 """
 function load_hdf5_log(filename)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_hdf5_log`.")
@@ -539,6 +573,8 @@ end
     save_log_to_hdf5(filename, log)
 
 Saves a log to an HDF5 file in the same format used by the HDF5Log.
+
+Constants that cannot be represented by HDF5Vectors are omitted with a warning.
 """
 function save_log_to_hdf5(filename, log)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_log_to_hdf5`.")

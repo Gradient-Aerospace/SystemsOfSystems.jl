@@ -8,6 +8,36 @@ using SystemsOfSystems
     nu::Float64 # # Noise draws
 end
 
+@testset "continuous draws retain small intervals at large epochs" begin
+
+    # These exact times have the same Float64 representation, but their interval is a real
+    # tenth of a second. Continuous random variables receive the exact start and the
+    # solver's already-computed duration, so the interval cannot collapse to zero.
+    t_start = 9_000_000_000_000_000//1
+    t_stop = t_start + 1//10
+    draw_inputs = Ref{Any}(nothing)
+    noise = (rng, t_km1, dt_f) -> begin
+        draw_inputs[] = (t_km1, dt_f)
+        return ContinuousWhiteNoise(1.)(rng, t_km1, dt_f)
+    end
+    history = simulate(
+        nothing;
+        t = (t_start, t_stop),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_random_variables = (;
+                noise,
+            ),
+        ),
+        options = SimOptions(;
+            solver = SystemsOfSystems.Solvers.RungeKutta4Options(; dt = 1),
+        ),
+    )
+
+    @test isfinite(history.model.noise)
+    @test draw_inputs[] == (t_start, 0.1)
+
+end
+
 # Here, we'll run a whole bunch of sims of a continuous-time random walk. The standard
 # deviations of the end position is known as a function of the duration of the walk and the
 # standard deviation of the noise. Note that we're using ContinuousWhiteNoise, which scales
@@ -26,7 +56,7 @@ end
     # Make an array of the final positions.
     final_position = [
         begin
-            history, t_f, x_f = simulate(
+            history = simulate(
                 nothing;
                 t = 0//1 : 1//10 : t_final, # Force some steps to happen (not one big step).
                 seed,

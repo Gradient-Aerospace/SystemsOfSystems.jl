@@ -35,6 +35,14 @@ function (interpolator::ConstantInterpolation)(ts, t)
     return interpolator.value
 end
 
+# This lets us exercise SystemsOfSystems' unsupported-constant handling without depending
+# on the implementation details of HDF5Vectors' built-in type support.
+struct UnsupportedHDF5Constant end
+
+function HDF5Vectors.storage_style(::Type{UnsupportedHDF5Constant}; kwargs...)
+    error("Intentional unsupported constant for testing.")
+end
+
 struct IMUMeasurement
     accelerometer::Float64
     angular_rate::Float64
@@ -379,28 +387,59 @@ end
 
 end
 
-@testset "VariableDescription interpolation" begin
+@testset "VariableDescription metadata" begin
 
     offset_interpolator = OffsetLinearInterpolation(5.0)
     described_state = SystemsOfSystems.VariableDescription(
         0.0;
         title = "Described State",
         dimensions = [SystemsOfSystems.Dimension("state", ""),],
+        groups = ["Custom State Axis" => ["state",],],
         interpolator = offset_interpolator,
     )
     default_described_state = SystemsOfSystems.VariableDescription(
         0.0;
         title = "Default Described State",
         dimensions = [SystemsOfSystems.Dimension("state", ""),],
+        groups = [],
+    )
+    described_constant = SystemsOfSystems.VariableDescription(
+        3.0;
+        title = "Described Constant",
+        dimensions = [SystemsOfSystems.Dimension("constant", "m"),],
+        groups = ["Constant Axis" => ["constant",],],
+        interpolator = offset_interpolator,
+    )
+    missing_constant = SystemsOfSystems.VariableDescription{Float64}(
+        missing;
+        title = "Unavailable Constant",
+        dimensions = [SystemsOfSystems.Dimension("constant", "m"),],
     )
 
     @test described_state.interpolator === offset_interpolator
+    @test described_state.groups == ["Custom State Axis" => ["state",],]
     @test ismissing(default_described_state.interpolator)
+    @test isempty(default_described_state.groups)
 
     model_description = SystemsOfSystems.ModelDescription(;
+        constants = (;
+            raw_constant = 2.0,
+            described_constant,
+            raw_missing = missing,
+            missing_constant,
+        ),
         continuous_states = (;
             x = described_state,
             y = default_described_state,
+        ),
+        models = (;
+            child = SystemsOfSystems.ModelDescription(;
+                continuous_states = (;
+                    z = 0.0,
+                ),
+            ),
+            zebra = SystemsOfSystems.ModelDescription(),
+            alpha = SystemsOfSystems.ModelDescription(),
         ),
     )
 
@@ -409,18 +448,131 @@ end
         model_description,
         SystemsOfSystems.Dimension("time", "s"),
     )
+    @test basic_history.path == "/"
+    @test basic_history.models.child.path == "/child"
+    @test keys(basic_history.models) == (:child, :zebra, :alpha)
     @test basic_history.continuous_states.x.interpolator === offset_interpolator
     @test basic_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test basic_history.continuous_states.x.path == "/x"
+    @test basic_history.models.child.continuous_states.z.path == "/child/z"
+    @test basic_history.continuous_states.x.groups == described_state.groups
+    @test isempty(basic_history.continuous_states.y.groups)
+    @test basic_history.constants.raw_constant == 2.
+    @test basic_history.constants.described_constant === described_constant
+    @test ismissing(basic_history.constants.raw_missing)
+    @test basic_history.constants.missing_constant === missing_constant
     Logs.close_log(basic_log)
 
+    direct_filename = joinpath(out_dir, "variable_description_interpolator.h5")
     hdf5_log, hdf5_history = Logs.create_log(
-        Logs.HDF5LogOptions(joinpath(out_dir, "variable_description_interpolator.h5")),
+        Logs.HDF5LogOptions(direct_filename),
         model_description,
         SystemsOfSystems.Dimension("time", "s"),
     )
     @test hdf5_history.continuous_states.x.interpolator === offset_interpolator
     @test hdf5_history.continuous_states.y.interpolator isa SystemsOfSystems.LinearInterpolation
+    @test hdf5_history.continuous_states.x.path == "/x"
+    @test hdf5_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(hdf5_history.models) == (:child, :zebra, :alpha)
+    @test hdf5_history.continuous_states.x.groups == described_state.groups
+    @test isempty(hdf5_history.continuous_states.y.groups)
+    @test hdf5_history.constants.raw_constant == 2.
+    @test hdf5_history.constants.described_constant === described_constant
+    @test ismissing(hdf5_history.constants.raw_missing)
+    @test hdf5_history.constants.missing_constant === missing_constant
     Logs.close_log(hdf5_log)
+
+    # Direct HDF5 logging and saving an in-memory log use separate writers. Both files must
+    # restore custom interpolation and grouping rather than regenerating defaults.
+    direct_log, direct_history = Logs.load_hdf5_log(direct_filename)
+    @test direct_history.type === basic_history.type
+    @test direct_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
+    @test direct_history.continuous_states.x.interpolator.offset == 5.
+    @test direct_history.continuous_states.x.path == "/x"
+    @test direct_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(direct_history.models) == (:child, :zebra, :alpha)
+    @test direct_history.continuous_states.y.interpolator isa
+        SystemsOfSystems.LinearInterpolation
+    @test direct_history.continuous_states.x.groups == described_state.groups
+    @test isempty(direct_history.continuous_states.y.groups)
+    @test direct_history.constants.raw_constant == 2.
+    @test ismissing(direct_history.constants.raw_missing)
+    @test typeof(direct_history.constants.missing_constant) == typeof(missing_constant)
+    @test ismissing(direct_history.constants.missing_constant.value)
+    direct_constant = direct_history.constants.described_constant
+    @test typeof(direct_constant) == typeof(described_constant)
+    @test direct_constant.value == described_constant.value
+    @test direct_constant.title == described_constant.title
+    @test direct_constant.dimensions == described_constant.dimensions
+    @test direct_constant.groups == described_constant.groups
+    @test direct_constant.interpolator isa OffsetLinearInterpolation
+    @test direct_constant.interpolator.offset == 5.
+    Logs.close_log(direct_log)
+
+    saved_filename = joinpath(out_dir, "saved_variable_description_groups.h5")
+    Logs.save_log_to_hdf5(saved_filename, basic_log)
+    saved_log, saved_history = Logs.load_hdf5_log(saved_filename)
+    @test saved_history.type === basic_history.type
+    @test saved_history.continuous_states.x.interpolator isa OffsetLinearInterpolation
+    @test saved_history.continuous_states.x.interpolator.offset == 5.
+    @test saved_history.continuous_states.x.path == "/x"
+    @test saved_history.models.child.continuous_states.z.path == "/child/z"
+    @test keys(saved_history.models) == (:child, :zebra, :alpha)
+    @test saved_history.continuous_states.y.interpolator isa
+        SystemsOfSystems.LinearInterpolation
+    @test saved_history.continuous_states.x.groups == described_state.groups
+    @test isempty(saved_history.continuous_states.y.groups)
+    @test saved_history.constants.raw_constant == 2.
+    @test ismissing(saved_history.constants.raw_missing)
+    @test typeof(saved_history.constants.missing_constant) == typeof(missing_constant)
+    @test ismissing(saved_history.constants.missing_constant.value)
+    saved_constant = saved_history.constants.described_constant
+    @test typeof(saved_constant) == typeof(described_constant)
+    @test saved_constant.value == described_constant.value
+    @test saved_constant.title == described_constant.title
+    @test saved_constant.dimensions == described_constant.dimensions
+    @test saved_constant.groups == described_constant.groups
+    @test saved_constant.interpolator isa OffsetLinearInterpolation
+    @test saved_constant.interpolator.offset == 5.
+    Logs.close_log(saved_log)
+
+end
+
+@testset "unsupported HDF5 constants" begin
+
+    model_description = SystemsOfSystems.ModelDescription(;
+        constants = (;
+            unsupported = UnsupportedHDF5Constant(),
+        ),
+    )
+    time_dimension = SystemsOfSystems.Dimension("time", "s")
+    warning = r"/unsupported constant of type .*UnsupportedHDF5Constant"
+
+    # Direct logging should keep the live initialization history usable while warning that
+    # the constant will not be present when the file is loaded.
+    direct_filename = joinpath(out_dir, "unsupported_direct_constant.h5")
+    direct_log, direct_history = @test_logs (:warn, warning) Logs.create_log(
+        Logs.HDF5LogOptions(direct_filename),
+        model_description,
+        time_dimension,
+    )
+    @test haskey(direct_history.constants, :unsupported)
+    Logs.close_log(direct_log)
+    loaded_direct_log, loaded_direct_history = Logs.load_hdf5_log(direct_filename)
+    @test !haskey(loaded_direct_history.constants, :unsupported)
+    Logs.close_log(loaded_direct_log)
+
+    # Saving an in-memory log follows the same best-effort rule and diagnostic path.
+    basic_log, = Logs.create_log(
+        Logs.BasicLogOptions(),
+        model_description,
+        time_dimension,
+    )
+    saved_filename = joinpath(out_dir, "unsupported_saved_constant.h5")
+    @test_logs (:warn, warning) Logs.save_log_to_hdf5(saved_filename, basic_log)
+    loaded_saved_log, loaded_saved_history = Logs.load_hdf5_log(saved_filename)
+    @test !haskey(loaded_saved_history.constants, :unsupported)
+    Logs.close_log(loaded_saved_log)
 
 end
 

@@ -86,7 +86,6 @@ function make_inputs(system_specs, solver, log, t_end)
         init_fcn = ControlSystemDemo.init,
         rates_fcn = ControlSystemDemo.rates,
         updates_fcn = ControlSystemDemo.updates,
-        close_fcn = (t, model) -> nothing,
         seed = 0,
         options = SimOptions(;
             solver,
@@ -101,9 +100,9 @@ function run_for_warmup(system_specs, solver, log)
     runtime = SystemsOfSystems.make_runtime(inputs)
     GC.gc()
     loop_outputs = SystemsOfSystems.loop!(runtime)
-    result = SystemsOfSystems.tear_down(runtime, loop_outputs)
-    @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
-    return (result.history, result.t_final, result.final_model)
+    history = SystemsOfSystems.tear_down(runtime, loop_outputs)
+    @assert history.stop isa SystemsOfSystems.ReachedEndTime
+    return history
 end
 
 function run_for_timing(system_specs, solver, log, t_end)
@@ -111,9 +110,9 @@ function run_for_timing(system_specs, solver, log, t_end)
     runtime = SystemsOfSystems.make_runtime(inputs)
     GC.gc()
     @time loop_outputs = SystemsOfSystems.loop!(runtime)
-    result = SystemsOfSystems.tear_down(runtime, loop_outputs)
-    @assert result.history.stop isa SystemsOfSystems.ReachedEndTime
-    return (result.history, result.t_final, result.final_model)
+    history = SystemsOfSystems.tear_down(runtime, loop_outputs)
+    @assert history.stop isa SystemsOfSystems.ReachedEndTime
+    return history
 end
 
 function warm_up_then_time(system_specs, solver, log, t_end)

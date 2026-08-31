@@ -30,7 +30,7 @@ Simulation of a model is easy:
 ```julia
 using SystemsOfSystems
 
-history, final_time, final_model = simulate(
+history = simulate(
     user_data;
     t = (0, 10),
     init_fcn = my_init_fcn,
@@ -40,7 +40,7 @@ history, final_time, final_model = simulate(
 )
 ```
 
-The `history` output contains the time histories of all models, as well as top-level information like the initial model description and why the simulation stopped.
+The returned `history` contains the time histories of all models, the simulation's start and stop times, the final model, and why the simulation stopped.
 
 Accessing those time histories looks like this:
 
@@ -50,7 +50,7 @@ history["/model/submodel/subsubmodel"]["position"]
 
 This would return a `TimeSeries` for the `position` state of the `"/model/submodel/subsubmodel"` model. We could plot that or access its (time, data) pairs, etc.
 
-The `final_time` output will simply be the time at the end of the simulation (the final `t`, unless the sim ended early for some reason), and the `final_model` will be the corresponding top-level model.
+The time and model at the end of the simulation are available as `history.t_stop` and `history.model`. The stop time will ordinarily be the final requested `t`, but it can be earlier if the simulation stops early.
 
 ## Example
 
@@ -91,7 +91,7 @@ function my_rates_fcn(t, model)
 end
 
 # Here, we run a simulation for 10s (the time unit is arbitrary).
-history, final_time, final_model = simulate(
+history = simulate(
     nothing; # This is the "user data" passed to the init_fcn (we don't use it).
     t = 0 : 0.1 : 10,
     init_fcn = my_init_fcn,
@@ -177,8 +177,6 @@ There are three types of logs today:
 * [`BasicLogOptions`](@ref SystemsOfSystems.Logs.BasicLogOptions): Logs states and outputs in regular Julia arrays. By default, everything is logged.
 * [`NullLogOptions`](@ref SystemsOfSystems.Logs.NullLogOptions): Logs nothing. This is good for speed when all that's needed from the sim is the final state of the models.
 * [`HDF5LogOptions`](@ref SystemsOfSystems.Logs.HDF5LogOptions): Logs directly to an HDF5 file on disk. This is much slower than logging to RAM, but it enables a sim to run for an extremely long time without using too much RAM. It still allows a user to interact with the resulting log as if the arrays were in RAM (the way you use the returned history is unchanged).
-
-Users can implement their own logs according to the log interface.
 
 ### LoggingPolicies
 
