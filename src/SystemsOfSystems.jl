@@ -1502,9 +1502,11 @@ function step!(
 
     # Continuous random values belong to intervals rather than numerical solver attempts.
     # At a triggering boundary, draw the value for the next scheduled interval only after
-    # the current interval and its discrete update have been committed. A terminal sample
-    # needs no future draw.
-    if isnothing(stop) && t_next != last(t)
+    # the current interval and its discrete update have been committed. Every continuous
+    # random-variable schedule contributes to `t_bound`, so a solver step ending before
+    # that bound cannot trigger a redraw. Avoiding the model-tree traversal on those
+    # internal steps is important for performance. A terminal sample needs no future draw.
+    if isnothing(stop) && t_next != last(t) && t_next == t_bound
         msd = draw_wc(t_next, ommd, msd)
     end
 
