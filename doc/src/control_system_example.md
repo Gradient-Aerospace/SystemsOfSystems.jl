@@ -75,6 +75,7 @@ First, we want a way to parameterize this system so that we can set the constant
     initial_position::Float64
     initial_velocity::Float64
     sigma_noise::Float64
+    noise_bandwidth::Float64
 end
 ;
 ```
@@ -129,7 +130,10 @@ function init(t, specs::PlantSpecs, seed)
         # properly by the integrator.
         continuous_random_variables = (;
             noise = SystemsOfSystems.RandomVariableDescription{Float64}(
-                SystemsOfSystems.ContinuousWhiteNoise(specs.sigma_noise);
+                SystemsOfSystems.ContinuousWhiteNoise(
+                    specs.sigma_noise,
+                    SystemsOfSystems.RegularSchedule(1 / (2 * specs.noise_bandwidth)),
+                );
                 title = "Continuous White Noise Force Input",
                 dimensions = ["noise" => "N",],
                 seed = seed / "noise",
@@ -192,6 +196,7 @@ plant_specs = PlantSpecs(;
     initial_position = 0.,
     initial_velocity = 0.,
     sigma_noise = 1.,
+    noise_bandwidth = 10.,
 )
 history = SystemsOfSystems.simulate(
     plant_specs;
@@ -745,6 +750,7 @@ system_specs = ClosedLoopSystemSpecs(
         initial_position = 0.,
         initial_velocity = 0.,
         sigma_noise = 0.1,
+        noise_bandwidth = 10.,
     ),
     sensor = SensorSpecs(
         schedule = SystemsOfSystems.RegularSchedule(0.05),

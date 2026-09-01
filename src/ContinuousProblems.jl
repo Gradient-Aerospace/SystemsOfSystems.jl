@@ -4,8 +4,8 @@ the small set of mathematical operations required by a continuous-time integrato
 
 This boundary is intentionally internal. Model authors work with `ModelDescription`,
 `RatesOutput`, and the model passed to `rates_fcn`; solver authors work with operations such
-as `prepare_attempt`, `evaluate_rates`, and `propagate`. Neither side needs to understand
-the other's representation.
+as `evaluate_rates` and `propagate`. Neither side needs to understand the other's
+representation.
 
 Keeping these operations out of the solver implementations serves two purposes. First, a
 new numerical method does not need to know how constants, discrete state, random variables,
@@ -16,7 +16,7 @@ method.
 module ContinuousProblems
 
 using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
-    copy_model_state_description_except, draw_wc, model, normalized_variable_error,
+    copy_model_state_description_except, model, normalized_variable_error,
     validate_rates_output
 
 """
@@ -25,7 +25,7 @@ using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
 A container adapting the continuous-time portion of a SystemsOfSystems simulation to the
 solver interface.
 
-`typed_description` contains the initialized description needed to prepare random variables.
+`typed_description` contains the initialized description used to validate model outputs.
 `rates_fcn` is the user's continuous-time model function. `error_policy` is a concrete
 policy for traversing and normalizing local error. All three fields are type parameters so
 calls through this adapter remain fully specialized in the numerical solver's inner loop.
@@ -47,31 +47,6 @@ struct DefaultErrorPolicy end
 
 ContinuousProblem(typed_description, rates_fcn) =
     ContinuousProblem(typed_description, rates_fcn, DefaultErrorPolicy())
-
-"""
-    prepare_attempt(problem, t_start, dt_f, state)
-
-Prepares the beginning state for one numerical attempt starting at the official `t_start`
-with floating-point duration `dt_f`.
-
-At present, preparation draws every continuous random variable for the proposed interval.
-Rejected adaptive attempts are prepared again and therefore receive new draws. Expressing
-this operation explicitly leaves room for a future random-process policy that retains one
-underlying draw and rescales or subdivides it when an attempted step is shortened.
-"""
-function prepare_attempt(
-    problem::ContinuousProblem,
-    t_start,
-    dt_f::Float64,
-    state::ModelStateDescription,
-)
-    return draw_wc(
-        t_start,
-        dt_f,
-        problem.typed_description,
-        state,
-    )
-end
 
 """
     evaluate_rates(problem, t, state)

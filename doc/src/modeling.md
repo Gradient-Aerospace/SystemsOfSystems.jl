@@ -78,16 +78,16 @@ SystemsOfSystems.VariableDescription
 
 #### Random Variables
 
-Random variables are declared separately from states. SystemsOfSystems owns their random number generators and supplies fresh draws to the model. This keeps random processes repeatable from the top-level `seed` passed to [`simulate`](@ref), and it allows the sim to handle random draws properly in coordination with the solver.
+Random variables are declared separately from states. SystemsOfSystems owns their random number generators and supplies fresh draws to the model. This keeps random processes repeatable from the top-level `seed` passed to [`simulate`](@ref), and it allows the sim to coordinate random draws with schedules and the solver.
 
-A random variable can be any callable (function or functor), or it can be a [`RandomVariableDescription`](@ref), which further specifies the value type, seed, title, dimensions, units, and plotting groups.
+A discrete random variable can be any callable, while a continuous random variable combines a callable with a schedule. Either kind can be decorated with a [`RandomVariableDescription`](@ref), which further specifies the value type, seed, title, dimensions, units, and plotting groups.
 
 The initialization seed can be branched for each logically independent random process:
 
 ```julia
 continuous_random_variables = (;
     force_noise = RandomVariableDescription{Float64}(
-        ContinuousWhiteNoise(0.1);
+        ContinuousWhiteNoise(0.1, RegularSchedule(1//100));
         seed = seed / "force_noise",
         title = "Force Noise",
         dimensions = ["force" => "N"],
@@ -103,11 +103,14 @@ SystemsOfSystems.RandomVariableDescription
 
 ##### Continuous Random Variables
 
-A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the proposed interval. SystemsOfSystems draws it for that interval and makes the result available as a field of the model during rate calculations.
+A continuous random variable has its own schedule. SystemsOfSystems draws a value at the beginning of each scheduled interval and holds it constant until the next occurrence. Numerical solver steps and rejected adaptive attempts within the interval reuse that value, so the stochastic input does not depend on the solver's step-selection behavior. The schedule is collected automatically and does not also need to be declared in `ModelDescription.schedules`.
+
+[`ContinuousRandomVariable`](@ref) associates a custom callable with a schedule. The callable accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration until the next schedule occurrence.
 
 [`ContinuousWhiteNoise`](@ref) is the built-in Gaussian white-noise process. Its `sigma` scales a draw that is divided by the square root of the interval, so its integrated effect has the expected continuous-time scaling.
 
 ```@docs
+SystemsOfSystems.ContinuousRandomVariable
 SystemsOfSystems.ContinuousWhiteNoise
 ```
 

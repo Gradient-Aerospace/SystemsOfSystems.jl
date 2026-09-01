@@ -29,6 +29,7 @@ using SystemsOfSystems: ModelDescription, VariableDescription, RandomVariableDes
     initial_position::Float64
     initial_velocity::Float64
     acceleration_noise_sigma::Float64
+    acceleration_noise_schedule::RegularSchedule
 end
 
 # This contains everything the model needs while running.
@@ -64,7 +65,10 @@ function init(t, specs::PlantSpecs, seed)
             )
         ),
         continuous_random_variables = (;
-            acceleration_noise = ContinuousWhiteNoise(specs.acceleration_noise_sigma),
+            acceleration_noise = ContinuousWhiteNoise(
+                specs.acceleration_noise_sigma,
+                specs.acceleration_noise_schedule,
+            ),
         ),
         continuous_outputs = (;
             forces = VariableDescription(
@@ -516,6 +520,7 @@ function default_closed_loop_system_specs()
             initial_position = 0.,
             initial_velocity = 0.,
             acceleration_noise_sigma = 0.1,
+            acceleration_noise_schedule = RegularSchedule(0.1),
         ),
         sensor = SensorSpecs(
             schedule = RegularSchedule(0.1),

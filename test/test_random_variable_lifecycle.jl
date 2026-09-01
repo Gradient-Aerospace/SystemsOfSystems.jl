@@ -25,11 +25,12 @@ function SystemsOfSystems.normalized_variable_error(
     return error_evaluations[] == 1 ? 2. : 0.
 end
 
-@testset "random draws follow attempted and accepted steps" begin
+@testset "random draws follow scheduled and accepted steps" begin
 
-    # The first adaptive attempt is rejected by ControlledErrorState's error method. Every
-    # attempt should redraw continuous variables, while discrete variables should be drawn
-    # only after an endpoint has been accepted.
+    # The first adaptive attempt is rejected by ControlledErrorState's error method.
+    # Continuous values should remain fixed across the retry and every accepted numerical
+    # step until their next scheduled boundary. Discrete variables are still drawn after
+    # every accepted endpoint.
     error_evaluations[] = 0
     continuous_draws = Tuple{Any, Float64}[]
     discrete_draw_times = Any[]
@@ -45,10 +46,15 @@ end
 
     history = simulate(
         nothing;
-        t = (0, 1),
+        t = (0, 2),
         init_fcn = (args...) -> ModelDescription(;
             continuous_states = (; x = ControlledErrorState(0.),),
-            continuous_random_variables = (; continuous_draw,),
+            continuous_random_variables = (;
+                continuous_draw = ContinuousRandomVariable(
+                    continuous_draw,
+                    RegularSchedule(1),
+                ),
+            ),
             discrete_random_variables = (; discrete_draw,),
         ),
         rates_fcn = (t, model) -> RatesOutput(;
@@ -72,11 +78,10 @@ end
     @test succeeded(history)
     @test error_evaluations[] == length(update_times) + 1
 
-    # Both random-variable kinds receive one initialization draw. Thereafter, continuous
-    # draws correspond to attempts and discrete draws correspond to accepted updates.
-    @test length(continuous_draws) == length(update_times) + 2
-    @test continuous_draws[2][1] == continuous_draws[3][1] == 0
-    @test continuous_draws[3][2] < continuous_draws[2][2]
+    # The continuous source is drawn for [0, 1] during initialization and for [1, 2] at
+    # its one nonterminal boundary. The rejected attempt does not reach the source. Both
+    # random-variable kinds still receive an initialization draw.
+    @test continuous_draws == [(0//1, 1.), (1//1, 1.)]
     @test first(discrete_draw_times) == 0
     @test discrete_draw_times[2:end] == update_times
 

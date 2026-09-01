@@ -18,7 +18,7 @@ export Dimension,
     BranchingSeed, branch,
     TimeSeries, SampleAndHold, LinearInterpolation,
     plot_ts, plot_ts!,
-    ContinuousWhiteNoise, DiscreteWhiteNoise,
+    ContinuousRandomVariable, ContinuousWhiteNoise, DiscreteWhiteNoise,
     AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
     on_triggering, is_triggering, next_trigger_time, next_regular_time,
     Samplers, LoggingPolicies
@@ -27,6 +27,7 @@ export Dimension,
 public SimulationTimes,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, # backward compatibility
+    AbstractContinuousRandomVariable,
     AbstractTimeSeriesInterpolator, select,
     normalized_scalar_error, normalized_variable_error,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
@@ -78,9 +79,9 @@ contains:
 * `continuous_outputs`: A named tuple of each of the continuous outputs in the model
 * `discrete_outputs`: A named tuple of each of the discrete outputs in the model
 * `continuous_random_variables`: A named tuple of each of the continuous random variables in
-  the model. Each element can be a function mapping `(rng, t_km1, dt_f)` to a value, or a
-  `RandomVariableDescription`. The interval starts at the exact time `t_km1` and has the
-  floating-point duration `dt_f`.
+  the model. Each element is an `AbstractContinuousRandomVariable`, optionally decorated
+  with a `RandomVariableDescription`. Its schedule determines when the simulation draws a
+  new value and the interval over which that value is held.
 * `discrete_random_variables`: A named tuple of each of the discrete random variables in the
   model. Each element can be a function mapping `(rng, t)` to a value, or a
   `RandomVariableDescription`.
@@ -145,6 +146,8 @@ ModelDescription(;
     exact_time(t_next),
 )
 
+random_variable_function(random_variable) = random_variable
+
 """
     validate_model_description(description, model_path = "/")
 
@@ -208,6 +211,23 @@ function validate_model_description(description::ModelDescription, model_path = 
 
     end
 
+    for name in fieldnames(typeof(description.continuous_random_variables))
+
+        random_variable = random_variable_function(
+            description.continuous_random_variables[name],
+        )
+        if !(random_variable isa AbstractContinuousRandomVariable)
+            variable_path = model_path == "/" ? "/continuous_random_variables/$name" :
+                "$model_path/continuous_random_variables/$name"
+            throw(ArgumentError(
+                "Continuous random variable $variable_path must be a " *
+                "AbstractContinuousRandomVariable with an AbstractSchedule, not " *
+                "$(typeof(random_variable)).",
+            ))
+        end
+
+    end
+
     for name in fieldnames(typeof(description.models))
         submodel_path = model_path == "/" ? "/models/$name" : "$model_path/models/$name"
         validate_model_description(description.models[name], submodel_path)
@@ -230,6 +250,9 @@ function collect_schedules!(
     description::ModelDescription,
 )
     append!(schedules, map(strip_fluff_from_variable, description.schedules))
+    append!(schedules, map(description.continuous_random_variables) do random_variable
+        return random_variable_function(random_variable).schedule
+    end)
     for submodel in description.models
         collect_schedules!(schedules, submodel)
     end
@@ -385,13 +408,12 @@ end
 """
     RandomVariableDescription{T}
 
-A container for a random variable of type `T`. The `f` field is a function or callable type
-satisfying `f(rng, t)::T` for a discrete random variable or
-`f(rng, t_km1, dt_f)::T` for a continuous random variable, where `t_km1` is the exact
-simulation time at the beginning of the interval and `dt_f` is its floating-point duration.
-It also stores a `seed::BranchingSeed` for its own random number generator, which is useful
-when a model description needs to reproduce the same draw outside of its usual parent
-model. The remaining fields, `title`, `dimensions`, and `groups`, are the same as for
+A container for a random variable of type `T`. The `f` field is a callable type satisfying
+`f(rng, t)::T` for a discrete random variable, or an
+`AbstractContinuousRandomVariable` for a continuous random variable. It also stores a
+`seed::BranchingSeed` for its own random number generator, which is useful when a model
+description needs to reproduce the same draw outside of its usual parent model. The
+remaining fields, `title`, `dimensions`, and `groups`, are the same as for
 `VariableDescription`.
 """
 struct RandomVariableDescription{T}
@@ -412,11 +434,13 @@ function RandomVariableDescription{T}(
     return RandomVariableDescription{T}(f, seed, title, Dimension[dimensions...], groups)
 end
 
+random_variable_function(random_variable::RandomVariableDescription) = random_variable.f
+
 """
     RandomVariable{F, T}
 
-A container for a callable random process, `f::F`, and its `rng::Xoshiro`, where
-`f(rng, t)` produces a random draw of type `T` at time `t`.
+The runtime container for a callable random process, `f::F`, and its `rng::Xoshiro`. The
+type parameter `T` records the draw type without storing another value.
 """
 struct RandomVariable{F, T}
     f::F
@@ -427,27 +451,63 @@ end
 # User Utilities #
 ##################
 
-# We don't use these internally; they're helpful modeling tools for users.
+# These small modeling utilities provide the common random processes used in descriptions.
 
 """
-    ContinuousWhiteNoise{T}(; sigma::T)
+The common supertype for continuous random sources with their own sample schedule. Most
+models use `ContinuousWhiteNoise`; `ContinuousRandomVariable` wraps a custom draw function.
+"""
+abstract type AbstractContinuousRandomVariable end
 
-A callable Gaussian white-noise process for continuous-time models with the given standard
-deviation, `sigma::T`. This works for any type that defines `randn(rng, type)` and
-broadcasting (`Float64`, `SVector`, etc.).
+"""
+    ContinuousRandomVariable(f, schedule)
+
+A continuous random draw function and the schedule on which its values change. The callable
+`f` receives `(rng, t_km1, dt_f)`, where `t_km1` is the exact beginning of the scheduled
+interval and `dt_f` is its floating-point duration. SystemsOfSystems draws once at the
+beginning of each interval and holds that value through every numerical solver step and
+rejected attempt until the next schedule occurrence.
+
+The schedule is collected automatically. It does not also need to appear in the model's
+`schedules` field. It must provide a finite next occurrence for every interval used by the
+simulation; regular and offset-regular schedules satisfy this requirement.
+"""
+struct ContinuousRandomVariable{
+    F,
+    S <: AbstractSchedule,
+} <: AbstractContinuousRandomVariable
+    f::F
+    schedule::S
+end
+
+function (random_variable::ContinuousRandomVariable)(rng, t_km1, dt_f)
+    return random_variable.f(rng, t_km1, dt_f)
+end
+
+"""
+    ContinuousWhiteNoise(sigma, schedule)
+
+A scheduled Gaussian white-noise process for continuous-time models with intensity
+`sigma`. This works for any type that defines `randn(rng, type)` and broadcasting
+(`Float64`, `SVector`, etc.). A new value is drawn at the beginning of every scheduled
+interval and held constant until the next occurrence. Its standard deviation is
+`sigma / sqrt(dt_f)`, so its integrated effect over the interval has standard deviation
+`sigma * sqrt(dt_f)`.
 
 An example:
 
 ```
-rng = Xoshiro(1)
-process = ContinuousWhiteNoise(SA[1., 2.])
-process(rng, t_km1, dt_f) # Yields appropriate random draws.
+noise = ContinuousWhiteNoise(SA[1., 2.], RegularSchedule(1//100))
 ```
 """
-@kwdef struct ContinuousWhiteNoise{T}
+@kwdef struct ContinuousWhiteNoise{
+    T,
+    S <: AbstractSchedule,
+} <: AbstractContinuousRandomVariable
     sigma::T
+    schedule::S
 end
-function (nu::ContinuousWhiteNoise{T})(rng, t_km1, dt_f) where {T}
+function (nu::ContinuousWhiteNoise{T, S})(rng, t_km1, dt_f) where {T, S}
     dt_f > 0 || throw(ArgumentError("ContinuousWhiteNoise requires a positive duration."))
     return nu.sigma ./ sqrt(dt_f) .* randn(rng, T)
 end
@@ -619,7 +679,10 @@ strip_fluff_from_variable(var::VariableDescription) = var.value
 function strip_fluff_from_random_variable(f::DiscreteWhiteNoise{T}, seed) where {T}
     return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
 end
-function strip_fluff_from_random_variable(f::ContinuousWhiteNoise{T}, seed) where {T}
+function strip_fluff_from_random_variable(
+    f::ContinuousWhiteNoise{T, S},
+    seed,
+) where {T, S}
     return RandomVariable{typeof(f), T}(f, Xoshiro(seed))
 end
 
@@ -916,11 +979,6 @@ describe(stop::EncounteredError) =
 # SimOptions #
 ##############
 
-# We define this generic function before loading the continuous-problem adapter. Its
-# concrete hierarchical method remains with the simulation's random-variable machinery,
-# below.
-function draw_wc end
-
 """
     normalized_scalar_error(value, embedded_value, absolute_tolerance, relative_tolerance)
 
@@ -1051,9 +1109,36 @@ Logs.gather_all_time_series(history::SimHistory) = Logs.gather_all_time_series(h
 #########
 
 # Functions for drawing from the sets of random variables
-function draw_crvs(crvs, t_km1, dt_f)
+function continuous_random_variable_duration(random_variable, t_km1)
+
+    t_km1 = exact_time(t_km1)
+    schedule = random_variable.f.schedule
+    t_next = exact_time(next_trigger_time(schedule, t_km1))
+    if !isfinite(t_next) || !time_isless(t_km1, t_next)
+        throw(ArgumentError(
+            "The schedule for a continuous random variable must provide a finite " *
+            "occurrence after t = $t_km1, but $(typeof(schedule)) returned $t_next.",
+        ))
+    end
+    return float_duration(t_km1, t_next)
+
+end
+
+function draw_crvs(crvs, t_km1)
+    t_km1 = exact_time(t_km1)
     return map(crvs) do rv
+        dt_f = continuous_random_variable_duration(rv, t_km1)
         return rv.f(rv.rng, t_km1, dt_f)
+    end
+end
+function redraw_triggering_crvs(crvs, previous_values, t_km1)
+    t_km1 = exact_time(t_km1)
+    return map(crvs, previous_values) do rv, previous_value
+        if is_triggering(rv.f.schedule, t_km1)
+            dt_f = continuous_random_variable_duration(rv, t_km1)
+            return rv.f(rv.rng, t_km1, dt_f)
+        end
+        return previous_value
     end
 end
 function draw_drvs(drvs, t)
@@ -1065,7 +1150,6 @@ end
 # We turn off inlining here. This appears to help keep this allocation-free.
 @noinline function draw_wc(
     t_km1,
-    dt_f,
     ommd::TypedModelDescription,
     msd::ModelStateDescription,
 )
@@ -1079,16 +1163,24 @@ end
 
     models = if ommd.models_have_continuous_random_variables
         map(ommd.models, msd.models) do ommd_submodel, msd_submodel
-            draw_wc(t_km1, dt_f, ommd_submodel, msd_submodel)
+            draw_wc(t_km1, ommd_submodel, msd_submodel)
         end
     else
         msd.models
     end
 
+    continuous_random_variables = redraw_triggering_crvs(
+        ommd.continuous_random_variables,
+        msd.continuous_random_variables,
+        t_km1,
+    )
+    if continuous_random_variables === msd.continuous_random_variables &&
+        models === msd.models
+        return msd
+    end
+
     return copy_model_state_description_except(msd;
-        continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, t_km1, dt_f,
-        ),
+        continuous_random_variables,
         models,
     )
 
@@ -1129,9 +1221,7 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        continuous_random_variables = draw_crvs(
-            ommd.continuous_random_variables, t, 1., # Placeholder duration
-        ),
+        continuous_random_variables = draw_crvs(ommd.continuous_random_variables, t),
         discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
         ommd.schedules,
         models = NamedTuple(
@@ -1409,6 +1499,14 @@ function step!(
 
     # Now accept the update.
     msd = updated_msd
+
+    # Continuous random values belong to intervals rather than numerical solver attempts.
+    # At a triggering boundary, draw the value for the next scheduled interval only after
+    # the current interval and its discrete update have been committed. A terminal sample
+    # needs no future draw.
+    if isnothing(stop) && t_next != last(t)
+        msd = draw_wc(t_next, ommd, msd)
+    end
 
     return (t_next, msd, isnothing(stop) ? UnknownStopReason() : stop)
 

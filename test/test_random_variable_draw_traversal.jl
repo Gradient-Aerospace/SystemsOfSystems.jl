@@ -16,7 +16,12 @@ discrete_draw(rng, t) = float(t)
     model_description = ModelDescription(;
         models = (;
             continuous_branch = ModelDescription(;
-                continuous_random_variables = (; continuous_draw,),
+                continuous_random_variables = (;
+                    continuous_draw = ContinuousRandomVariable(
+                        continuous_draw,
+                        RegularSchedule(1),
+                    ),
+                ),
                 models = (;
                     unused_leaf = ModelDescription(),
                 ),
@@ -57,7 +62,12 @@ end
     model_description = ModelDescription(;
         models = (;
             continuous_branch = ModelDescription(;
-                continuous_random_variables = (; continuous_draw,),
+                continuous_random_variables = (;
+                    continuous_draw = ContinuousRandomVariable(
+                        continuous_draw,
+                        RegularSchedule(1),
+                    ),
+                ),
                 models = (;
                     unused_leaf = ModelDescription(),
                 ),
@@ -81,7 +91,7 @@ end
     ommd = artifacts.ommd
     initial_state = artifacts.msd
 
-    continuous_state = SystemsOfSystems.draw_wc(1., 2., ommd, initial_state)
+    continuous_state = SystemsOfSystems.draw_wc(1., ommd, initial_state)
 
     # The continuous branch gets a new draw, but traversal ends there and preserves its
     # child states. Subtrees containing only discrete or no random variables are reused.
@@ -91,7 +101,7 @@ end
     @test continuous_state.models.continuous_branch.models ===
         initial_state.models.continuous_branch.models
     @test continuous_state.models.continuous_branch.continuous_random_variables ==
-        (; continuous_draw = 3.,)
+        (; continuous_draw = 2.,)
     @test continuous_state.models.discrete_branch === initial_state.models.discrete_branch
     @test continuous_state.models.unused_branch === initial_state.models.unused_branch
 
@@ -123,7 +133,7 @@ end
     ))
 
     # A hierarchy with no random variables should return immediately for either process.
-    @test SystemsOfSystems.draw_wc(1., 2., artifacts.ommd, artifacts.msd) === artifacts.msd
+    @test SystemsOfSystems.draw_wc(1., artifacts.ommd, artifacts.msd) === artifacts.msd
     @test SystemsOfSystems.draw_wd(2, artifacts.ommd, artifacts.msd) === artifacts.msd
 
 end

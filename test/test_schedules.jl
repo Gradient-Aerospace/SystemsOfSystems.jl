@@ -125,7 +125,12 @@ end
         discrete_states = (; repeated = 1,),
         continuous_outputs = (; repeated = 1.0,),
         discrete_outputs = (; repeated = 1,),
-        continuous_random_variables = (; repeated = (rng, t, dt) -> 0.0,),
+        continuous_random_variables = (;
+            repeated = ContinuousRandomVariable(
+                (rng, t, dt) -> 0.0,
+                clock,
+            ),
+        ),
         discrete_random_variables = (; repeated = (rng, t) -> 0.0,),
         schedules = (; repeated = clock,),
         models = (; repeated = ModelDescription(),),

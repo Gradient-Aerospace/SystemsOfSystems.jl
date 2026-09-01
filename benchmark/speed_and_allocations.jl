@@ -174,6 +174,7 @@ function time_simulations()
                         initial_position = position,
                         initial_velocity = velocity,
                         acceleration_noise_sigma = 0.1,
+                        acceleration_noise_schedule = RegularSchedule(0.1),
                     ),
                     sensor = SensorSpecs(
                         schedule = RegularSchedule(0.1),

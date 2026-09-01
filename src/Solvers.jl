@@ -8,10 +8,10 @@ rational time bound. Every accepted step remains visible to the simulation loop,
 logs the sample, runs hooks, draws discrete random variables, and performs discrete updates.
 
 Numerical methods in this module do not know how SystemsOfSystems stores model state. They
-use the operations supplied by `ContinuousProblems` to prepare an attempt, evaluate rates,
-form linear combinations of derivatives, and measure normalized error. This separation
-makes a Butcher tableau a description of mathematics rather than a second implementation of
-the simulation engine.
+use the operations supplied by `ContinuousProblems` to evaluate rates, form linear
+combinations of derivatives, and measure normalized error. This separation makes a Butcher
+tableau a description of mathematics rather than a second implementation of the simulation
+engine.
 """
 module Solvers
 
@@ -22,7 +22,7 @@ public AbstractSolverOptions, AbstractIntegrator, AbstractSolver,
     create_integrator, step!
 
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
-    prepare_attempt, propagate
+    propagate
 using ..SimulationTimes: ExactTime, exact_time, float_duration, solver_time, time_isless
 using ..SystemsOfSystems: AbstractFailureReason, ModelStateDescription
 import ..SystemsOfSystems
@@ -74,10 +74,10 @@ end
 
 The result of exactly one accepted numerical step.
 
-`state_at_start` includes the continuous random draws belonging to the accepted interval,
-and `rates_at_start` is the authoritative rates evaluation for that accepted sample. The
-simulation loop logs those values and considers their model stop requests. Intermediate
-stage outputs and stop requests never cross this boundary.
+`rates_at_start` is the authoritative rates evaluation for the accepted beginning sample.
+The simulation loop logs those outputs and considers their model stop requests. Intermediate
+stage outputs and stop requests never cross this boundary. The request already owns the
+beginning state, so the result contains only the propagated `state_at_end`.
 
 `next_dt` is a floating-point controller suggestion. It is deliberately a duration rather
 than an absolute time; the scheduler converts it into an official rational endpoint for the
@@ -89,7 +89,6 @@ struct AcceptedStep{
     R,
 }
     t_end::T
-    state_at_start::S
     rates_at_start::R
     state_at_end::S
     next_dt::Float64
@@ -521,11 +520,8 @@ function stage_count(
 end
 
 """
-Evaluates every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`.
-
-The beginning state is prepared exactly once for this attempt. If an adaptive controller
-rejects the result, its next attempt calls this function again and obtains new continuous
-random draws according to the current random-process policy.
+Evaluates every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`. The
+beginning state already contains the continuous random values held across the attempt.
 """
 function evaluate_stages(
     method::ExplicitRungeKuttaTableau,
@@ -536,7 +532,7 @@ function evaluate_stages(
     state::ModelStateDescription,
 )
 
-    state_at_start = prepare_attempt(problem, t_start, dt, state)
+    state_at_start = state
     t_start_f = float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(
@@ -550,7 +546,7 @@ function evaluate_stages(
         stage_count(method),
     )
 
-    return (; state_at_start, rates_at_start, stages, dt)
+    return (; rates_at_start, stages, dt)
 
 end
 
@@ -594,7 +590,7 @@ function step!(
         request.state,
     )
     state_at_end = solution_state(
-        attempt.state_at_start,
+        request.state,
         attempt.dt,
         integrator.method.b,
         attempt.stages,
@@ -602,7 +598,6 @@ function step!(
 
     return AcceptedStep(
         interval.t_end,
-        attempt.state_at_start,
         attempt.rates_at_start,
         state_at_end,
         integrator.controller.dt,
@@ -646,13 +641,13 @@ function step!(
             request.state,
         )
         state_at_end = solution_state(
-            attempt.state_at_start,
+            request.state,
             attempt.dt,
             integrator.method.b,
             attempt.stages,
         )
         embedded_state = solution_state(
-            attempt.state_at_start,
+            request.state,
             attempt.dt,
             integrator.method.embedded_b,
             attempt.stages,
@@ -675,7 +670,6 @@ function step!(
             controller.next_dt = next_dt
             return AcceptedStep(
                 interval.t_end,
-                attempt.state_at_start,
                 attempt.rates_at_start,
                 state_at_end,
                 next_dt,

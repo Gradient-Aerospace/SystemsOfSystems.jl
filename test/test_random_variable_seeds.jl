@@ -32,7 +32,10 @@ end
 
     model_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_km1, dt_f) -> randn(rng),
+            w_draw = ContinuousRandomVariable(
+                (rng, t_km1, dt_f) -> randn(rng),
+                RegularSchedule(1),
+            ),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),
@@ -123,8 +126,8 @@ end
 
     model_description = ModelDescription(;
         continuous_random_variables = (;
-            nu_x = ContinuousWhiteNoise(1.0),
-            nu_y = ContinuousWhiteNoise(1.0),
+            nu_x = ContinuousWhiteNoise(1.0, RegularSchedule(1)),
+            nu_y = ContinuousWhiteNoise(1.0, RegularSchedule(1)),
         ),
         discrete_random_variables = (;
             eta_x = DiscreteWhiteNoise(1.0),
@@ -151,7 +154,10 @@ end
 
     leaf_description = ModelDescription(;
         continuous_random_variables = (;
-            w_draw = (rng, t_km1, dt_f) -> randn(rng),
+            w_draw = ContinuousRandomVariable(
+                (rng, t_km1, dt_f) -> randn(rng),
+                RegularSchedule(1),
+            ),
         ),
         discrete_random_variables = (;
             x_draw = (rng, t) -> randn(rng),
