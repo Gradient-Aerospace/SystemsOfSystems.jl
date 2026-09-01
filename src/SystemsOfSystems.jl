@@ -1109,10 +1109,8 @@ Logs.gather_all_time_series(history::SimHistory) = Logs.gather_all_time_series(h
 #########
 
 # Functions for drawing from the sets of random variables
-function continuous_random_variable_duration(random_variable, t_km1)
-
+function continuous_random_variable_duration(schedule::AbstractSchedule, t_km1)
     t_km1 = exact_time(t_km1)
-    schedule = random_variable.f.schedule
     t_next = exact_time(next_trigger_time(schedule, t_km1))
     if !isfinite(t_next) || !time_isless(t_km1, t_next)
         throw(ArgumentError(
@@ -1121,26 +1119,40 @@ function continuous_random_variable_duration(random_variable, t_km1)
         ))
     end
     return float_duration(t_km1, t_next)
-
 end
 
-function draw_crvs(crvs, t_km1)
+# For regular schedules, the duration is constant.
+function continuous_random_variable_duration(
+    schedule::Union{RegularSchedule, OffsetRegularSchedule},
+    t_km1,
+)
+    return float(schedule.period)
+end
+
+# To draw the initial CRVs, we clearly have to prior, so everything must be drawn regardless
+# of its schedule. We'll use the start time. The time step over which the random variable
+# acts will still be a function of its schedule, as if this random variable were already
+# acting when the simulation started.
+function draw_initial_crvs(crvs, t_km1)
     t_km1 = exact_time(t_km1)
     return map(crvs) do rv
-        dt_f = continuous_random_variable_duration(rv, t_km1)
+        dt_f = continuous_random_variable_duration(rv.f.schedule, t_km1)
         return rv.f(rv.rng, t_km1, dt_f)
     end
 end
+
+# Here, we either update the random variable or return its prior value.
 function redraw_triggering_crvs(crvs, previous_values, t_km1)
     t_km1 = exact_time(t_km1)
     return map(crvs, previous_values) do rv, previous_value
         if is_triggering(rv.f.schedule, t_km1)
-            dt_f = continuous_random_variable_duration(rv, t_km1)
+            dt_f = continuous_random_variable_duration(rv.f.schedule, t_km1)
             return rv.f(rv.rng, t_km1, dt_f)
         end
         return previous_value
     end
 end
+
 function draw_drvs(drvs, t)
     return map(drvs) do rv
         return rv.f(rv.rng, t)
@@ -1221,8 +1233,12 @@ function create_model_state(t, ommd::TypedModelDescription{T}) where {T}
         ommd.constants,
         ommd.continuous_states,
         ommd.discrete_states,
-        continuous_random_variables = draw_crvs(ommd.continuous_random_variables, t),
-        discrete_random_variables = draw_drvs(ommd.discrete_random_variables, t),
+        continuous_random_variables = draw_initial_crvs(
+            ommd.continuous_random_variables, t,
+        ),
+        discrete_random_variables = draw_drvs(
+            ommd.discrete_random_variables, t,
+        ),
         ommd.schedules,
         models = NamedTuple(
             mn => create_model_state(t, ommd.models[mn])
