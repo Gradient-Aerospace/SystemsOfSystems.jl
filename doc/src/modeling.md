@@ -103,7 +103,7 @@ SystemsOfSystems.RandomVariableDescription
 
 ##### Continuous Random Variables
 
-A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the proposed interval. SystemsOfSystems draws it for that interval and makes the result available as a field of the model during rate calculations.
+A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the solver's proposed interval. SystemsOfSystems draws it once and makes the result available as a field of the model during rate calculations. If an adaptive solver rejects the proposed step, shorter attempts and accepted substeps retain that draw until the solver reaches the original interval endpoint. This prevents step rejection from selectively discarding unusually large draws.
 
 [`ContinuousWhiteNoise`](@ref) is the built-in Gaussian white-noise process. Its `sigma` scales a draw that is divided by the square root of the interval, so its integrated effect has the expected continuous-time scaling.
 

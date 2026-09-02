@@ -436,6 +436,9 @@ A callable Gaussian white-noise process for continuous-time models with the give
 deviation, `sigma::T`. This works for any type that defines `randn(rng, type)` and
 broadcasting (`Float64`, `SVector`, etc.).
 
+SystemsOfSystems holds each draw constant over its committed solver interval, including
+any shorter steps needed after an adaptive solver rejects its first attempt.
+
 An example:
 
 ```
@@ -1300,6 +1303,7 @@ function step!(
     msd,
     integrator,
     hooks,
+    t_next_crv_draw,
 )
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
@@ -1333,6 +1337,12 @@ function step!(
         earlier_time(t_next_from_models, t_next_from_schedules),
     )
 
+    # If a continuous-random interval is still in progress, make sure the solver finishes
+    # it before attempting a step beyond its endpoint.
+    if time_isless(t_last, t_next_crv_draw) && time_isless(t_next_crv_draw, t_bound)
+        t_bound = t_next_crv_draw
+    end
+
     # Record the committed state before entering the fallible solver. The matching output
     # is recorded only if the solver returns authoritative beginning-of-step rates.
     SimulationLogging.log_continuous_state_stuff!(
@@ -1344,10 +1354,10 @@ function step!(
     result = Solvers.step!(
         integrator,
         problem,
-        Solvers.StepRequest(t_last, t_bound, msd),
+        Solvers.StepRequest(t_last, t_bound, msd, t_next_crv_draw),
     )
     if result isa Solvers.SolverFailure
-        return (t_last, msd, result.reason)
+        return (t_last, msd, result.reason, t_next_crv_draw)
     end
 
     t_next = result.t_end
@@ -1410,7 +1420,12 @@ function step!(
     # Now accept the update.
     msd = updated_msd
 
-    return (t_next, msd, isnothing(stop) ? UnknownStopReason() : stop)
+    return (
+        t_next,
+        msd,
+        isnothing(stop) ? UnknownStopReason() : stop,
+        result.t_next_crv_draw,
+    )
 
 end
 
@@ -1645,6 +1660,7 @@ function loop!(runtime)
     t_completed = first(runtime.t)
     msd = runtime.msd
     stop = UnknownStopReason()
+    t_next_crv_draw = t_completed # Take CRV draws on the first step.
 
     # No matter what happens, this function returns all of the progress it's made.
     try
@@ -1654,10 +1670,10 @@ function loop!(runtime)
             # `step!` returns only after the accepted continuous endpoint and its discrete
             # update are complete. Assigning its result here is the simulation's commit
             # point: later failures must retain this time and state.
-            t_completed, msd, stop = step!(
+            t_completed, msd, stop, t_next_crv_draw = step!(
                 logging_runtime,
                 t, schedules, ommd, problem, updates_fcn, t_completed, msd,
-                integrator, hooks
+                integrator, hooks, t_next_crv_draw,
             )
 
             # A successfully processed terminal sample receives one direct post-update
