@@ -103,9 +103,11 @@ SystemsOfSystems.RandomVariableDescription
 
 ##### Continuous Random Variables
 
-A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the solver's proposed interval. SystemsOfSystems draws it once and makes the result available as a field of the model during rate calculations. If an adaptive solver rejects the proposed step, shorter attempts and accepted substeps retain that draw until the solver reaches the original interval endpoint. This prevents step rejection from selectively discarding unusually large draws.
+A continuous random variable can be any callable (e.g., function) that accepts `(rng, t_km1, dt_f)`, where `t_km1` is the exact start time and `dt_f` is the floating-point duration of the solver's proposed interval. A user-, model-, schedule-, or simulation-end time can shorten that interval. SystemsOfSystems draws the variable once and makes the result available as a field of the model during rate calculations. If an adaptive solver rejects the proposed step, shorter attempts and accepted substeps retain that draw until the solver reaches the original interval endpoint. This prevents step rejection from selectively discarding unusually large draws.
 
-[`ContinuousWhiteNoise`](@ref) is the built-in Gaussian white-noise process. Its `sigma` scales a draw that is divided by the square root of the interval, so its integrated effect has the expected continuous-time scaling.
+[`ContinuousWhiteNoise`](@ref) is the built-in Gaussian white-noise process. Its `sigma` is a noise intensity: the process divides each draw by the square root of the interval, so its integrated effect has the expected continuous-time scaling at committed interval boundaries. Accepted solver steps inside one random interval are numerical subdivisions over which the same noise value is held constant; they are not independent Brownian increments. The solver's proposed interval lengths therefore determine the effective noise bandwidth.
+
+Model initialization evaluates each continuous random variable once using a unit-duration interval so the initial model has a concrete value before a solver interval exists. A simulation then takes a new draw for its actual first solver interval. The initialization draw advances the variable's random stream and is visible to hook initialization; the standalone `initialize` function returns this unit-duration value directly.
 
 ```@docs
 SystemsOfSystems.ContinuousWhiteNoise
