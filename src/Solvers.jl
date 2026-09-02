@@ -19,7 +19,7 @@ public AbstractSolverOptions, AbstractIntegrator, AbstractSolver,
     StepRequest, AcceptedStep, SolverFailure,
     SolverFailedToConverge, SolverStepSizeUnderflow,
     Ralston2Options, RungeKutta4Options, DormandPrince54Options,
-    create_integrator, step!
+    draw_continuous_random_variables, create_integrator, step!
 
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
     draw_continuous_random_variables, propagate
@@ -540,21 +540,21 @@ function evaluate_stages(
     t_start::Rational,
     t_end::Rational,
     dt::Float64,
-    state::ModelStateDescription,
+    state_at_start::ModelStateDescription,
 )
     t_start_f = float(t_start)
-    rates_at_start = evaluate_rates(problem, t_start_f, state)
+    rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(
         method,
         problem,
         t_start_f,
         dt,
-        state,
+        state_at_start,
         (rates_at_start,),
         Val(1),
         stage_count(method),
     )
-    return (; state, rates_at_start, stages, dt)
+    return (; state_at_start, rates_at_start, stages, dt)
 end
 
 function solution_state(state_at_start, dt, weights, stages)
