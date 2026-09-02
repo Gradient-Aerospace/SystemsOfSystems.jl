@@ -432,8 +432,9 @@ end
 """
     ContinuousWhiteNoise{T}(; sigma::T)
 
-A callable Gaussian white-noise process for continuous-time models with the given standard
-deviation, `sigma::T`. This works for any type that defines `randn(rng, type)` and
+A callable Gaussian white-noise process for continuous-time models with the given noise
+intensity, `sigma::T`. Over an interval of duration `dt_f`, the returned value has standard
+deviation `sigma / sqrt(dt_f)`. This works for any type that defines `randn(rng, type)` and
 broadcasting (`Float64`, `SVector`, etc.).
 
 SystemsOfSystems holds each draw constant over its committed solver interval, including
@@ -1660,7 +1661,10 @@ function loop!(runtime)
     t_completed = first(runtime.t)
     msd = runtime.msd
     stop = UnknownStopReason()
-    t_next_crv_draw = t_completed # Take CRV draws on the first step.
+    has_continuous_random_variables =
+        !isempty(ommd.continuous_random_variables) ||
+        ommd.models_have_continuous_random_variables
+    t_next_crv_draw = has_continuous_random_variables ? t_completed : NO_T_NEXT
 
     # No matter what happens, this function returns all of the progress it's made.
     try
