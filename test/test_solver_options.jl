@@ -31,13 +31,13 @@ function SystemsOfSystems.normalized_variable_error(
     relative_tolerance,
 )
     return max(
-        normalized_scalar_error(
+        SystemsOfSystems.normalized_scalar_error(
             value.position,
             embedded_value.position,
             absolute_tolerance,
             relative_tolerance,
         ),
-        normalized_scalar_error(
+        SystemsOfSystems.normalized_scalar_error(
             value.velocity,
             embedded_value.velocity,
             absolute_tolerance,
@@ -239,6 +239,41 @@ end
     capped = run_constant_rate(1//2)
     @test capped["/"]["x"].time == [0., 0.25, 0.75, 1.25, 1.75, 2.]
     @test capped.model.x ≈ 2.
+
+end
+
+@testset "Dormand-Prince tolerance controls accuracy" begin
+
+    function run_exponential(absolute_tolerance)
+        return simulate(
+            nothing;
+            t = (0, 1),
+            init_fcn = (args...) -> ModelDescription(;
+                continuous_states = (; x = 1.),
+            ),
+            rates_fcn = (t, model) -> RatesOutput(;
+                rates = (; x = model.x,),
+            ),
+            options = SimOptions(;
+                solver = Solvers.DormandPrince54Options(;
+                    initial_dt = 1,
+                    max_dt = 1,
+                    abs_tol = absolute_tolerance,
+                    rel_tol = 0.,
+                ),
+            ),
+        )
+    end
+
+    loose = run_exponential(1e-3)
+    tight = run_exponential(1e-9)
+    loose_error = abs(loose.model.x - exp(1.))
+    tight_error = abs(tight.model.x - exp(1.))
+
+    # Tightening the requested local error should make the controller accept more steps
+    # and produce a substantially more accurate final value.
+    @test length(tight["/"]["x"].time) > length(loose["/"]["x"].time)
+    @test tight_error < loose_error / 1_000
 
 end
 

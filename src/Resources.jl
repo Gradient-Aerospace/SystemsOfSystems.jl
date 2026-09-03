@@ -1,3 +1,7 @@
+"""
+The `Resources` module defines external objects that SystemsOfSystems opens during
+initialization and closes after their model is no longer in use.
+"""
 module Resources
 
 export AbstractResource, OutputFile, Resource, ResourceInputs, open_resource, close_resource

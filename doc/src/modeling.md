@@ -331,7 +331,7 @@ end
 
 The requested `t_next` is a hard upper bound for the integrator, just like a schedule occurrence or a user-provided time. It must be later than the current event if it is meant to create another future sample.
 
-If `UpdatesOutput.t_next` is omitted, its default value, [`KEEP_T_NEXT`](@ref), retains the model's previous request. [`NO_T_NEXT`](@ref) can be used to cancel a pending request when the model has no next event.
+If `UpdatesOutput.t_next` is omitted, its default value, [`SystemsOfSystems.KEEP_T_NEXT`](@ref), retains the model's previous request. [`SystemsOfSystems.NO_T_NEXT`](@ref) can be used to cancel a pending request when the model has no next event. These sentinels are public but not exported, so model code uses the `SystemsOfSystems.` prefix.
 
 ```@docs
 SystemsOfSystems.KEEP_T_NEXT

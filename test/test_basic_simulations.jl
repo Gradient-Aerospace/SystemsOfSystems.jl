@@ -134,11 +134,13 @@ end
 
 end
 
-@testset "Ralston second-order convergence" begin
+@testset "$label convergence" for (label, make_solver, expected_range) in (
+    ("Ralston second-order", dt -> Solvers.Ralston2Options(; dt), (3.5, 4.5)),
+    ("Runge-Kutta fourth-order", dt -> Solvers.RungeKutta4Options(; dt), (14., 17.)),
+)
 
-    # The exact solution of x' = x with x(0) = 1 is exp(t). For a second-order method,
-    # halving a sufficiently small fixed step should reduce global error by a factor near
-    # four.
+    # The exact solution of x' = x with x(0) = 1 is exp(t). Halving a fixed step should
+    # reduce global error by approximately 2^p for an order-p method.
     function final_error(dt)
         history = simulate(
             nothing;
@@ -151,23 +153,16 @@ end
             ),
             options = SimOptions(;
                 log = nothing,
-                solver = Solvers.Ralston2Options(; dt),
+                solver = make_solver(dt),
             ),
         )
         return abs(history.model.x - exp(1.))
     end
 
-    # Compare a 0.1 s step with a 0.05 s step. Halving the step size of an order-p method
-    # should reduce its global error by approximately 2^p once the steps are sufficiently
-    # small. Ralston is second order, so the fine error should be about four times smaller.
     coarse_error = final_error(1//10)
     fine_error = final_error(1//20)
-
-    # Dividing the coarse error by the fine error should therefore produce a value near
-    # four. Allow a range because these finite step sizes also contain higher-order error
-    # terms that prevent the observed ratio from being exactly four.
     error_reduction = coarse_error / fine_error
-    @test 3.5 < error_reduction < 4.5
+    @test first(expected_range) < error_reduction < last(expected_range)
 
 end
 
@@ -267,7 +262,7 @@ end
             )
         end,
         updates_fcn = (t, model) -> begin
-            if is_regular_step_triggering(t, model.dt)
+            if Schedules.is_regular_step_triggering(t, model.dt)
                 UpdatesOutput(
                     updates = (;
                         force = -model.kp * model.position - model.kd * model.velocity,

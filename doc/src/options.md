@@ -59,6 +59,87 @@ The times passed as `t` to `simulate` are required sample times, not a general f
 ```@docs
 SystemsOfSystems.Solvers.DormandPrince54Options
 SystemsOfSystems.Solvers.RungeKutta4Options
+SystemsOfSystems.Solvers.Ralston2Options
+```
+
+### Structured-State Errors
+
+The adaptive solver must reduce the error in each state variable to one normalized scalar. The default [`SystemsOfSystems.normalized_variable_error`](@ref) implementation compares the components returned by `Dimensions.eachdim` and returns the largest error. This works automatically for scalars, arrays, static arrays, and user types that implement the Dimensions interface.
+
+A state type that does not use Dimensions can specialize the function directly. For example:
+
+```julia
+struct PositionVelocity
+    position::Float64
+    velocity::Float64
+end
+
+function SystemsOfSystems.normalized_variable_error(
+    value::PositionVelocity,
+    embedded_value::PositionVelocity,
+    absolute_tolerance,
+    relative_tolerance,
+)
+    return max(
+        SystemsOfSystems.normalized_scalar_error(
+            value.position,
+            embedded_value.position,
+            absolute_tolerance,
+            relative_tolerance,
+        ),
+        SystemsOfSystems.normalized_scalar_error(
+            value.velocity,
+            embedded_value.velocity,
+            absolute_tolerance,
+            relative_tolerance,
+        ),
+    )
+end
+```
+
+These functions are public but intentionally qualified because most users never call them directly.
+
+```@docs
+SystemsOfSystems.normalized_variable_error
+SystemsOfSystems.normalized_scalar_error
+```
+
+### Custom Solvers
+
+Solver extensions define an immutable `Solvers.AbstractSolverOptions`, a per-simulation `Solvers.AbstractIntegrator`, and methods for `Solvers.create_integrator` and `Solvers.step!`. A wrapper can add behavior to an existing solver without reimplementing its numerical method:
+
+```julia
+struct CountingSolverOptions{O} <: Solvers.AbstractSolverOptions
+    solver::O
+    count::Base.RefValue{Int}
+end
+
+struct CountingIntegrator{I} <: Solvers.AbstractIntegrator
+    integrator::I
+    count::Base.RefValue{Int}
+end
+
+function Solvers.create_integrator(options::CountingSolverOptions, problem, initial_state)
+    integrator = Solvers.create_integrator(options.solver, problem, initial_state)
+    return CountingIntegrator(integrator, options.count)
+end
+
+function Solvers.step!(integrator::CountingIntegrator, problem, request)
+    integrator.count[] += 1
+    return Solvers.step!(integrator.integrator, problem, request)
+end
+```
+
+A solver implemented from scratch receives one `Solvers.StepRequest` at a time and returns either `Solvers.AcceptedStep` or `Solvers.SolverFailure`. These protocol types are public but remain qualified under `Solvers`.
+
+```@docs
+SystemsOfSystems.Solvers.AbstractSolverOptions
+SystemsOfSystems.Solvers.AbstractIntegrator
+SystemsOfSystems.Solvers.StepRequest
+SystemsOfSystems.Solvers.AcceptedStep
+SystemsOfSystems.Solvers.SolverFailure
+SystemsOfSystems.Solvers.create_integrator
+SystemsOfSystems.Solvers.step!
 ```
 
 ## Hooks
@@ -92,6 +173,35 @@ SystemsOfSystems.Hooks.ClockSyncOptions
 
 Further hooks can be developed using the hooks interface.
 
+A custom hook normally defines separate option and runtime types. The creation method receives the requested simulation times and initial model; update methods receive each accepted time and the corresponding pre-update model. The default `Hooks.close_hook!` does nothing, so a hook only needs to specialize it when cleanup is necessary.
+
+```julia
+struct CallbackHookOptions{F} <: Hooks.AbstractHookOptions
+    callback::F
+end
+
+struct CallbackHook{F} <: Hooks.AbstractHook
+    callback::F
+end
+
+Hooks.create_hook(options::CallbackHookOptions, t, model) =
+    CallbackHook(options.callback)
+
+function Hooks.update_hook!(hook::CallbackHook, t, model)
+    hook.callback(t, model)
+    return Hooks.HookOutputs()
+end
+```
+
+```@docs
+SystemsOfSystems.Hooks.AbstractHookOptions
+SystemsOfSystems.Hooks.AbstractHook
+SystemsOfSystems.Hooks.HookOutputs
+SystemsOfSystems.Hooks.create_hook
+SystemsOfSystems.Hooks.update_hook!
+SystemsOfSystems.Hooks.close_hook!
+```
+
 ## Logs
 
 The `log` option selects where, and whether, simulation histories are stored.
@@ -112,10 +222,7 @@ options = SimOptions(;
 )
 ```
 
-`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are
-too large for RAM, at the cost of slower simulation. Constants that cannot be represented
-by HDF5Vectors are omitted with a warning that identifies the constant, its type, and the
-underlying error. HDF5 logging becomes available after importing `HDF5Vectors`.
+`HDF5LogOptions` writes time-series data directly to disk. This supports histories that are too large for RAM, at the cost of slower simulation. Constants that cannot be represented by HDF5Vectors are omitted with a warning that identifies the constant, its type, and the underlying error. HDF5 logging becomes available after importing `HDF5Vectors`.
 
 ```julia
 using HDF5Vectors
@@ -127,10 +234,21 @@ options = SimOptions(;
 )
 ```
 
-If the history fits in memory and only the final artifact needs to be HDF5, a
-`BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging
-directly to HDF5. The same unsupported-constant behavior applies when saving an existing
-log.
+If the history fits in memory and only the final artifact needs to be HDF5, a `BasicLogOptions` simulation followed by `Logs.save_log_to_hdf5` is faster than logging directly to HDF5. The same unsupported-constant behavior applies when saving an existing log.
+
+The HDF5 representation retains model order and types; constants and their `VariableDescription` metadata; and each time series' title, dimensions, signal path, continuous/discrete designation, groups, and interpolator. Model types and interpolators use Julia serialization. Files should therefore come only from trusted sources, and custom serialized types must be available when loading.
+
+`Logs.load_hdf5_log` returns `(log, root_model_history)`. The returned time series remain backed by the open file, so the log should be closed when it is no longer needed:
+
+```julia
+log, root = Logs.load_hdf5_log("out/history.h5")
+try
+    position = root["position"]
+    # Use the loaded history.
+finally
+    Logs.close_log(log)
+end
+```
 
 ```@docs
 SystemsOfSystems.Logs.BasicLogOptions
@@ -138,6 +256,30 @@ SystemsOfSystems.Logs.NullLogOptions
 SystemsOfSystems.Logs.HDF5LogOptions
 SystemsOfSystems.Logs.load_hdf5_log
 SystemsOfSystems.Logs.save_log_to_hdf5
+```
+
+### Standalone Time Series
+
+Individual time series can use the same HDF5 representation without constructing a complete log. These functions operate on an open HDF5 file, and loaded vectors remain usable only while that file is open.
+
+```julia
+using HDF5
+using HDF5Vectors
+
+HDF5.h5open("signal.h5", "w") do file
+    Logs.save_time_series_to_hdf5(file, "signals/position", position)
+end
+
+HDF5.h5open("signal.h5", "r") do file
+    loaded_position = Logs.load_time_series_from_hdf5(file, "signals/position")
+    # Use loaded_position before this block closes the file.
+end
+```
+
+```@docs
+SystemsOfSystems.Logs.save_time_series_to_hdf5
+SystemsOfSystems.Logs.load_time_series_from_hdf5
+SystemsOfSystems.Logs.close_log
 ```
 
 ### Logging Policies

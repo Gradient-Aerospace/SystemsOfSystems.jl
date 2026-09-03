@@ -15,6 +15,12 @@ the simulation engine.
 """
 module Solvers
 
+public AbstractSolverOptions, AbstractIntegrator, AbstractSolver,
+    StepRequest, AcceptedStep, SolverFailure,
+    SolverFailedToConverge, SolverStepSizeUnderflow,
+    Ralston2Options, RungeKutta4Options, DormandPrince54Options,
+    create_integrator, step!
+
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
     prepare_attempt, propagate
 using ..SimulationTimes: ExactTime, exact_time, float_duration, solver_time, time_isless

@@ -362,4 +362,28 @@ end
 
 end
 
+@testset "resource cleanup is isolated and reversed" begin
+
+    # Resources close in reverse opening order. A failure from one resource must be logged
+    # without preventing the resources opened before it from closing too.
+    close_order = Symbol[]
+    manager = SystemsOfSystems.ResourceManager()
+    for name in (:first, :second, :third)
+        resource = Resource(;
+            open_args = (),
+            open_fcn = inputs -> name,
+            close_fcn = payload -> begin
+                push!(close_order, payload)
+                payload == :second && error("Expected close failure")
+                return nothing
+            end,
+        )
+        SystemsOfSystems.add_resource!(manager, resource, name)
+    end
+
+    @test_logs (:error,) SystemsOfSystems.close_resources(manager)
+    @test close_order == [:third, :second, :first]
+
+end
+
 end

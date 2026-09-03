@@ -1,3 +1,7 @@
+"""
+SystemsOfSystems is a simulation engine for hierarchical models with continuous and
+discrete dynamics, events, random variables, resources, and configurable logging.
+"""
 module SystemsOfSystems
 
 # Running simulations
@@ -12,15 +16,22 @@ export ModelDescription, VariableDescription, RandomVariableDescription,
 # Utilities
 export Dimension,
     BranchingSeed, branch,
-    normalized_scalar_error, normalized_variable_error,
-    TimeSeries, AbstractTimeSeriesInterpolator, SampleAndHold, LinearInterpolation, select,
-    plot_ts,
+    TimeSeries, SampleAndHold, LinearInterpolation,
+    plot_ts, plot_ts!,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
     AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
     on_triggering, is_triggering, next_trigger_time, next_regular_time,
+    Samplers, LoggingPolicies
+
+# Qualified public interfaces
+public SimulationTimes,
     KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering, # backward compatibility
-    Samplers, LoggingPolicies
+    AbstractTimeSeriesInterpolator, select,
+    normalized_scalar_error, normalized_variable_error,
+    AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
+    ReachedEndTime, ModelRequestedStop, HookRequestedStop, EncounteredError,
+    describe
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -245,14 +256,15 @@ end
 """
 A container for a model's continuous-time derivatives and outputs.
 
-* `rates`: A named tuple corresponding with the continuous variables, where each field
-  contains the rate of change of that continuous variable.
-* `outputs`: A named tuple of continuous-time outputs (must match the original
-  `ModelDescription`).
-* `models`: A named tuple containing the `RatesOutput` for each submodel.
+* `rates`: A named tuple mapping continuous-state names to their rates of change.
+* `outputs`: A named tuple mapping continuous-output names to their values.
+* `models`: A named tuple mapping submodel names to their `RatesOutput` values.
 * `stop`: Set to true to request that the simulation stop after this accepted sample
   completes. Stop requests from rejected solver attempts and intermediate Runge-Kutta
   stages are ignored.
+
+Each named tuple may omit fields that have nothing to report, but cannot contain names that
+are absent from the corresponding section of the original `ModelDescription`.
 """
 struct RatesOutput{RT, OT, MT}
     rates::RT
@@ -272,14 +284,15 @@ A container for a model's discrete-time updates and outputs. A model that has no
 outputs, replacement `t_next`, or stop request at a sample may return `nothing` instead of
 an empty `UpdatesOutput()`.
 
-* `updates`: A named tuple mapping state name (can be a continuous or discrete state) to the
-   updated value
-* `outputs`: A named tuple of discrete-time outputs (must match the original
-  `ModelDescription`).
-* `models`: A named tuple containing the `UpdatesOutput` or `nothing` for each submodel.
+* `updates`: A named tuple mapping continuous- or discrete-state names to updated values.
+* `outputs`: A named tuple mapping discrete-output names to their values.
+* `models`: A named tuple mapping submodel names to their `UpdatesOutput` or `nothing`.
 * `t_next`: A replacement for the model's next requested time. When omitted, it defaults to
   `KEEP_T_NEXT` and retains the previous request. `NO_T_NEXT` cancels a finite request.
 * `stop`: Set to true to request that the simulation stop after this update is accepted.
+
+Each named tuple may omit fields that have nothing to report, but cannot contain names that
+are absent from the corresponding section of the original `ModelDescription`.
 """
 struct UpdatesOutput{UT, OT, MT}
     updates::UT
@@ -469,10 +482,13 @@ end
 An internal model description with the `VariableDescription` metadata removed and all types
 fixed as type parameters. This is used by the simulation loop.
 
+The model path is retained for runtime diagnostics.
+
 This is mutable only to put it on the heap.
 """
 @kwdef mutable struct TypedModelDescription{T, CT, XCT, XDT, YCT, YDT, WCT, WDT, ST, MT, RT}
     type::Type{T} # This could actually be any function that takes kwargs.
+    model_path::String
     constants::CT
     continuous_states::XCT
     discrete_states::XDT
@@ -486,6 +502,113 @@ This is mutable only to put it on the heap.
     models_have_discrete_random_variables::Bool
     resources::RT
     t_next::ExactTime
+end
+
+# User-function outputs are sparse, but any names they do contain must belong to the model
+# description. Named-tuple keys are part of their concrete types, so these checks can be
+# resolved when each output shape is compiled instead of repeated at runtime.
+
+@generated function validate_output_names(
+    values::V,
+    expected::E,
+    model_path,
+    section,
+) where {V <: NamedTuple, E <: NamedTuple}
+    unexpected_names = setdiff(fieldnames(V), fieldnames(E))
+    if isempty(unexpected_names)
+        return :(nothing)
+    end
+
+    name = first(unexpected_names)
+    message = " returned unexpected field `$name` in `"
+    return :(throw(ArgumentError(string("Model ", model_path, $message, section, "`."))))
+end
+
+@generated function validate_output_names(
+    values::V,
+    expected_1::E1,
+    expected_2::E2,
+    model_path,
+    section,
+) where {V <: NamedTuple, E1 <: NamedTuple, E2 <: NamedTuple}
+    expected_names = (fieldnames(E1)..., fieldnames(E2)...)
+    unexpected_names = setdiff(fieldnames(V), expected_names)
+    if isempty(unexpected_names)
+        return :(nothing)
+    end
+
+    name = first(unexpected_names)
+    message = " returned unexpected field `$name` in `"
+    return :(throw(ArgumentError(string("Model ", model_path, $message, section, "`."))))
+end
+
+@generated function validate_model_outputs(
+    validate,
+    descriptions::D,
+    outputs::O,
+) where {D <: NamedTuple, O <: NamedTuple}
+    names = intersect(fieldnames(D), fieldnames(O))
+    validations = map(names) do name
+        return :(validate(
+            getfield(descriptions, $(QuoteNode(name))),
+            getfield(outputs, $(QuoteNode(name))),
+        ))
+    end
+    return Expr(:block, validations..., :(nothing))
+end
+
+@inline function validate_rates_output(
+    description::TypedModelDescription,
+    output::RatesOutput,
+)
+    validate_output_names(
+        output.rates,
+        description.continuous_states,
+        description.model_path,
+        "RatesOutput.rates",
+    )
+    validate_output_names(
+        output.outputs,
+        description.continuous_outputs,
+        description.model_path,
+        "RatesOutput.outputs",
+    )
+    validate_output_names(
+        output.models,
+        description.models,
+        description.model_path,
+        "RatesOutput.models",
+    )
+    validate_model_outputs(validate_rates_output, description.models, output.models)
+    return nothing
+end
+
+validate_updates_output(::TypedModelDescription, ::Nothing) = nothing
+@inline function validate_updates_output(
+    description::TypedModelDescription,
+    output::UpdatesOutput,
+)
+    validate_output_names(
+        output.updates,
+        description.continuous_states,
+        description.discrete_states,
+        description.model_path,
+        "UpdatesOutput.updates",
+    )
+    validate_output_names(
+        output.outputs,
+        description.discrete_outputs,
+        description.model_path,
+        "UpdatesOutput.outputs",
+    )
+    validate_output_names(
+        output.models,
+        description.models,
+        description.model_path,
+        "UpdatesOutput.models",
+    )
+    validate_model_outputs(validate_updates_output, description.models, output.models)
+    return nothing
 end
 
 strip_fluff_from_variable(var) = var
@@ -602,6 +725,7 @@ function create_typed_model_description!(
     # Strip the "fluff" from everything, returning just the types we'll need in the loop.
     return TypedModelDescription(;
         type = desc.type,
+        model_path = isempty(model_path) ? "/" : model_path,
         constants = map(strip_fluff_from_variable, desc.constants),
         continuous_states = map(strip_fluff_from_variable, desc.continuous_states),
         discrete_states = map(strip_fluff_from_variable, desc.discrete_states),
@@ -770,6 +894,11 @@ struct EncounteredError <: AbstractFailureReason
     trace::Any
 end
 
+"""
+    describe(reason::AbstractTerminationReason)
+
+Returns a concise, human-readable description of why a simulation stopped.
+"""
 describe(reason::AbstractTerminationReason) =
     string(typeof(reason))
 describe(stop::UnknownStopReason) =
@@ -909,7 +1038,7 @@ Base.getindex(history::SimHistory, k) = history.log[k]
 Base.keys(history::SimHistory) = keys(history.log)
 Base.values(history::SimHistory) = values(history.log)
 Base.pairs(history::SimHistory) = pairs(history.log)
-# TODO: There's more stuff we could pass through.
+Logs.gather_all_time_series(history::SimHistory) = Logs.gather_all_time_series(history.log)
 
 # We could allow a user to "close" a history, just passing along the call to the log,
 # so that they don't have to worry about the internal log, but I'm not sure what the point
@@ -1255,6 +1384,7 @@ function step!(
 
     # Perform the discrete update from t_next^- to t_next^+.
     updates = updates_fcn(t_next, model(msd))
+    validate_updates_output(ommd, updates)
 
     # A model's first update stop is considered only if an earlier accepted rates evaluation
     # or hook has not already supplied the reason for this sample to be the last.

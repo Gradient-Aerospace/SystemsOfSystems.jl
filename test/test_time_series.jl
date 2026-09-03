@@ -2,6 +2,7 @@ module TestTimeSeries
 
 import Dimensions
 using Test
+using HDF5
 using HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
 using SystemsOfSystems: Logs
@@ -55,6 +56,17 @@ struct HeterogeneousMeasurement
 end
 Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
     Dimensions.StructDimensionStyle()
+
+function scalar_time_series(time, data; discrete = false)
+    return SystemsOfSystems.TimeSeries(;
+        title = "Scalar",
+        time,
+        data,
+        time_dimension = SystemsOfSystems.Dimension("time", "s"),
+        path = "/scalar",
+        discrete,
+    )
+end
 
 @testset "TimeSeries indexing" begin
 
@@ -185,6 +197,32 @@ Dimensions.dimstyle(::Type{HeterogeneousMeasurement}) =
 
     @test_throws ErrorException ts(-0.01)
     @test_throws ErrorException ts(2.01)
+
+end
+
+@testset "TimeSeries interpolation boundaries" begin
+
+    # Built-in interpolation requires at least one sample. A single sample remains valid at
+    # its exact time for either policy.
+    for discrete in (false, true)
+        empty_series = scalar_time_series(Float64[], Float64[]; discrete)
+        single_series = scalar_time_series([1.], [7.]; discrete)
+
+        @test_throws "Cannot evaluate an empty TimeSeries." empty_series(0.)
+        @test single_series(1.) == 7.
+    end
+
+    # Repeated times represent a discontinuity. Evaluation at that time returns the last
+    # stored value, so the series switches from the pre-update to the post-update branch.
+    continuous = scalar_time_series([0., 1., 1., 2.], [0., 1., 10., 20.])
+    discrete = scalar_time_series(
+        [0., 1., 1., 2.], [0., 1., 10., 20.]; discrete = true,
+    )
+    @test continuous(0.5) == 0.5
+    @test continuous(1.) == 10.
+    @test continuous(1.5) == 15.
+    @test discrete(prevfloat(1.)) == 0.
+    @test discrete(1.) == 10.
 
 end
 
@@ -573,6 +611,60 @@ end
     loaded_saved_log, loaded_saved_history = Logs.load_hdf5_log(saved_filename)
     @test !haskey(loaded_saved_history.constants, :unsupported)
     Logs.close_log(loaded_saved_log)
+
+end
+
+@testset "standalone HDF5 TimeSeries and repeated closure" begin
+
+    # The standalone writer should produce the same representation used inside complete
+    # logs, including metadata that cannot be inferred from the samples alone.
+    interpolator = OffsetLinearInterpolation(4.)
+    time_series = SystemsOfSystems.TimeSeries(;
+        title = "Standalone Signal",
+        time = [0., 0.5, 1.],
+        data = [1., 2., 4.],
+        time_dimension = SystemsOfSystems.Dimension("simulation time", "s"),
+        dimensions = [SystemsOfSystems.Dimension("signal", "m"),],
+        path = "/standalone/signal",
+        discrete = true,
+        interpolator,
+        groups = ["Signal Axis" => ["signal",],],
+    )
+    filename = joinpath(out_dir, "standalone_time_series.h5")
+    HDF5.h5open(filename, "w") do fid
+        parent = HDF5.create_group(fid, "standalone")
+        close(parent)
+        Logs.save_time_series_to_hdf5(fid, "standalone/signal", time_series)
+    end
+
+    HDF5.h5open(filename, "r") do fid
+        loaded = Logs.load_time_series_from_hdf5(fid, "standalone/signal")
+        @test collect(loaded.time) == time_series.time
+        @test collect(loaded.data) == time_series.data
+        @test loaded.title == time_series.title
+        @test loaded.time_dimension == time_series.time_dimension
+        @test loaded.dimensions == time_series.dimensions
+        @test loaded.path == time_series.path
+        @test loaded.discrete == time_series.discrete
+        @test loaded.groups == time_series.groups
+        @test loaded.interpolator isa OffsetLinearInterpolation
+        @test loaded.interpolator.offset == interpolator.offset
+    end
+
+    # Explicit closure clears the live handle. A repeated call should remain a no-op, just
+    # as the finalizer's later close attempt will be.
+    close_filename = joinpath(out_dir, "repeated_hdf5_close.h5")
+    log, = Logs.create_log(
+        Logs.HDF5LogOptions(close_filename),
+        ModelDescription(),
+        SystemsOfSystems.Dimension("time", "s"),
+    )
+    fid = log.fid
+    @test isopen(fid)
+    @test isnothing(Logs.close_log(log))
+    @test !isopen(fid)
+    @test isnothing(log.fid)
+    @test isnothing(Logs.close_log(log))
 
 end
 

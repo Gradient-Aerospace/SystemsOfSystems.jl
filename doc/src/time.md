@@ -1,6 +1,6 @@
 # Simulation Time
 
-SystemsOfSystems distinguishes exact, official simulation times from the floating-point times used for numerical integration. User-requested times, schedule occurrences, and model-requested `t_next` values are official times. This allows unrelated periodic systems to remain aligned without accumulating floating-point from step to step.
+SystemsOfSystems distinguishes exact, official simulation times from the floating-point times used for numerical integration. User-requested times, schedule occurrences, and model-requested `t_next` values are official times. This allows unrelated periodic systems to remain aligned without accumulating floating-point roundoff errors from step to step.
 
 The numerical solver evaluates `rates_fcn` at floating-point times between official samples. In contrast, `init_fcn`, `updates_fcn`, schedules, and `t_next` use exact times at the simulation boundary.
 
@@ -17,8 +17,14 @@ SystemsOfSystems.SimulationTimes.exact_time
 
 Two special exact-time values are used with a dynamic `ModelDescription.t_next`:
 
-* [`KEEP_T_NEXT`](@ref) retains the model's previous request when returned from `UpdatesOutput`.
-* [`NO_T_NEXT`](@ref) indicates that the model has no finite upcoming event.
+* [`SystemsOfSystems.KEEP_T_NEXT`](@ref) retains the model's previous request when returned from `UpdatesOutput`.
+* [`SystemsOfSystems.NO_T_NEXT`](@ref) indicates that the model has no finite upcoming event.
+
+These sentinels are public but not exported because their meaning depends on the simulation-time interface. Model code can refer to them with the `SystemsOfSystems.` prefix. `KEEP_T_NEXT` is the default when `UpdatesOutput.t_next` is omitted, while `NO_T_NEXT` is useful for cancelling a finite request explicitly:
+
+```julia
+UpdatesOutput(; t_next = SystemsOfSystems.NO_T_NEXT)
+```
 
 ## Triggering
 
@@ -75,10 +81,10 @@ function updates(t, model)
 end
 ```
 
-The lower-level [`is_regular_step_triggering`](@ref) function tests membership in the same periodic sequence without constructing a schedule. A `RegularSchedule` or `OffsetRegularSchedule` is generally more convenient for model code because it also requests the necessary simulation times. This function exists for backwards compatibility.
+The lower-level [`Schedules.is_regular_step_triggering`](@ref) function tests membership in the same periodic sequence without constructing a schedule. A `RegularSchedule` or `OffsetRegularSchedule` is generally more convenient for model code because it also requests the necessary simulation times. This function exists for backwards compatibility and is public but not exported.
 
 ```@docs
 SystemsOfSystems.next_trigger_time
 SystemsOfSystems.next_regular_time
-SystemsOfSystems.is_regular_step_triggering
+SystemsOfSystems.Schedules.is_regular_step_triggering
 ```

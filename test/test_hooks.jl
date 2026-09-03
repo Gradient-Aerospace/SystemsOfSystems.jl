@@ -19,6 +19,12 @@ mutable struct StorageHook <: Hooks.AbstractHook
     t_final::Vector{Float64}
     x_final::Vector{Float64}
 end
+
+struct CleanupHook <: Hooks.AbstractHook
+    name::Symbol
+    close_order::Vector{Symbol}
+    fail::Bool
+end
 function Hooks.create_hook(options::StorageHookOptions, t, model)
     push!(options.t, float(first(t)))
     push!(options.x, model.x)
@@ -32,6 +38,11 @@ end
 function Hooks.close_hook!(hook::StorageHook, t, model)
     push!(hook.t_final, float(t))
     push!(hook.x_final, model.x)
+    return nothing
+end
+function Hooks.close_hook!(hook::CleanupHook, t, model)
+    push!(hook.close_order, hook.name)
+    hook.fail && error("Expected close failure")
     return nothing
 end
 
@@ -104,6 +115,22 @@ end
     @test !succeeded(history)
     @test only(t_final_storage) == history.t_stop
     @test only(x_final_storage) == history.model.x
+
+end
+
+@testset "hook cleanup is isolated and reversed" begin
+
+    # Hooks close in reverse creation order. A failure from one hook must be logged without
+    # preventing the hooks created before it from closing too.
+    close_order = Symbol[]
+    hooks = Hooks.AbstractHook[
+        CleanupHook(:first, close_order, false),
+        CleanupHook(:second, close_order, true),
+        CleanupHook(:third, close_order, false),
+    ]
+
+    @test_logs (:error,) SystemsOfSystems.close_hooks(hooks, 0, nothing)
+    @test close_order == [:third, :second, :first]
 
 end
 

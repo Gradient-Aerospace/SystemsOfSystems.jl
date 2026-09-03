@@ -16,7 +16,8 @@ method.
 module ContinuousProblems
 
 using ..SystemsOfSystems: ModelStateDescription, RatesOutput,
-    copy_model_state_description_except, draw_wc, model, normalized_variable_error
+    copy_model_state_description_except, draw_wc, model, normalized_variable_error,
+    validate_rates_output
 
 """
     ContinuousProblem(description, rates_fcn)
@@ -88,7 +89,9 @@ function evaluate_rates(
     t::AbstractFloat,
     state::ModelStateDescription,
 )
-    return problem.rates_fcn(t, model(state))
+    output = problem.rates_fcn(t, model(state))
+    validate_rates_output(problem.typed_description, output)
+    return output
 end
 
 # These helpers apply one derivative to one hierarchical state. A RatesOutput is allowed to
