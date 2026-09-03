@@ -125,10 +125,10 @@ history</code></pre><pre class="documenter-example-output"><code class="nohighli
     velocity =&gt; TimeSeries{Vector{Float64}, Vector{Float64}, LinearInterpolation}
   continuous_outputs:
     forces =&gt; TimeSeries{Vector{Float64}, Vector{Float64}, LinearInterpolation}
-</code></pre><p>We can access the position itself as:</p><pre><code class="language-julia hljs">history[&quot;/&quot;][&quot;position&quot;]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">14-element TimeSeries of Float64 elements
+</code></pre><p>We can access the position itself as:</p><pre><code class="language-julia hljs">history[&quot;/&quot;][&quot;position&quot;]</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">16-element TimeSeries of Float64 elements
   title: Plant Position
   time: Float64[0.0, ... 10.0]
-  data: Float64[0.0, ... -0.5891770891581465]
+  data: Float64[0.0, ... -0.2284047349025386]
   time_dimension: &quot;time&quot; =&gt; &quot;s&quot;
   dimensions:
     1: &quot;position&quot; =&gt; &quot;m&quot;
@@ -137,7 +137,7 @@ history</code></pre><pre class="documenter-example-output"><code class="nohighli
   interpolator: LinearInterpolation
   groups:
     position: [&quot;position&quot;]
-</code></pre><p>And, while we&#39;re here, let&#39;s plot it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;position&quot;])</code></pre><img src="72d5cf38.png" alt="Example block output"/><p>In fact, let&#39;s run 15 simulations, returning the <code>position</code> time series from each, and then plot them all. Here, we&#39;ll write a loop that generates an array of 15 time histories of position.</p><pre><code class="language-julia hljs"># Make an array of position histories, one for each seed.
+</code></pre><p>And, while we&#39;re here, let&#39;s plot it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;position&quot;])</code></pre><img src="8ada79dc.png" alt="Example block output"/><p>In fact, let&#39;s run 15 simulations, returning the <code>position</code> time series from each, and then plot them all. Here, we&#39;ll write a loop that generates an array of 15 time histories of position.</p><pre><code class="language-julia hljs"># Make an array of position histories, one for each seed.
 position_histories = map(1:15) do seed
 
     # Run the sim for this seed.
@@ -156,7 +156,7 @@ position_histories = map(1:15) do seed
 end
 
 # Plot all of those as separate lines with the given labels.
-SystemsOfSystems.plot_ts(position_histories)</code></pre><img src="dc0cc793.png" alt="Example block output"/><p>We can see the sinusoidal motion we&#39;d expect from a system like this, driven by noise. At this point, we can have some faith that our plant model is doing what we intend. Let&#39;s continue with the remaining systems.</p><h2 id="Sensor"><a class="docs-heading-anchor" href="#Sensor">Sensor</a><a id="Sensor-1"></a><a class="docs-heading-anchor-permalink" href="#Sensor" title="Permalink"></a></h2><p>The sensor will be a discrete system, with discrete state and discrete noise. It will also be triggered at a regular rate. Here&#39;s how we can implement that.</p><p>We start with the specifications (options, parameters, whatever).</p><pre><code class="language-julia hljs">@kwdef struct SensorSpecs
+SystemsOfSystems.plot_ts(position_histories)</code></pre><img src="0b199b1d.png" alt="Example block output"/><p>We can see the sinusoidal motion we&#39;d expect from a system like this, driven by noise. At this point, we can have some faith that our plant model is doing what we intend. Let&#39;s continue with the remaining systems.</p><h2 id="Sensor"><a class="docs-heading-anchor" href="#Sensor">Sensor</a><a id="Sensor-1"></a><a class="docs-heading-anchor-permalink" href="#Sensor" title="Permalink"></a></h2><p>The sensor will be a discrete system, with discrete state and discrete noise. It will also be triggered at a regular rate. Here&#39;s how we can implement that.</p><p>We start with the specifications (options, parameters, whatever).</p><pre><code class="language-julia hljs">@kwdef struct SensorSpecs
     schedule::SystemsOfSystems.RegularSchedule # Defines the sample period
     sigma_noise::Float64 # Standard deviation of noise to add to the measurement
     sigma_bias::Float64 # Standard deviation of the measurement bias
@@ -576,7 +576,7 @@ history</code></pre><pre class="documenter-example-output"><code class="nohighli
     /plant
     /sensor
     /target
-</code></pre><p>Let&#39;s see if we&#39;re driving down the control error.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;control_error&quot;])</code></pre><img src="a1a12431.png" alt="Example block output"/><p>Note that this is the true control error, the target position minus the true position. There&#39;s a steady-state offset because our sensor has a bias.</p><p>Let&#39;s make a more involved plot. Let&#39;s plot the target position, measured position, and true position all together, and let&#39;s put the integral term beneath it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(
+</code></pre><p>Let&#39;s see if we&#39;re driving down the control error.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(history[&quot;/&quot;][&quot;control_error&quot;])</code></pre><img src="890b50ec.png" alt="Example block output"/><p>Note that this is the true control error, the target position minus the true position. There&#39;s a steady-state offset because our sensor has a bias.</p><p>Let&#39;s make a more involved plot. Let&#39;s plot the target position, measured position, and true position all together, and let&#39;s put the integral term beneath it.</p><pre><code class="language-julia hljs">SystemsOfSystems.plot_ts(
     [
         [
             &quot;plant&quot; =&gt; history[&quot;/plant&quot;][&quot;position&quot;],
@@ -585,26 +585,26 @@ history</code></pre><pre class="documenter-example-output"><code class="nohighli
         ],
         history[&quot;/controller&quot;][&quot;integral&quot;]
     ]
-)</code></pre><img src="beeedc8b.png" alt="Example block output"/><p>Clearly, the controller is driving the <em>measurement</em> to the target; that&#39;s all this simple controller can really do in this situation.</p><p>The performance certainly appears to be correct.</p><p>Note the difference between lines for continuous-time variables and points for discrete variables.</p><p>Let&#39;s take a look at <code>history.model</code>, the complete model form at the end of the simulation:</p><pre><code class="language-julia hljs">dump(history.model)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.ClosedLoopSystem
+)</code></pre><img src="71027e22.png" alt="Example block output"/><p>Clearly, the controller is driving the <em>measurement</em> to the target; that&#39;s all this simple controller can really do in this situation.</p><p>The performance certainly appears to be correct.</p><p>Note the difference between lines for continuous-time variables and points for discrete variables.</p><p>Let&#39;s take a look at <code>history.model</code>, the complete model form at the end of the simulation:</p><pre><code class="language-julia hljs">dump(history.model)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Main.ClosedLoopSystem
   plant: Main.Plant
     mass: Float64 1.0
-    position: Float64 0.8865297323754656
-    velocity: Float64 -0.002843116664117566
-    noise: Float64 0.5333615068519652
+    position: Float64 0.8891840090624601
+    velocity: Float64 -0.020044611190217058
+    noise: Float64 -0.17224479467595805
   sensor: Main.Sensor
     schedule: RegularSchedule
       period: Rational{Int64}
         num: Int64 1
         den: Int64 20
     bias: Float64 0.14133402616487242
-    noise: Float64 0.0032644838085590473
+    noise: Float64 -0.003864409168990795
     measurement: Main.SensorMeasurement
       t: Float64 10.0
-      position: Float64 1.031128242348897
+      position: Float64 1.0266536260583417
   actuator: Main.Actuator
     time_constant: Float64 0.04
-    command: Float64 0.55984925610036
-    response: Float64 -0.9049393126306825
+    command: Float64 0.9015211203997047
+    response: Float64 0.3029781326980797
   target: Main.ConstantTarget
     constant_position: Float64 1.0
   controller: Main.PIDController
@@ -615,9 +615,9 @@ history</code></pre><pre class="documenter-example-output"><code class="nohighli
     k_p: Float64 11.0
     k_i: Float64 8.0
     k_d: Float64 6.0
-    position: Float64 1.031128242348897
-    command: Float64 0.55984925610036
-    integral: Float64 0.10768788176946861</code></pre><p>In there, we see the sensor bias that results in the steady-state bias of the result.</p><p>We could continue to explore our results using plots and the REPL.</p><h2 id="Swapping-Models"><a class="docs-heading-anchor" href="#Swapping-Models">Swapping Models</a><a id="Swapping-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Swapping-Models" title="Permalink"></a></h2><p>A lot of the power of SystemsOfSystems comes from being able to swap one model for another. Let&#39;s give that a try by developing a <code>RampTarget</code> that has the same interface as the <code>ConstantTarget</code>. Then, we ought to be able to just use our new type in our <code>ClosedLoopSystemSpecs</code>.</p><pre><code class="language-julia hljs">@kwdef struct RampTargetSpecs
+    position: Float64 1.0266536260583417
+    command: Float64 0.9015211203997047
+    integral: Float64 0.11653418137829591</code></pre><p>In there, we see the sensor bias that results in the steady-state bias of the result.</p><p>We could continue to explore our results using plots and the REPL.</p><h2 id="Swapping-Models"><a class="docs-heading-anchor" href="#Swapping-Models">Swapping Models</a><a id="Swapping-Models-1"></a><a class="docs-heading-anchor-permalink" href="#Swapping-Models" title="Permalink"></a></h2><p>A lot of the power of SystemsOfSystems comes from being able to swap one model for another. Let&#39;s give that a try by developing a <code>RampTarget</code> that has the same interface as the <code>ConstantTarget</code>. Then, we ought to be able to just use our new type in our <code>ClosedLoopSystemSpecs</code>.</p><pre><code class="language-julia hljs">@kwdef struct RampTargetSpecs
     slope::Float64
 end
 
@@ -679,4 +679,4 @@ SystemsOfSystems.plot_ts(
         ],
         history[&quot;/&quot;][&quot;control_error&quot;],
     ]
-)</code></pre><img src="97a05444.png" alt="Example block output"/><p>Nothing in this section introduces anything new in SystemsOfSystems. It&#39;s simply an example of a useful design pattern in the systems-of-systems space. By designing careful, explicit interfaces for different models, one can create excellently re-usable, composable systems, allowing simulations to grow quite large without getting bogged down in code complexity.</p><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>This example certainly has a lot that we could add. Next, we could make a new controller that observes the rate of change of the target input, or we could add a disturbance input to the plant that starts at some trigger time, or we could break the controller into sub-models so that new controllers could be built from common pieces. And we could quickly put together Monte-Carlo runs for different targets and different initial conditions. For now, however, we&#39;ll wrap up this introductory example.</p><p>Please see the other sections for more on modeling features, simulation options, how to build a model without actually running a simulation, and how time is handled in the simulation.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Introduction</a><a class="docs-footer-nextpage" href="../simulation/">Simulation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 3 September 2026 22:16">Thursday 3 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+)</code></pre><img src="6479de9d.png" alt="Example block output"/><p>Nothing in this section introduces anything new in SystemsOfSystems. It&#39;s simply an example of a useful design pattern in the systems-of-systems space. By designing careful, explicit interfaces for different models, one can create excellently re-usable, composable systems, allowing simulations to grow quite large without getting bogged down in code complexity.</p><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><p>This example certainly has a lot that we could add. Next, we could make a new controller that observes the rate of change of the target input, or we could add a disturbance input to the plant that starts at some trigger time, or we could break the controller into sub-models so that new controllers could be built from common pieces. And we could quickly put together Monte-Carlo runs for different targets and different initial conditions. For now, however, we&#39;ll wrap up this introductory example.</p><p>Please see the other sections for more on modeling features, simulation options, how to build a model without actually running a simulation, and how time is handled in the simulation.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Introduction</a><a class="docs-footer-nextpage" href="../simulation/">Simulation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Thursday 3 September 2026 22:16">Thursday 3 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
