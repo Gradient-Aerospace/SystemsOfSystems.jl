@@ -25,11 +25,44 @@ function SystemsOfSystems.normalized_variable_error(
     return error_evaluations[] == 1 ? 2. : 0.
 end
 
-@testset "random draws follow attempted and accepted steps" begin
+@testset "fixed-step draws use numerical intervals" begin
+
+    # A sparse requested-time vector should not make one continuous draw span several
+    # fixed numerical steps. The first draw is the existing initialization draw.
+    continuous_draws = Tuple{Any, Float64}[]
+    continuous_draw = (rng, t_km1, dt_f) -> begin
+        push!(continuous_draws, (t_km1, dt_f))
+        return 0.
+    end
+    history = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_random_variables = (; continuous_draw,),
+        ),
+        options = SimOptions(;
+            log = nothing,
+            solver = Solvers.RungeKutta4Options(; dt = 1//4),
+        ),
+    )
+
+    @test succeeded(history)
+    @test continuous_draws == [
+        (0//1, 1.),
+        (0//1, 0.25),
+        (1//4, 0.25),
+        (1//2, 0.25),
+        (3//4, 0.25),
+    ]
+
+end
+
+@testset "continuous draws span rejected and accepted substeps" begin
 
     # The first adaptive attempt is rejected by ControlledErrorState's error method. Every
-    # attempt should redraw continuous variables, while discrete variables should be drawn
-    # only after an endpoint has been accepted.
+    # shorter numerical attempt should retain the continuous draw committed for the
+    # original interval, while discrete variables should still be drawn only after an
+    # endpoint has been accepted.
     error_evaluations[] = 0
     continuous_draws = Tuple{Any, Float64}[]
     discrete_draw_times = Any[]
@@ -45,14 +78,14 @@ end
 
     history = simulate(
         nothing;
-        t = (0, 1),
+        t = (0, 2),
         init_fcn = (args...) -> ModelDescription(;
             continuous_states = (; x = ControlledErrorState(0.),),
             continuous_random_variables = (; continuous_draw,),
             discrete_random_variables = (; discrete_draw,),
         ),
         rates_fcn = (t, model) -> RatesOutput(;
-            rates = (; x = ControlledErrorState(1.),),
+            rates = (; x = ControlledErrorState(model.continuous_draw),),
         ),
         updates_fcn = (t, model) -> begin
             push!(update_times, t)
@@ -72,11 +105,12 @@ end
     @test succeeded(history)
     @test error_evaluations[] == length(update_times) + 1
 
-    # Both random-variable kinds receive one initialization draw. Thereafter, continuous
-    # draws correspond to attempts and discrete draws correspond to accepted updates.
-    @test length(continuous_draws) == length(update_times) + 2
-    @test continuous_draws[2][1] == continuous_draws[3][1] == 0
-    @test continuous_draws[3][2] < continuous_draws[2][2]
+    # The initialization draw retains its existing unit-duration convention. The first
+    # solver draw remains active through the rejected attempt and accepted substeps that
+    # finish its interval. A new draw begins only after reaching t = 1.
+    @test continuous_draws == [(0//1, 1.), (0//1, 1.), (1//1, 1.)]
+    @test any(t -> 0 < t < 1, update_times)
+    @test history.model.x == ControlledErrorState(5.)
     @test first(discrete_draw_times) == 0
     @test discrete_draw_times[2:end] == update_times
 

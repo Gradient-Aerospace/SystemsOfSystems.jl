@@ -4,8 +4,8 @@ the small set of mathematical operations required by a continuous-time integrato
 
 This boundary is intentionally internal. Model authors work with `ModelDescription`,
 `RatesOutput`, and the model passed to `rates_fcn`; solver authors work with operations such
-as `prepare_attempt`, `evaluate_rates`, and `propagate`. Neither side needs to understand
-the other's representation.
+as `draw_continuous_random_variables`, `evaluate_rates`, and `propagate`. Neither side needs
+to understand the other's representation.
 
 Keeping these operations out of the solver implementations serves two purposes. First, a
 new numerical method does not need to know how constants, discrete state, random variables,
@@ -49,17 +49,13 @@ ContinuousProblem(typed_description, rates_fcn) =
     ContinuousProblem(typed_description, rates_fcn, DefaultErrorPolicy())
 
 """
-    prepare_attempt(problem, t_start, dt_f, state)
+    draw_continuous_random_variables(problem, t_start, dt_f, state)
 
-Prepares the beginning state for one numerical attempt starting at the official `t_start`
-with floating-point duration `dt_f`.
-
-At present, preparation draws every continuous random variable for the proposed interval.
-Rejected adaptive attempts are prepared again and therefore receive new draws. Expressing
-this operation explicitly leaves room for a future random-process policy that retains one
-underlying draw and rescales or subdivides it when an attempted step is shortened.
+Draws every continuous random variable for a newly committed interval beginning at the
+official `t_start` with floating-point duration `dt_f`. Rejected numerical attempts and
+accepted substeps within that interval reuse the returned state.
 """
-function prepare_attempt(
+function draw_continuous_random_variables(
     problem::ContinuousProblem,
     t_start,
     dt_f::Float64,

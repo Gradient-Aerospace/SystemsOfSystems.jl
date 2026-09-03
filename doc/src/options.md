@@ -130,7 +130,7 @@ function Solvers.step!(integrator::CountingIntegrator, problem, request)
 end
 ```
 
-A solver implemented from scratch receives one `Solvers.StepRequest` at a time and returns either `Solvers.AcceptedStep` or `Solvers.SolverFailure`. These protocol types are public but remain qualified under `Solvers`.
+A solver implemented from scratch receives one `Solvers.StepRequest` at a time and returns either `Solvers.AcceptedStep` or `Solvers.SolverFailure`. When `request.t_start == request.t_next_crv_draw`, the solver chooses its proposed interval and uses `Solvers.draw_continuous_random_variables` to draw the interval's continuous random variables. Rejected attempts reuse that state, and an accepted result carries the proposed interval endpoint in `t_next_crv_draw`, even if the accepted numerical step is shorter. These protocol functions and types are public but remain qualified under `Solvers`.
 
 ```@docs
 SystemsOfSystems.Solvers.AbstractSolverOptions
@@ -138,6 +138,7 @@ SystemsOfSystems.Solvers.AbstractIntegrator
 SystemsOfSystems.Solvers.StepRequest
 SystemsOfSystems.Solvers.AcceptedStep
 SystemsOfSystems.Solvers.SolverFailure
+SystemsOfSystems.Solvers.draw_continuous_random_variables
 SystemsOfSystems.Solvers.create_integrator
 SystemsOfSystems.Solvers.step!
 ```

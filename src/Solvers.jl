@@ -8,10 +8,10 @@ rational time bound. Every accepted step remains visible to the simulation loop,
 logs the sample, runs hooks, draws discrete random variables, and performs discrete updates.
 
 Numerical methods in this module do not know how SystemsOfSystems stores model state. They
-use the operations supplied by `ContinuousProblems` to prepare an attempt, evaluate rates,
-form linear combinations of derivatives, and measure normalized error. This separation
-makes a Butcher tableau a description of mathematics rather than a second implementation of
-the simulation engine.
+use the operations supplied by `ContinuousProblems` to prepare a random interval, evaluate
+rates, form linear combinations of derivatives, and measure normalized error. This
+separation makes a Butcher tableau a description of mathematics rather than a second
+implementation of the simulation engine.
 """
 module Solvers
 
@@ -19,10 +19,10 @@ public AbstractSolverOptions, AbstractIntegrator, AbstractSolver,
     StepRequest, AcceptedStep, SolverFailure,
     SolverFailedToConverge, SolverStepSizeUnderflow,
     Ralston2Options, RungeKutta4Options, DormandPrince54Options,
-    create_integrator, step!
+    draw_continuous_random_variables, create_integrator, step!
 
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
-    prepare_attempt, propagate
+    draw_continuous_random_variables, propagate
 using ..SimulationTimes: ExactTime, exact_time, float_duration, solver_time, time_isless
 using ..SystemsOfSystems: AbstractFailureReason, ModelStateDescription
 import ..SystemsOfSystems
@@ -53,7 +53,7 @@ abstract type AbstractIntegrator end
 const AbstractSolver = AbstractIntegrator
 
 """
-    StepRequest(t_start, t_bound, state)
+    StepRequest(t_start, t_bound, state, t_next_crv_draw)
 
 A container for one accepted continuous-time step request beginning at the official
 rational time `t_start`. The integrator may choose any rational endpoint no later than
@@ -62,11 +62,16 @@ rational time `t_start`. The integrator may choose any rational endpoint no late
 `t_bound` is selected by the simulation scheduler from user-requested times,
 model-requested times, and the overall end time. It is a hard boundary: no numerical stage
 may cause the accepted state to be labeled with a time beyond it.
+
+`t_next_crv_draw` is the endpoint of the currently committed continuous-random interval.
+Equality with `t_start` means the solver should begin a new interval. Otherwise, the solver
+holds the current draws until it reaches that endpoint.
 """
 struct StepRequest{T <: Rational, S <: ModelStateDescription}
     t_start::T
     t_bound::T
     state::S
+    t_next_crv_draw::T
 end
 
 """
@@ -82,6 +87,9 @@ stage outputs and stop requests never cross this boundary.
 `next_dt` is a floating-point controller suggestion. It is deliberately a duration rather
 than an absolute time; the scheduler converts it into an official rational endpoint for the
 next attempt.
+
+`t_next_crv_draw` carries the committed continuous-random interval endpoint into the next
+step request.
 """
 struct AcceptedStep{
     T <: Rational,
@@ -93,6 +101,7 @@ struct AcceptedStep{
     rates_at_start::R
     state_at_end::S
     next_dt::Float64
+    t_next_crv_draw::T
 end
 
 """
@@ -521,11 +530,9 @@ function stage_count(
 end
 
 """
-Evaluates every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`.
-
-The beginning state is prepared exactly once for this attempt. If an adaptive controller
-rejects the result, its next attempt calls this function again and obtains new continuous
-random draws according to the current random-process policy.
+Evaluates every stage for one explicit Runge-Kutta attempt over `[t_start, t_end]`. The
+beginning state already contains the continuous random values committed for the surrounding
+random interval.
 """
 function evaluate_stages(
     method::ExplicitRungeKuttaTableau,
@@ -533,10 +540,8 @@ function evaluate_stages(
     t_start::Rational,
     t_end::Rational,
     dt::Float64,
-    state::ModelStateDescription,
+    state_at_start::ModelStateDescription,
 )
-
-    state_at_start = prepare_attempt(problem, t_start, dt, state)
     t_start_f = float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
     stages = evaluate_remaining_stages(
@@ -549,9 +554,7 @@ function evaluate_stages(
         Val(1),
         stage_count(method),
     )
-
     return (; state_at_start, rates_at_start, stages, dt)
-
 end
 
 function solution_state(state_at_start, dt, weights, stages)
@@ -572,6 +575,8 @@ function step!(
     request::StepRequest,
 ) where {M, C <: FixedStepController}
 
+    # Figure out how far to step. We've been requested to step all the way to t_bound, but
+    # we may need to limit for our specified time step too.
     interval = choose_step_interval(
         request.t_start,
         request.t_bound,
@@ -585,14 +590,30 @@ function step!(
         return SolverFailure(request.t_start, failure)
     end
 
+    # If it's time to take draws again, do so, and commit to the interval over which we'll
+    # hold those draws. Otherwise, pass through the unmodified state, and keep the next CRV
+    # draw time.
+    if request.t_start == request.t_next_crv_draw
+        state_at_start = draw_continuous_random_variables(
+            problem, request.t_start, interval.dt, request.state,
+        )
+        t_next_crv_draw = interval.t_end
+    else
+        state_at_start = request.state
+        t_next_crv_draw = request.t_next_crv_draw
+    end
+
+    # Calculate each of the derivatives.
     attempt = evaluate_stages(
         integrator.method,
         problem,
         request.t_start,
         interval.t_end,
         interval.dt,
-        request.state,
+        state_at_start,
     )
+
+    # Assemble the updated state.
     state_at_end = solution_state(
         attempt.state_at_start,
         attempt.dt,
@@ -606,6 +627,7 @@ function step!(
         attempt.rates_at_start,
         state_at_end,
         integrator.controller.dt,
+        t_next_crv_draw,
     )
 
 end
@@ -627,24 +649,42 @@ function step!(
 ) where {M, C <: EmbeddedAdaptiveController}
 
     controller = integrator.controller
+
+    # Figure out how far to step. We've been requested to step all the way to t_bound, but
+    # we may know that we need smaller steps for integration tolerances.
     proposed_dt = min(controller.next_dt, controller.max_dt)
+    interval = choose_step_interval(request.t_start, request.t_bound, proposed_dt)
+    if isnothing(interval)
+        failure = SolverStepSizeUnderflow(float(request.t_start), proposed_dt)
+        return SolverFailure(request.t_start, failure)
+    end
+
+    # If it's time to take draws again, do so, and commit to the interval over which we'll
+    # hold those draws. Otherwise, pass through the unmodified state, and keep the next CRV
+    # draw time.
+    if request.t_start == request.t_next_crv_draw
+        state_at_start = draw_continuous_random_variables(
+            problem, request.t_start, interval.dt, request.state,
+        )
+        t_next_crv_draw = interval.t_end
+    else
+        state_at_start = request.state
+        t_next_crv_draw = request.t_next_crv_draw
+    end
 
     for rejection_count in 0:controller.max_rejections
 
-        interval = choose_step_interval(request.t_start, request.t_bound, proposed_dt)
-        if isnothing(interval)
-            failure = SolverStepSizeUnderflow(float(request.t_start), proposed_dt)
-            return SolverFailure(request.t_start, failure)
-        end
-
+        # Calculate each of the derivatives.
         attempt = evaluate_stages(
             integrator.method,
             problem,
             request.t_start,
             interval.t_end,
             interval.dt,
-            request.state,
+            state_at_start,
         )
+
+        # Assemble the updated state and embedded state.
         state_at_end = solution_state(
             attempt.state_at_start,
             attempt.dt,
@@ -657,6 +697,9 @@ function step!(
             integrator.method.embedded_b,
             attempt.stages,
         )
+
+        # Figure out how much normalized error we have, and what dt that suggests for next
+        # time.
         error = normalized_error(
             problem,
             state_at_end,
@@ -671,6 +714,8 @@ function step!(
             integrator.method.embedded_order,
         )
 
+        # If that's accept, remember to the next_dt we determined and report an accepted
+        # step.
         if error < 1.
             controller.next_dt = next_dt
             return AcceptedStep(
@@ -679,12 +724,22 @@ function step!(
                 attempt.rates_at_start,
                 state_at_end,
                 next_dt,
+                t_next_crv_draw,
             )
         end
 
-        proposed_dt = next_dt
+        # Otherwise, the step failed to meet tolerance. See if it's time to give up.
         if rejection_count == controller.max_rejections
             failure = SolverFailedToConverge(float(request.t_start))
+            return SolverFailure(request.t_start, failure)
+        end
+
+        # It's not time to give up, so let's modify the proposed time step and try this
+        # again.
+        proposed_dt = next_dt
+        interval = choose_step_interval(request.t_start, request.t_bound, proposed_dt)
+        if isnothing(interval)
+            failure = SolverStepSizeUnderflow(float(request.t_start), proposed_dt)
             return SolverFailure(request.t_start, failure)
         end
 
