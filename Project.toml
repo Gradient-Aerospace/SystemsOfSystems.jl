@@ -26,6 +26,7 @@ SystemsOfSystemsHDF5Ext = ["HDF5", "HDF5Vectors"]
 SystemsOfSystemsMakieExt = "Makie"
 
 [compat]
+julia = "1.12"
 Dimensions = "0.1.0"
 HDF5 = "0.17.2"
 Makie = "0.24.7"
