@@ -2,7 +2,7 @@ module TestControlSystemDemo
 
 using Test
 using HDF5: h5open, Group
-using HDF5Vectors
+import HDF5Vectors
 using SystemsOfSystems: SystemsOfSystems,
     ModelDescription, VariableDescription, BranchingSeed,
     RegularSchedule,
