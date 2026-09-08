@@ -111,7 +111,6 @@ function create_time_series_for_var(
     el_type = figure_out_el_type(T)
     group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    # println("Creating HDF5Vectors for $(var.title) at $group_path with type $el_type.")
     group = HDF5.create_group(log.fid, group_path)
     ts = TimeSeries(;
         var.title,
@@ -141,7 +140,6 @@ function create_time_series_for_var(
     el_type = figure_out_el_type(T)
     group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    # println("Creating HDF5Vectors at $group_path with type $el_type.")
     group = HDF5.create_group(log.fid, group_path)
     ts = TimeSeries(;
         title = slug,

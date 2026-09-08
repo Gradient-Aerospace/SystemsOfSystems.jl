@@ -1,7 +1,7 @@
 module TestLoggingPolicies
 
 using Test
-using HDF5Vectors # Load the HDF5 extension.
+import HDF5Vectors # Load the HDF5 extension.
 using SystemsOfSystems
 using SystemsOfSystems: LoggingPolicies, Logs, Samplers, Solvers
 

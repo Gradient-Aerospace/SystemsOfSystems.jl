@@ -18,9 +18,6 @@ HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 HDF5Vectors = "7098961b-d60d-42aa-8832-e11a9f96377b"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 
-[sources]
-HDF5Vectors = {rev = "4c99dbe39d47f2d1bbf81448af418c348a217144", url = "https://github.com/Gradient-Aerospace/HDF5Vectors.jl"}
-
 [extensions]
 SystemsOfSystemsHDF5Ext = ["HDF5", "HDF5Vectors"]
 SystemsOfSystemsMakieExt = "Makie"
@@ -29,6 +26,7 @@ SystemsOfSystemsMakieExt = "Makie"
 julia = "1.12"
 Dimensions = "0.1.0"
 HDF5 = "0.17.2"
+HDF5Vectors = "1.0.0"
 Makie = "0.24.7"
 OrderedCollections = "1.8.1"
 ProgressMeter = "1.11.0"

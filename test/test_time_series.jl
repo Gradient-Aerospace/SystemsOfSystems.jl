@@ -3,7 +3,7 @@ module TestTimeSeries
 import Dimensions
 using Test
 using HDF5
-using HDF5Vectors # For the HDF5Logger
+import HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
 using SystemsOfSystems: Logs
 
@@ -40,7 +40,7 @@ end
 # on the implementation details of HDF5Vectors' built-in type support.
 struct UnsupportedHDF5Constant end
 
-function HDF5Vectors.storage_style(::Type{UnsupportedHDF5Constant}; kwargs...)
+function HDF5Vectors.infer_schema(::Type{UnsupportedHDF5Constant}; kwargs...)
     error("Intentional unsupported constant for testing.")
 end
 

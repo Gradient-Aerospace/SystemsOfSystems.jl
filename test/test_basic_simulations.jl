@@ -1,7 +1,7 @@
 module TestBasicSimulations
 
 using Test
-using HDF5Vectors # For the HDF5Logger
+import HDF5Vectors # For the HDF5Logger
 using SystemsOfSystems
 using SystemsOfSystems: Solvers, Logs, Hooks
 # using GLMakie # For plots
@@ -122,8 +122,8 @@ end
     # Check that we can load an HDF5 log and get the same stuff.
     if log_type == "hdf5"
         x_ts = history["/"]["x"]
-        @test x_ts.time isa HDF5Vectors.AbstractHDF5Vector
-        @test x_ts.data isa HDF5Vectors.AbstractHDF5Vector
+        @test x_ts.time isa HDF5Vectors.HDF5Vector
+        @test x_ts.data isa HDF5Vectors.HDF5Vector
         hdf5_log, = Logs.load_hdf5_log(joinpath(out_dir, "exponential_logs.h5"))
         @test collect(history["/"]["x"].time) == collect(hdf5_log["/"]["x"].time)
         @test collect(history["/"]["x"].data) == collect(hdf5_log["/"]["x"].data)
