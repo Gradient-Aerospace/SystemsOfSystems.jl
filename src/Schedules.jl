@@ -15,9 +15,13 @@ import Dimensions
 using ..SimulationTimes: ExactTime, NO_T_NEXT,
     exact_time, earlier_time, narrow_time, time_isless, wide_time
 
-export AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
+export AbstractSchedule, RegularSchedule, OffsetRegularSchedule, AlwaysTriggeringSchedule,
     is_triggering, next_trigger_time,
     is_regular_step_triggering, next_regular_time
+
+####################
+# AbstractSchedule #
+####################
 
 """
     AbstractSchedule
@@ -61,58 +65,42 @@ The strict inequality is part of the interface: initialization establishes the m
 function next_trigger_time end
 
 """
-    RegularSchedule(; period)
-    RegularSchedule(period)
+    find_soonest_time(schedules, t_last)
 
-A schedule occurring at `n * period` for every nonnegative integer `n`.
+Returns the first declared schedule occurrence strictly later than `t_last`.
 
-`period` is stored as an exact `Rational{Int64}` and must be finite and strictly positive.
-The representation stores no offset, making this common schedule both compact and direct
-to evaluate.
+Tuple mapping preserves specialization for every concrete schedule type and produces a
+tuple of exact next times. This is intentionally simple for the initial architecture; very
+large tuples may eventually justify a cached scheduler or another runtime index.
 """
-struct RegularSchedule <: AbstractSchedule
+function find_soonest_time(schedules::Tuple, t_last)
 
-    period::ExactTime
+    schedule_times = map(schedules) do schedule
 
-    function RegularSchedule(period)
-        period = exact_time(period)
-        isfinite(period) || throw(ArgumentError("period must be finite."))
-        period > 0 || throw(ArgumentError("period must be positive."))
-        return new(period)
+        schedule_time = exact_time(next_trigger_time(schedule, t_last))
+        time_isless(t_last, schedule_time) ||
+            throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
+        return schedule_time
+
     end
 
-end
-RegularSchedule(; period) = RegularSchedule(period)
-
-Dimensions.dimstyle(::Type{RegularSchedule}) = Dimensions.StructDimensionStyle()
-
-"""
-    OffsetRegularSchedule(; period, offset)
-    OffsetRegularSchedule(period, offset)
-
-A schedule occurring at `offset + n * period` for every nonnegative integer `n`.
-
-The finite `offset` is the first occurrence, not merely a phase extended backward without
-limit. `period` is exact, finite, and strictly positive.
-"""
-struct OffsetRegularSchedule <: AbstractSchedule
-
-    period::ExactTime
-    offset::ExactTime
-
-    function OffsetRegularSchedule(period, offset)
-        period = exact_time(period)
-        offset = exact_time(offset)
-        isfinite(period) || throw(ArgumentError("period must be finite."))
-        isfinite(offset) || throw(ArgumentError("offset must be finite."))
-        period > 0 || throw(ArgumentError("period must be positive."))
-        return new(period, offset)
-    end
+    return reduce(earlier_time, schedule_times; init = NO_T_NEXT)
 
 end
-OffsetRegularSchedule(; period, offset) = OffsetRegularSchedule(period, offset)
 
-Dimensions.dimstyle(::Type{OffsetRegularSchedule}) = Dimensions.StructDimensionStyle()
+# Keep detailed diagnostic construction off the successful hot path. Custom schedules are
+# validated on every query because returning the current or a past time would otherwise
+# prevent the simulation loop from making progress.
+Base.@noinline function throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
+    throw(ArgumentError(
+        "$(typeof(schedule)) returned $schedule_time from next_trigger_time at " *
+        "t = $t_last; schedule times must be strictly later than t.",
+    ))
+end
+
+#############
+# Utilities #
+#############
 
 """
     next_regular_time(t, period, offset = 0//1)
@@ -177,52 +165,96 @@ function is_regular_step_triggering(t, period, offset = 0//1)
 
 end
 
+###################
+# RegularSchedule #
+###################
+
+"""
+    RegularSchedule(; period)
+    RegularSchedule(period)
+
+A schedule occurring at `n * period` for every nonnegative integer `n`.
+
+`period` is stored as an exact `Rational{Int64}` and must be finite and strictly positive.
+The representation stores no offset, making this common schedule both compact and direct
+to evaluate.
+"""
+struct RegularSchedule <: AbstractSchedule
+
+    period::ExactTime
+
+    function RegularSchedule(period)
+        period = exact_time(period)
+        isfinite(period) || throw(ArgumentError("period must be finite."))
+        period > 0 || throw(ArgumentError("period must be positive."))
+        return new(period)
+    end
+
+end
+RegularSchedule(; period) = RegularSchedule(period)
+
+Dimensions.dimstyle(::Type{RegularSchedule}) = Dimensions.StructDimensionStyle()
+
 # The public schedule methods share the compatibility helpers' widened exact arithmetic so
 # the package has one mathematical definition of a regular clock.
 is_triggering(schedule::RegularSchedule, t) =
     is_regular_step_triggering(t, schedule.period)
 
-is_triggering(schedule::OffsetRegularSchedule, t) =
-    is_regular_step_triggering(t, schedule.period, schedule.offset)
-
 next_trigger_time(schedule::RegularSchedule, t) =
     next_regular_time(t, schedule.period)
+
+#########################
+# OffsetRegularSchedule #
+#########################
+
+"""
+    OffsetRegularSchedule(; period, offset)
+    OffsetRegularSchedule(period, offset)
+
+A schedule occurring at `offset + n * period` for every nonnegative integer `n`.
+
+The finite `offset` is the first occurrence, not merely a phase extended backward without
+limit. `period` is exact, finite, and strictly positive.
+"""
+struct OffsetRegularSchedule <: AbstractSchedule
+
+    period::ExactTime
+    offset::ExactTime
+
+    function OffsetRegularSchedule(period, offset)
+        period = exact_time(period)
+        offset = exact_time(offset)
+        isfinite(period) || throw(ArgumentError("period must be finite."))
+        isfinite(offset) || throw(ArgumentError("offset must be finite."))
+        period > 0 || throw(ArgumentError("period must be positive."))
+        return new(period, offset)
+    end
+
+end
+OffsetRegularSchedule(; period, offset) = OffsetRegularSchedule(period, offset)
+
+Dimensions.dimstyle(::Type{OffsetRegularSchedule}) = Dimensions.StructDimensionStyle()
+
+is_triggering(schedule::OffsetRegularSchedule, t) =
+    is_regular_step_triggering(t, schedule.period, schedule.offset)
 
 next_trigger_time(schedule::OffsetRegularSchedule, t) =
     next_regular_time(t, schedule.period, schedule.offset)
 
+############################
+# AlwaysTriggeringSchedule #
+############################
+
 """
-    find_soonest_time(schedules, t_last)
+    AlwaysTriggeringSchedule(; period, offset)
+    AlwaysTriggeringSchedule(period, offset)
 
-Returns the first declared schedule occurrence strictly later than `t_last`.
-
-Tuple mapping preserves specialization for every concrete schedule type and produces a
-tuple of exact next times. This is intentionally simple for the initial architecture; very
-large tuples may eventually justify a cached scheduler or another runtime index.
+A schedule that requests no specific trigger times but is always triggering.
 """
-function find_soonest_time(schedules::Tuple, t_last)
-
-    schedule_times = map(schedules) do schedule
-
-        schedule_time = exact_time(next_trigger_time(schedule, t_last))
-        time_isless(t_last, schedule_time) ||
-            throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
-        return schedule_time
-
-    end
-
-    return reduce(earlier_time, schedule_times; init = NO_T_NEXT)
-
+struct AlwaysTriggeringSchedule <: AbstractSchedule
 end
-
-# Keep detailed diagnostic construction off the successful hot path. Custom schedules are
-# validated on every query because returning the current or a past time would otherwise
-# prevent the simulation loop from making progress.
-Base.@noinline function throw_invalid_next_trigger_time(schedule, t_last, schedule_time)
-    throw(ArgumentError(
-        "$(typeof(schedule)) returned $schedule_time from next_trigger_time at " *
-        "t = $t_last; schedule times must be strictly later than t.",
-    ))
-end
+Dimensions.dimstyle(::Type{AlwaysTriggeringSchedule}) = Dimensions.StructDimensionStyle()
+is_triggering(::AlwaysTriggeringSchedule, t) = true
+next_trigger_time(::AlwaysTriggeringSchedule, t) = NO_T_NEXT
 
 end # Schedules
