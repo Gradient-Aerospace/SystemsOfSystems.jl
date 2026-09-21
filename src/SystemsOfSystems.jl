@@ -19,7 +19,7 @@ export Dimension,
     TimeSeries, SampleAndHold, LinearInterpolation,
     plot_ts, plot_ts!,
     ContinuousWhiteNoise, DiscreteWhiteNoise,
-    AbstractSchedule, RegularSchedule, OffsetRegularSchedule,
+    AbstractSchedule, RegularSchedule, OffsetRegularSchedule, AlwaysTriggeringSchedule,
     on_triggering, is_triggering, next_trigger_time, next_regular_time,
     Samplers, LoggingPolicies
 
