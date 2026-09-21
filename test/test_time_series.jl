@@ -68,6 +68,55 @@ function scalar_time_series(time, data; discrete = false)
     )
 end
 
+@testset "TimeSeries iteration" begin
+
+    # Iteration pairs stored samples without interpolating, including repeated times.
+    ts = scalar_time_series([0., 1., 1.], [10, 20, 30])
+    expected = [0. => 10, 1. => 20, 1. => 30]
+    @test Base.IteratorSize(typeof(ts)) == Base.HasLength()
+    @test Base.IteratorEltype(typeof(ts)) == Base.HasEltype()
+    @test eltype(ts) == eltype(typeof(ts)) == Pair{Float64, Int}
+    @test length(ts) == 3
+    @test collect(ts) == expected
+    @test collect(ts) == [ts[k] for k in eachindex(ts.time)]
+    @test [t + x for (t, x) in ts] == [10., 21., 31.]
+
+    # Each returned state resumes at the next sample and eventually terminates.
+    item, state = @inferred Nothing iterate(ts)
+    @test item == expected[1]
+    for expected_item in expected[2:end]
+        item, state = iterate(ts, state)
+        @test item == expected_item
+    end
+    @test iterate(ts, state) === nothing
+    @test collect(ts) == expected
+
+    # Empty and single-sample series retain their element types when collected.
+    empty_ts = scalar_time_series(Float64[], Int[])
+    @test iterate(empty_ts) === nothing
+    @test isempty(empty_ts)
+    @test length(empty_ts) == 0
+    @test collect(empty_ts) isa Vector{Pair{Float64, Int}}
+    @test isempty(collect(empty_ts))
+    single_ts = scalar_time_series([2.], [7])
+    @test collect(single_ts) == [2. => 7]
+
+    # Ranges and views support the same interface as ordinary vectors.
+    view_ts = scalar_time_series(0.:1.:2., view([10, 20, 30, 40], 2:4))
+    @test collect(view_ts) == [0. => 20, 1. => 30, 2. => 40]
+
+end
+
+@testset "TimeSeries sample lengths" begin
+
+    # Construction rejects samples without times and times without samples.
+    @test_throws DimensionMismatch scalar_time_series([0., 1.], [10])
+    @test_throws DimensionMismatch scalar_time_series([0.], [10, 20])
+    @test_throws DimensionMismatch scalar_time_series(Float64[], [10])
+    @test_throws DimensionMismatch scalar_time_series([0.], Int[])
+
+end
+
 @testset "TimeSeries indexing" begin
 
     ts = SystemsOfSystems.TimeSeries(;
@@ -641,6 +690,9 @@ end
         loaded = Logs.load_time_series_from_hdf5(fid, "standalone/signal")
         @test collect(loaded.time) == time_series.time
         @test collect(loaded.data) == time_series.data
+        @test length(loaded) == length(time_series)
+        @test eltype(loaded) == Pair{Float64, Float64}
+        @test collect(loaded) == [t => x for (t, x) in zip(time_series.time, time_series.data)]
         @test loaded.title == time_series.title
         @test loaded.time_dimension == time_series.time_dimension
         @test loaded.dimensions == time_series.dimensions
