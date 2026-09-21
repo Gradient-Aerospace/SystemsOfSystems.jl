@@ -30,7 +30,7 @@ public SimulationTimes,
     AbstractTimeSeriesInterpolator, select,
     normalized_scalar_error, normalized_variable_error,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
-    ReachedEndTime, ModelRequestedStop, HookRequestedStop, EncounteredError,
+    ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
     describe
 
 using Dimensions: eachdim
@@ -890,6 +890,16 @@ struct HookRequestedStop <: AbstractStopReason
 end
 
 """
+    Interrupted(t)
+
+A catchable interruption stopped the simulation at its last fully accepted time, `t`.
+This is a normal stop; `succeeded(history)` is true for an interrupted simulation.
+"""
+struct Interrupted <: AbstractStopReason
+    t::ExactTime
+end
+
+"""
 User model code or simulation infrastructure raised an unexpected exception.
 """
 struct EncounteredError <: AbstractFailureReason
@@ -913,6 +923,8 @@ describe(stop::ModelRequestedStop) =
     "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
 describe(stop::HookRequestedStop) =
     "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
+describe(stop::Interrupted) =
+    "The sim was interrupted at t = $(float(stop.t))."
 describe(stop::EncounteredError) =
     "The sim experienced an error."
 
@@ -1023,8 +1035,9 @@ end
 """
     succeeded(h::SimHistory)
 
-Returns true if the simulation ended without throwing an error or failing to converge on a
-solution.
+Returns true if the simulation ended without an unexpected error or numerical failure.
+An `Interrupted` stop counts as success. Applications requiring completion can check for
+`ReachedEndTime` or their expected model stop reason.
 """
 succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
@@ -1641,8 +1654,9 @@ end
 Runs accepted hybrid-system samples until a normal stop or failure is reported.
 
 This function is the exception boundary for simulation execution. Numerical failures arrive
-as ordinary solver results; unexpected Julia exceptions are captured as `EncounteredError`
-so resources, hooks, and logs can still be closed by `simulate`.
+as ordinary solver results; a catchable `InterruptException` becomes `Interrupted`, and
+unexpected Julia exceptions become `EncounteredError`. Resources, hooks, and logs can still
+be closed by `simulate`.
 """
 function loop!(runtime)
 
@@ -1719,9 +1733,17 @@ function loop!(runtime)
 
     catch err
 
-        trace = catch_backtrace()
-        @error "The simulation encounted an error." exception = (err, trace)
-        stop = EncounteredError(float(t_completed), err, stacktrace(trace))
+        if err isa InterruptException
+
+            stop = Interrupted(t_completed)
+
+        else
+
+            trace = catch_backtrace()
+            @error "The simulation encountered an error." exception = (err, trace)
+            stop = EncounteredError(float(t_completed), err, stacktrace(trace))
+
+        end
 
     end
 

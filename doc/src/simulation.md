@@ -25,7 +25,7 @@ Julia's property destructuring is convenient when only part of the result is nee
 (; t_stop, model) = simulate(...)
 ```
 
-[`succeeded`](@ref) reports whether the simulation ended normally. Reaching the requested end time and a deliberate stop request both count as success; an exception or numerical solver failure does not.
+[`succeeded`](@ref) reports whether the simulation ended normally. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. Applications requiring completion can check for `ReachedEndTime` or their expected model stop reason.
 
 ```julia
 if !succeeded(history)
@@ -89,7 +89,19 @@ SystemsOfSystems.plot_ts!
 
 ## Stop Reasons
 
-The `history.stop` field retains the specific reason the simulation ended. Normal stop reasons subtype `AbstractStopReason`, while exceptions and numerical failures subtype `AbstractFailureReason`. Most code can use `succeeded(history)` and only inspect the concrete reason when reporting or recovering from a failure.
+The `history.stop` field retains the specific reason the simulation ended. Normal stop reasons subtype `AbstractStopReason`, while unexpected exceptions and numerical failures subtype `AbstractFailureReason`.
+
+### Interruption
+
+A catchable `InterruptException` raised during the simulation loop produces `Interrupted(history.t_stop)`. The returned time and model describe the last fully accepted simulation sample, including its discrete update. An interrupted intermediate solver stage is discarded. Hooks and resources follow the normal teardown path and receive the accepted endpoint.
+
+Interruption leaves logging unchanged, just as an unexpected exception does. No final sample is added and no new continuous outputs are evaluated. With regular sampling, the last logged state may therefore be older than `history.t_stop`; `history.model` contains the last accepted state.
+
+`succeeded(history)` is true for `Interrupted`: this reports a normal engine lifecycle, not functional completion. For example, a workflow requiring the requested end time can test `history.stop isa SystemsOfSystems.ReachedEndTime`.
+
+SystemsOfSystems handles catchable Julia interruptions during the simulation loop. Applications control operating-system signal handling and process exit codes. Uncatchable termination cannot guarantee cleanup or complete log files.
+
+### Reference
 
 ```@docs
 SystemsOfSystems.AbstractTerminationReason
@@ -98,6 +110,7 @@ SystemsOfSystems.AbstractFailureReason
 SystemsOfSystems.ReachedEndTime
 SystemsOfSystems.ModelRequestedStop
 SystemsOfSystems.HookRequestedStop
+SystemsOfSystems.Interrupted
 SystemsOfSystems.EncounteredError
 SystemsOfSystems.Solvers.SolverFailedToConverge
 SystemsOfSystems.Solvers.SolverStepSizeUnderflow
