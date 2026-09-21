@@ -246,8 +246,7 @@ next_trigger_time(schedule::OffsetRegularSchedule, t) =
 ############################
 
 """
-    AlwaysTriggeringSchedule(; period, offset)
-    AlwaysTriggeringSchedule(period, offset)
+    AlwaysTriggeringSchedule()
 
 A schedule that requests no specific trigger times but is always triggering.
 """
