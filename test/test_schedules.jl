@@ -79,6 +79,28 @@ end
 
 end
 
+@testset "always-triggering schedule interface" begin
+
+    schedule = AlwaysTriggeringSchedule()
+    @test schedule isa AbstractSchedule
+
+    # Every accepted sample triggers, including negative times and times that do not
+    # belong to a regular clock. The schedule never requests a sample of its own.
+    for t in (-1//3, 0//1, 1//7, 2, 0.25)
+        @test is_triggering(schedule, t)
+        @test next_trigger_time(schedule, t) === SystemsOfSystems.NO_T_NEXT
+    end
+
+    # The scheduler can use this schedule alone or alongside a clock that requests
+    # specific sample times without changing that clock's next occurrence.
+    regular = RegularSchedule(; period = 1//10)
+    @test SystemsOfSystems.Schedules.find_soonest_time((schedule,), 0//1) ===
+        SystemsOfSystems.NO_T_NEXT
+    @test SystemsOfSystems.Schedules.find_soonest_time((schedule, regular), 0//1) ==
+        1//10
+
+end
+
 @testset "on-triggering update helper" begin
 
     schedule = RegularSchedule(; period = 1//10)
