@@ -73,6 +73,11 @@ interpolation_value_type(::Type{T}) where {T} = T
 
 A container for a series of points over time.
 
+Iteration yields `time => data` pairs in storage order, consistent with `ts[k]`.
+These pairs can be destructured with `for (t, x) in ts` or collected with `collect(ts)`.
+`length(ts)` counts the samples. The keyword constructor throws `DimensionMismatch`
+if `time` and `data` have different lengths.
+
 Fields:
 
 * `title`: What this time series represents, used as a title in plots
@@ -145,6 +150,14 @@ function TimeSeries(;
     groups = missing,
 )
 
+    # Each stored sample needs a corresponding time.
+    if length(time) != length(data)
+        throw(DimensionMismatch(
+            "Time and data must have equal lengths, but got $(length(time)) times " *
+            "and $(length(data)) samples for $title (path = $path).",
+        ))
+    end
+
     if !isa(time_dimension, Dimension)
         time_dimension = convert(Dimension, time_dimension)
     end
@@ -194,6 +207,14 @@ function TimeSeries(;
     )
 
 end
+
+# Iterator interface
+function Base.iterate(ts::TimeSeries, state...)
+    return iterate((t => x for (t, x) in zip(ts.time, ts.data)), state...)
+end
+Base.length(ts::TimeSeries) = length(ts.time)
+Base.eltype(::Type{<:TimeSeries{TVT, DVT}}) where {TVT, DVT} =
+    Pair{eltype(TVT), eltype(DVT)}
 
 """
     getindex(ts::TimeSeries, i::Int)
