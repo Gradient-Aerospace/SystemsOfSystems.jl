@@ -569,6 +569,7 @@ end
 
 # For backwards compatibility.
 HDF5LogOptions(filename) = HDF5LogOptions(; filename)
+HDF5LogOptions(filename, logging_policy) = HDF5LogOptions(; filename, logging_policy)
 
 """
     load_hdf5_log(filename; path = "/log")

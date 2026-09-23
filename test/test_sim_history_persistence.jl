@@ -10,12 +10,12 @@ import HDF5Vectors
 
 # Use both a root model and a child to exercise relative storage paths. Fractional start
 # and stop times also expose the intended conversion through Float64 in the saved record.
-function small_history(; log = Logs.BasicLogOptions())
+function small_history(; log = Logs.BasicLogOptions(), x = 1.0)
     return simulate(
         nothing;
         t = (1//3, 2//3),
         init_fcn = (args...) -> ModelDescription(;
-            continuous_states = (; x = 1.0),
+            continuous_states = (; x),
             models = (; child = ModelDescription(; continuous_states = (; y = 2.0))),
         ),
         rates_fcn = (t, model) -> RatesOutput(;
@@ -56,6 +56,13 @@ struct PortableFailure <: AbstractFailureReason
     message::String
 end
 SystemsOfSystems.describe(stop::Union{PortableStop, PortableFailure}) = stop.message
+
+# Failing during policy selection exercises cleanup after the HDF5 file and log group
+# exist, but before initialization can return a log to the caller.
+struct FailingLogPolicy <: SystemsOfSystems.LoggingPolicies.AbstractLoggingPolicy end
+function SystemsOfSystems.LoggingPolicies.get_model_logging_policy(::FailingLogPolicy, path)
+    error("Expected log initialization failure.")
+end
 
 @testset "History file layout, lazy logs, and optional models" begin
 
@@ -468,6 +475,158 @@ end
     log, _ = Logs.load_hdf5_log(filename; path = "/samples")
     @test log["/"]["x"].data[:] == history["/"]["x"].data
     Logs.close_log(log)
+
+end
+
+@testset "Parent defaults keep independent runs separate" begin
+
+    # A supplied parent scopes both default destinations. Writing another run under a
+    # different parent must not redirect the first history to the second run's samples.
+    first = small_history(; x = 1.0)
+    second = small_history(; x = 2.0)
+    filename = joinpath(mktempdir(), "runs.h5")
+    HDF5.h5open(filename, "w") do file
+
+        for (name, history) in (("first", first), ("second", second))
+            parent = HDF5.create_group(file, name)
+            save_sim_history(parent, "history", history)
+            @test read(parent["history/log_path"]) == "/$name/log"
+            close(parent)
+        end
+        @test !haskey(file, "log")
+        for (name, history) in (("first", first), ("second", second))
+            loaded = load_sim_history(file, "$name/history")
+            @test loaded["/"]["x"].data[:] == history["/"]["x"].data
+            Logs.close_log(loaded.log)
+        end
+
+        # A file parent still places the default log at /log. Absolute paths supplied
+        # with a group parent remain rooted at the file, rather than that group.
+        save_sim_history(file, "history", first)
+        @test read(file["history/log_path"]) == "/log"
+        parent = file["first"]
+        save_sim_history(parent, "other_history", first; log_path = "/other_log")
+        @test read(parent["other_history/log_path"]) == "/other_log"
+        close(parent)
+
+    end
+
+end
+
+@testset "Aliases cannot cause a saved log to erase itself" begin
+
+    # Both a log and its parent may have additional hard or soft links. Comparisons must
+    # use object identity, including the objects along each group's ancestor path.
+    filename = joinpath(mktempdir(), "aliases.h5")
+    history = small_history(;
+        log = Logs.HDF5LogOptions(; filename, path = "/run/log"),
+    )
+    file = history.log.fid
+    expected = history["/"]["x"].data[:]
+    HDF5.API.h5l_create_hard(file, "/run/log", file, "/log_alias",
+        HDF5.API.H5P_DEFAULT, HDF5.API.H5P_DEFAULT)
+    HDF5.API.h5l_create_hard(file, "/run", file, "/parent_alias",
+        HDF5.API.H5P_DEFAULT, HDF5.API.H5P_DEFAULT)
+    HDF5.API.h5l_create_soft("/run", file, "/soft_parent",
+        HDF5.API.H5P_DEFAULT, HDF5.API.H5P_DEFAULT)
+
+    # Saving the same log through another name is a no-op. Using that object or an
+    # aliased ancestor as history storage must instead fail before deleting any data.
+    alias = file["log_alias"]
+    Logs.save_log_to_hdf5(alias, history.log)
+    @test haskey(history.log.group, "names")
+    @test history["/"]["x"].data[:] == expected
+    @test_throws ArgumentError save_sim_history(alias, history; log_group = history.log.group)
+    close(alias)
+    for path in ("/parent_alias", "/soft_parent")
+
+        parent = file[path]
+        @test_throws ArgumentError save_sim_history(parent, history;
+            log_group = history.log.group)
+        @test_throws ArgumentError Logs.save_log_to_hdf5(parent, history.log)
+        close(parent)
+
+        # Also test the opposite direction: the source log was opened through an alias,
+        # while its ancestor destination uses the original name.
+        source, _ = Logs.load_hdf5_log(file, "$path/log")
+        parent = file["run"]
+        @test_throws ArgumentError Logs.save_log_to_hdf5(parent, source)
+        Logs.close_log(source)
+        close(parent)
+
+    end
+
+    save_sim_history(filename, history)
+    Logs.close_log(history.log)
+    load_sim_history(filename) do loaded
+        @test loaded["/"]["x"].data[:] == expected
+    end
+
+end
+
+@testset "Open-file identity survives working-directory changes" begin
+
+    # Preserve the old positional constructor and exercise a relative filename opened
+    # inside another directory. The later save uses the same file's absolute name.
+    directory = mktempdir()
+    policy = SystemsOfSystems.LoggingPolicies.AllPassLoggingPolicy()
+    options = Logs.HDF5LogOptions("relative.h5", policy)
+    @test options.logging_policy === policy
+    @test options.path == "/log"
+    history = cd(directory) do
+        small_history(; log = options)
+    end
+    filename = joinpath(directory, "relative.h5")
+    expected = history["/"]["x"].data[:]
+    save_sim_history(filename, history)
+    @test history["/"]["x"].data[:] == expected
+    Logs.close_log(history.log)
+    load_sim_history(filename) do loaded
+        @test loaded.stop == history.stop
+    end
+
+    # Caller-owned files can still retain relative filenames. Group and filename saves
+    # must recognize their identity without reinterpreting that name in the current cwd.
+    # A non-default close policy also checks that reopening for comparison respects the
+    # caller's file-access properties.
+    file, loaded = cd(directory) do
+        file = HDF5.h5open("relative.h5", "r+"; fclose_degree = :weak)
+        file, load_sim_history(file, "history")
+    end
+    save_sim_history(filename, loaded; history_path = "/another_history")
+    @test read(file["another_history/log_path"]) == "/log"
+    @test loaded["/"]["x"].data[:] == expected
+    Logs.close_log(loaded.log)
+    @test isopen(file)
+    close(file)
+
+end
+
+@testset "Failed setup releases newly opened handles" begin
+
+    # Opening the second destination can fail after the first has been opened. The
+    # history wrapper must release that first handle while preserving the caller's file.
+    history = small_history()
+    filename = joinpath(mktempdir(), "failure.h5")
+    HDF5.h5open(filename, "w") do file
+        close(HDF5.create_group(file, "history"))
+        file["blocked"] = 1
+        before = HDF5.API.h5f_get_obj_count(file, HDF5.API.H5F_OBJ_GROUP)
+        @test_throws Exception save_sim_history(file, "history", history;
+            log_path = "blocked/child")
+        @test HDF5.API.h5f_get_obj_count(file, HDF5.API.H5F_OBJ_GROUP) == before
+        @test isopen(file)
+    end
+
+    # A policy error occurs after direct-log creation has opened its file. Check that no
+    # new file handle remains immediately afterward, without requiring garbage collection.
+    GC.gc()
+    before = HDF5.API.h5f_get_obj_count(HDF5.API.H5F_OBJ_ALL, HDF5.API.H5F_OBJ_FILE)
+    options = Logs.HDF5LogOptions(; filename, logging_policy = FailingLogPolicy())
+    @test_throws "Expected log initialization failure" Logs.create_log(
+        options, ModelDescription(), SystemsOfSystems.Dimension("time", "s"),
+    )
+    @test HDF5.API.h5f_get_obj_count(HDF5.API.H5F_OBJ_ALL, HDF5.API.H5F_OBJ_FILE) == before
 
 end
 

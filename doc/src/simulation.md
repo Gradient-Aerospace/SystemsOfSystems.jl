@@ -164,7 +164,7 @@ Logs.close_log(loaded.log)
 
 Only the history path is needed when loading: its `log_path` dataset locates the log. This is a path within the HDF5 file, so renaming or moving the file does not break it. Direct-to-disk simulations can select their log location with `Logs.HDF5LogOptions(; filename, path = "/samples")`; saving the history to that file uses the existing log location by default.
 
-For a file containing several runs or other application data, the group-based methods leave file ownership with the caller:
+For a file containing several runs or other application data, the group-based methods leave file ownership with the caller. Relative paths are resolved within the supplied parent, and the default log path is `"log"` within that parent. For example, `save_sim_history(run_group, "history", history)` puts both groups inside `run_group`. Absolute paths still select locations from the file root:
 
 ```julia
 import HDF5
@@ -188,6 +188,10 @@ end
 The history and log groups must be in the same file and must not contain one another. Saving replaces their contents, except that a log already at its destination is preserved. Other groups in the file are untouched. A log loaded through a group remains usable only while the caller's file is open. `Logs.save_log_to_hdf5` and `Logs.load_hdf5_log` likewise accept a group, or a parent file/group and path, for working with logs independently.
 
 Older standalone logs stored their data at the file root. `Logs.load_hdf5_log` still reads those files. A history using such a log can be saved to a new file with the current layout; saving metadata into that same root log would overlap its storage and is rejected.
+
+### Unsuccessful Saves
+
+Saving replaces the destination contents and is not transactional. If a write fails, the destination may contain a partial result, and previous contents may already have been replaced. This includes failures while saving an optional model. When an existing result needs to be preserved until a new save succeeds, the new result can be saved to a separate file first. Saving metadata beside a live log preserves that log, but failed metadata writes may leave an incomplete history group.
 
 ### Termination Records
 

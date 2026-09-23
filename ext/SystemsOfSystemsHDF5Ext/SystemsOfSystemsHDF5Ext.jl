@@ -296,18 +296,29 @@ function create_log(options::HDF5LogOptions, model_description, time_dimension)
     # Mark the log when it is created, before recording any model data. It is a complete
     # storage format in its own right, whether or not history metadata is saved later.
     mkpath(dirname(options.filename))
-    fid = HDF5.h5open(options.filename, "w")
-    mhd = OrderedDict{String, ModelHistory}()
-    log = HDF5Log(fid, storage_group(fid, options.path), mhd)
-    write_format_version(log.group, "log_format_version", log_format_version)
-    logging_policy = options.logging_policy
-    finalizer(close_log, log) # Close the file when this goes out of scope.
-    breadcrumbs = String[]
-    mh = create_time_series_for_model!(
-        log, breadcrumbs, model_description,
-        time_dimension, logging_policy,
-    )
-    return (log, mh)
+    fid = HDF5.h5open(abspath(options.filename), "w")
+    try
+
+        mhd = OrderedDict{String, ModelHistory}()
+        log = HDF5Log(fid, storage_group(fid, options.path), mhd)
+        finalizer(close_log, log)
+        write_format_version(log.group, "log_format_version", log_format_version)
+        logging_policy = options.logging_policy
+        breadcrumbs = String[]
+        mh = create_time_series_for_model!(
+            log, breadcrumbs, model_description,
+            time_dimension, logging_policy,
+        )
+        return (log, mh)
+
+    catch
+
+        # Initialization can fail before a log is returned. Close its file and any
+        # partially created groups or datasets immediately, rather than waiting for GC.
+        close(fid)
+        rethrow()
+
+    end
 
 end
 

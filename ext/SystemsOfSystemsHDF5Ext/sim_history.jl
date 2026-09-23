@@ -26,19 +26,18 @@ function write_stop(group, stop; original_type = string(typeof(stop)), details =
 
 end
 
-# These built-in reasons contain only data that HDF5Vectors can restore. Keeping their
-# concrete types preserves useful fields, such as the stopping time or model path.
-function record_stop(
-    group,
-    stop::Union{
-        SystemsOfSystems.UnknownStopReason,
-        SystemsOfSystems.ReachedEndTime,
-        SystemsOfSystems.ModelRequestedStop,
-        SystemsOfSystems.Interrupted,
-        SystemsOfSystems.Solvers.SolverFailedToConverge,
-        SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
-    }
+# The writer and reader share this list so each field-stored reason has a matching
+# reader. These built-ins retain useful fields without restoring live Julia resources.
+const field_stored_stop_types = (
+    SystemsOfSystems.UnknownStopReason,
+    SystemsOfSystems.ReachedEndTime,
+    SystemsOfSystems.ModelRequestedStop,
+    SystemsOfSystems.Interrupted,
+    SystemsOfSystems.Solvers.SolverFailedToConverge,
+    SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
 )
+
+function record_stop(group, stop::Union{field_stored_stop_types...})
     return write_stop(group, stop)
 end
 
@@ -102,12 +101,7 @@ function load_stop(group)
     value_group = group["value"]
     stored_type = read(value_group["metadata/logical_type"])
     known_types = (
-        SystemsOfSystems.UnknownStopReason,
-        SystemsOfSystems.ReachedEndTime,
-        SystemsOfSystems.ModelRequestedStop,
-        SystemsOfSystems.Interrupted,
-        SystemsOfSystems.Solvers.SolverFailedToConverge,
-        SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
+        field_stored_stop_types...,
         SystemsOfSystems.RecordedStop,
         SystemsOfSystems.RecordedFailure,
     )
@@ -167,21 +161,38 @@ function storage_group(parent, path)
     return haskey(parent, path) ? parent[path] : HDF5.create_group(parent, path)
 end
 
+# HDF5's file number identifies an open file independently of its filename, aliases,
+# or the working directory. References identify objects within that file, not their paths.
 function same_hdf5_file(a, b)
-    return samefile(HDF5.filename(a), HDF5.filename(b))
+    return HDF5.API.h5o_get_info(a).fileno == HDF5.API.h5o_get_info(b).fileno
+end
+
+function same_hdf5_group(a, b)
+    return same_hdf5_file(a, b) && HDF5.Reference(a, ".") == HDF5.Reference(b, ".")
+end
+
+function contains_hdf5_group(parent, child)
+
+    # Compare the actual objects along the child's path. A hard or soft link may give
+    # an ancestor another name, so comparing path prefixes alone can miss an overlap.
+    reference = HDF5.Reference(parent, ".")
+    names = split(HDF5.name(child), '/'; keepempty = false)
+    for n in 0:length(names)
+        path = "/" * join(names[1:n], "/")
+        if HDF5.Reference(child, path) == reference
+            return true
+        end
+    end
+    return false
+
 end
 
 function check_separate_groups(a, b)
 
-    # Clearing a destination would also remove any log or history stored beneath it.
-    # Reject equal paths and ancestor/descendant paths within the same file before writing.
-    # Trailing separators keep sibling names such as /run and /run2 from matching.
-    if same_hdf5_file(a, b)
-        ap = rstrip(HDF5.name(a), '/') * "/"
-        bp = rstrip(HDF5.name(b), '/') * "/"
-        if startswith(ap, bp) || startswith(bp, ap)
-            throw(ArgumentError("History and log storage groups must not overlap."))
-        end
+    # Clearing either destination must not remove the other group or a source log.
+    # Reference comparisons are meaningful only within the same file.
+    if same_hdf5_file(a, b) && (contains_hdf5_group(a, b) || contains_hdf5_group(b, a))
+        throw(ArgumentError("History and log storage groups must not overlap."))
     end
     return nothing
 
@@ -249,7 +260,7 @@ function save_log_to_hdf5(group::HDF5.Group, log::HDF5Log; kwargs...)
     # An HDF5 log already contains the saved samples and metadata. When its destination
     # is the same group, leave it intact so the simulation's open dataset handles continue
     # to refer to the original data.
-    if same_hdf5_file(group, log.group) && HDF5.name(group) == HDF5.name(log.group)
+    if same_hdf5_group(group, log.group)
         return nothing
     end
 
@@ -301,19 +312,22 @@ function save_sim_history(
     parent::Union{HDF5.File, HDF5.Group},
     path::AbstractString,
     history::SystemsOfSystems.SimHistory;
-    log_path = "/log",
+    log_path = "log",
     save_model = false,
 )
 
     # Path-based saving opens its own group handles. Close those handles after the write,
     # including on failure, without closing the parent supplied by the caller.
     group = storage_group(parent, path)
-    log_group = storage_group(parent, log_path)
     try
-        save_sim_history(group, history; log_group, save_model)
+        log_group = storage_group(parent, log_path)
+        try
+            save_sim_history(group, history; log_group, save_model)
+        finally
+            close(log_group)
+        end
     finally
         close(group)
-        close(log_group)
     end
     return nothing
 
@@ -325,13 +339,31 @@ history_file(log::AbstractLog, filename) = nothing
 
 function history_file(log::HDF5Log, filename)
 
-    # The source must remain readable even when saving to another file. Compare actual
-    # files rather than filename strings so relative paths and aliases do not cause an
-    # open source file to be mistaken for a new destination and truncated.
+    # Inspect an existing HDF5 destination without truncating it. Comparing open-file
+    # identities also works when the source was opened with a relative name and the
+    # caller has since changed directories or renamed the file.
     if !isvalid(log.group)
         error("Cannot save a history whose HDF5 log is closed.")
     end
-    if !isfile(filename) || !samefile(filename, HDF5.filename(log.group))
+    if !HDF5.ishdf5(filename)
+        return nothing
+    end
+
+    # HDF5 requires repeated opens of a file to agree on its file-close behavior. Reuse
+    # the source's access properties, including when its handle belongs to the caller.
+    properties = HDF5.get_access_properties(HDF5.file(log.group))
+    same_file = try
+
+        HDF5.h5open(filename, "r"; fapl = properties) do destination
+            same_hdf5_file(destination, log.group)
+        end
+
+    finally
+
+        close(properties)
+
+    end
+    if !same_file
         return nothing
     end
 

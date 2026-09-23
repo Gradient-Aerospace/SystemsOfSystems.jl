@@ -1077,7 +1077,7 @@ succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
 """
     save_sim_history(filename, history; history_path = "/history", log_path = nothing, save_model = false)
-    save_sim_history(parent, path, history; log_path = "/log", save_model = false)
+    save_sim_history(parent, path, history; log_path = "log", save_model = false)
     save_sim_history(group, history; log_group, save_model = false)
 
 Saves a simulation's log, start and stop times, and termination information to an HDF5
@@ -1092,11 +1092,12 @@ The final model is omitted unless `save_model = true`. A requested model must be
 representable by HDF5Vectors; an unsupported model causes the save to fail.
 
 For an open HDF5 file or group, `save_sim_history(parent, path, history; log_path)` selects
-the two destination groups by path. Alternatively, `save_sim_history(group, history;
-log_group)` accepts them directly. These methods replace the groups' contents, preserving
-a log already at its destination and leaving the rest of the file untouched. Both groups
-must be in the same file, and neither may contain the other. Caller-supplied handles stay
-open after saving.
+the two destination groups by path, relative to `parent` unless an absolute path is used.
+The default log group is `log` within that parent. Alternatively,
+`save_sim_history(group, history; log_group)` accepts them directly. These methods replace
+the groups' contents, preserving a log already at its destination and leaving the rest of
+the file untouched. Both groups must be in the same file, and neither may contain the
+other. Caller-supplied handles stay open after saving.
 
 The simulation guide gives examples of saving beside a live log, using custom groups, and
 loading termination records.
