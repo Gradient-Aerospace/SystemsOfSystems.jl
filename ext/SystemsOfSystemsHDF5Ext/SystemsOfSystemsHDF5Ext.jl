@@ -2,6 +2,7 @@ module SystemsOfSystemsHDF5Ext
 
 using OrderedCollections: OrderedDict
 import HDF5
+import HDF5Vectors
 import Serialization
 import SystemsOfSystems
 import SystemsOfSystems: save_sim_history, load_sim_history

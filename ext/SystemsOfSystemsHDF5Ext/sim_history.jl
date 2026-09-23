@@ -85,6 +85,72 @@ function record_stop(
     return write_stop(group, stop; stop.original_type, stop.details)
 end
 
+function load_stop_record(group)
+
+    type = read(group["is_failure"]) ? SystemsOfSystems.RecordedFailure :
+        SystemsOfSystems.RecordedStop
+    details = haskey(group, "details") ? read(group["details"]) : ""
+    return type(read(group["type"]), read(group["description"]), details)
+
+end
+
+function load_stop(group)
+
+    # Select a reader from the stored value's type, not the original reason's name in
+    # type. A hook, for example, is saved as a RecordedStop while retaining the hook
+    # termination's original type name in the readable record.
+    value_group = group["value"]
+    stored_type = read(value_group["metadata/logical_type"])
+    known_types = (
+        SystemsOfSystems.UnknownStopReason,
+        SystemsOfSystems.ReachedEndTime,
+        SystemsOfSystems.ModelRequestedStop,
+        SystemsOfSystems.Interrupted,
+        SystemsOfSystems.Solvers.SolverFailedToConverge,
+        SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
+        SystemsOfSystems.RecordedStop,
+        SystemsOfSystems.RecordedFailure,
+    )
+    for type in known_types
+
+        if stored_type != sprint(show, type; context = :module => nothing)
+            continue
+        end
+        if type <: Union{SystemsOfSystems.RecordedStop, SystemsOfSystems.RecordedFailure}
+            return load_stop_record(group)
+        end
+
+        # Our built-in reasons have known field layouts. Supplying their schema avoids
+        # restoring Julia schema objects, even if those saved objects are unavailable.
+        # Invalid fields still indicate a malformed file and should propagate an error.
+        schema = HDF5Vectors.infer_schema(type)
+        return load_hdf5_vector(value_group, schema)[1]
+
+    end
+
+    # An unfamiliar representation may still be readable by HDF5Vectors. If its schema
+    # or value cannot be restored, the ordinary datasets retain the run's explanation
+    # and failure classification. Keep this recovery limited to the unfamiliar reader.
+    stop = try
+
+        value = load_hdf5_vector(value_group)[1]
+        if !(value isa SystemsOfSystems.AbstractTerminationReason)
+            throw(ArgumentError("Stored stop value is not a termination reason."))
+        end
+        value
+
+    catch err
+
+        err isa InterruptException && rethrow()
+        message = "Could not restore the saved termination reason; using its readable record."
+        @warn message exception = (err, catch_backtrace())
+        nothing
+
+    end
+    return isnothing(stop) ? load_stop_record(group) : stop
+
+end
+
 # Saving replaces the contents of a destination group, including optional fields from an
 # earlier save. Keep the group itself open so caller-owned handles remain usable.
 function clear_group(group)
@@ -318,7 +384,7 @@ function load_sim_history(group::HDF5.Group; load_model = false)
     # one of the descriptive records selected by record_stop.
     t_start = SystemsOfSystems.exact_time(read(group["t_start"]))
     t_stop = SystemsOfSystems.exact_time(read(group["t_stop"]))
-    stop = load_hdf5_vector(group["stop/value"])[1]
+    stop = load_stop(group["stop"])
 
     # Leave the model entry unread unless requested. This lets callers inspect results
     # without requiring the saved model's types and resources to be reconstructible.

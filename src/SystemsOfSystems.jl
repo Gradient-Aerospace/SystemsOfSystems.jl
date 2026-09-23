@@ -1135,7 +1135,9 @@ the loaded log. Closing the log leaves the caller's file and group handles open.
 The final model is loaded only when it was saved and `load_model = true`; otherwise it is
 `nothing`. Times are restored with `exact_time` from the saved floating-point values.
 Supported built-in termination reasons retain their types; custom reasons and reasons
-containing live objects are restored as `RecordedStop` or `RecordedFailure`.
+containing live objects are restored as `RecordedStop` or `RecordedFailure`. If an unfamiliar
+termination representation cannot be loaded, a warning is emitted and its readable record
+is used instead.
 
 Unsupported or malformed format versions, and a missing history version, produce an
 `ArgumentError`. The HDF5 format guide lists supported history and log versions and the

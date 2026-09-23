@@ -46,6 +46,17 @@ end
 SystemsOfSystems.describe(::CustomStop) = "A custom stop."
 SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
 
+# These portable custom reasons exercise files with unfamiliar structured stop values.
+# The normal history saver reduces custom reasons to records, so these tests replace the
+# value explicitly to represent a file written by another termination encoder.
+struct PortableStop <: AbstractStopReason
+    message::String
+end
+struct PortableFailure <: AbstractFailureReason
+    message::String
+end
+SystemsOfSystems.describe(stop::Union{PortableStop, PortableFailure}) = stop.message
+
 @testset "History file layout, lazy logs, and optional models" begin
 
     # Saving an in-memory log separates metadata from samples. The model is opt-in,
@@ -184,6 +195,68 @@ end
 
 end
 
+@testset "Unfamiliar termination values and readable recovery" begin
+
+    history = small_history(; log = Logs.NullLogOptions())
+    filename = joinpath(mktempdir(), "history.h5")
+    for stop in (PortableStop("Finished early."), PortableFailure("Could not finish."))
+
+        save_sim_history(filename, with_stop(history, stop))
+        HDF5.h5open(filename, "r+") do file
+            group = file["history/stop"]
+            HDF5.delete_object(group, "value")
+            HDF5Vectors.copy_to_hdf5_vector(group, "value", [stop])
+            group["details"] = "Saved diagnostics."
+        end
+
+        # An available custom schema retains the unfamiliar concrete reason and fields.
+        restored = load_sim_history(filename)
+        @test typeof(restored.stop) == typeof(stop)
+        @test restored.stop.message == stop.message
+        @test succeeded(restored) == succeeded(with_stop(history, stop))
+
+        # An unavailable schema must not prevent recovery of the readable run record.
+        HDF5.h5open(filename, "r+") do file
+            HDF5.delete_object(file, "history/stop/value/metadata/serialized_schema")
+        end
+        recovered = @test_logs (:warn, r"Could not restore the saved termination reason") begin
+            load_sim_history(filename)
+        end
+        expected_type = stop isa AbstractFailureReason ? RecordedFailure : RecordedStop
+        @test recovered.stop isa expected_type
+        @test recovered.stop.original_type == string(typeof(stop))
+        @test describe(recovered.stop) == describe(stop)
+        @test recovered.stop.details == "Saved diagnostics."
+        @test succeeded(recovered) == succeeded(with_stop(history, stop))
+
+        # Diagnostics are optional, but the failure classification is required even on
+        # the recovery path. Missing required metadata must not turn failure into success.
+        HDF5.h5open(filename, "r+") do file
+            HDF5.delete_object(file, "history/stop/details")
+        end
+        recovered = @test_logs (:warn, r"Could not restore the saved termination reason") begin
+            load_sim_history(filename)
+        end
+        @test recovered.stop.details == ""
+        HDF5.h5open(filename, "r+") do file
+            HDF5.delete_object(file, "history/stop/is_failure")
+        end
+        @test_logs (:warn, r"Could not restore the saved termination reason") begin
+            @test_throws KeyError load_sim_history(filename)
+        end
+
+    end
+
+    # A malformed known representation must report its invalid data instead of quietly
+    # recovering as a descriptive record or attempting the generic schema reader.
+    save_sim_history(filename, with_stop(history, ModelRequestedStop("/child", "Done.")))
+    HDF5.h5open(filename, "r+") do file
+        HDF5.delete_object(file, "history/stop/value/data")
+    end
+    @test_throws ArgumentError load_sim_history(filename)
+
+end
+
 @testset "Termination records preserve meaning without live objects" begin
 
     # Simple built-in reasons retain their concrete types. Custom reasons and hooks hold
@@ -207,6 +280,12 @@ end
     for stop in reasons
 
         save_sim_history(filename, with_stop(history, stop))
+
+        # Every representation written by our saver should load without its serialized
+        # schema. This includes recorded hooks whose original and stored types differ.
+        HDF5.h5open(filename, "r+") do file
+            HDF5.delete_object(file, "history/stop/value/metadata/serialized_schema")
+        end
         restored = load_sim_history(filename)
         @test describe(restored.stop) == describe(stop)
         @test succeeded(restored) == succeeded(with_stop(history, stop))

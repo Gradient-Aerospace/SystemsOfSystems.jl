@@ -55,6 +55,8 @@ The following entries are relative to the history group:
 
 All entries except `stop/details`, `model`, and the provenance dataset are required in a saved history. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the success/failure distinction without parsing either string.
 
+The Julia history loader restores known built-in termination reasons from their field schemas without deserializing saved schema objects. Descriptive reasons are reconstructed from the readable `stop` datasets. For an unfamiliar stored reason, the loader first tries the ordinary HDF5Vectors reader; if that fails, it warns and uses the readable record, preserving the original type name, description, diagnostics, and failure classification. Malformed fields in a recognized built-in reason remain an error. This recovery applies only to termination reasons, not to log or optional model loading.
+
 Because `log_path` is within the file, moving or renaming the file preserves it. Moving a log group within the file requires updating any history that refers to it. A log group with `is_null = true` records that logging was disabled; it has no model tree. Ordinary logs need not have an `is_null` entry.
 
 ## Models and Variables
