@@ -97,8 +97,8 @@ For example, a run from 0 to 1 second with a root state named `x` and a child mo
 ```text
 history.h5
 ├── history/
-│   ├── @sim_history_version = 1
-│   ├── @systems_of_systems_version = "..."
+│   ├── sim_history_version = 1
+│   ├── systems_of_systems_version = "..."
 │   ├── log_path = "/log"
 │   ├── t_start = 0.0
 │   ├── t_stop = 1.0
@@ -110,8 +110,8 @@ history.h5
 │   │   └── value/ ...            # Structured termination record
 │   └── model/ ...                # Optional final model value
 └── log/
-    ├── @log_format_version = 1
-    ├── @systems_of_systems_version = "..."
+    ├── log_format_version = 1
+    ├── systems_of_systems_version = "..."
     ├── type = "Nothing"
     ├── serialized_type = ...     # Julia type reconstruction
     ├── constants/
@@ -126,7 +126,7 @@ history.h5
     └── models/child/ ...         # Each child repeats this log layout
 ```
 
-When logging was disabled, `/log` contains `is_null = true` and its format/provenance attributes, with no model tree. History and log format versions are checked independently when loading; the [format compatibility policy](hdf5_format.md#Format-Versions-and-Compatibility) describes supported versions and legacy files.
+When logging was disabled, `/log` contains `is_null = true` and its format/provenance datasets, with no model tree. History and log format versions are checked independently when loading; the [format compatibility policy](hdf5_format.md#Format-Versions-and-Compatibility) describes supported versions and legacy files.
 
 The final model is omitted by default. If a model is suitable for storage with HDF5Vectors, we can opt into saving and loading it separately:
 

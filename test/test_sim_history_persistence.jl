@@ -56,10 +56,14 @@ SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
     HDF5.h5open(filename, "r") do fid
         @test Set(keys(fid)) == Set(["history", "log"])
         @test read(fid["history/log_path"]) == "/log"
-        @test read(HDF5.attributes(fid["history"])["sim_history_version"]) == 1
-        @test read(HDF5.attributes(fid["log"])["log_format_version"]) == 1
+        @test fid["history/sim_history_version"] isa HDF5.Dataset
+        @test ndims(fid["history/sim_history_version"]) == 0
+        @test isempty(keys(HDF5.attributes(fid["history"])))
+        @test isempty(keys(HDF5.attributes(fid["log"])))
+        @test read(fid["history/sim_history_version"]) == 1
+        @test read(fid["log/log_format_version"]) == 1
         for group in (fid["history"], fid["log"])
-            @test HDF5.attrs(group)["systems_of_systems_version"] ==
+            @test read(group["systems_of_systems_version"]) ==
                 string(Base.pkgversion(SystemsOfSystems))
         end
         @test read(fid["history/t_start"]) === Float64(history.t_start)
@@ -436,7 +440,7 @@ end
     # before a loader attempts to read fields or deserialize Julia objects. Exercise both
     # group and filename entry points, including versions on a disabled log.
     filename = joinpath(mktempdir(), "versions.h5")
-    for (name, attribute, loader) in (
+    for (name, version_name, loader) in (
         ("history", "sim_history_version", load_sim_history),
         ("log", "log_format_version", Logs.load_hdf5_log),
     )
@@ -445,19 +449,21 @@ end
 
             group = HDF5.create_group(file, name)
             for version in (0, -1, 2, 100)
-                HDF5.attrs(group)[attribute] = version
+                group[version_name] = version
                 @test_throws r"Unsupported .*Supported format version: 1" loader(group)
                 @test isopen(file)
                 @test isvalid(group)
+                HDF5.delete_object(group, version_name)
             end
             for version in (true, 1.0, "1", [1])
-                HDF5.attrs(group)[attribute] = version
+                group[version_name] = version
                 @test_throws r"expected a scalar integer" loader(group)
+                HDF5.delete_object(group, version_name)
             end
 
             # The NullLog shortcut cannot bypass validation. File-owning wrappers must
             # report the same version error as group loaders.
-            HDF5.attrs(group)[attribute] = 2
+            group[version_name] = 2
             if name == "log"
                 group["is_null"] = true
                 @test_throws r"Unsupported log_format_version" loader(group)
@@ -490,13 +496,14 @@ end
     # its own writer's provenance, while newly written history metadata names this writer.
     filename = joinpath(mktempdir(), "direct.h5")
     history = small_history(; log = Logs.HDF5LogOptions(filename))
-    @test HDF5.attrs(history.log.group)["log_format_version"] == 1
-    @test HDF5.attrs(history.log.group)["systems_of_systems_version"] ==
+    @test read(history.log.group["log_format_version"]) == 1
+    @test read(history.log.group["systems_of_systems_version"]) ==
         string(Base.pkgversion(SystemsOfSystems))
-    HDF5.attrs(history.log.group)["systems_of_systems_version"] = "0.0.0"
+    HDF5.delete_object(history.log.group, "systems_of_systems_version")
+    history.log.group["systems_of_systems_version"] = "0.0.0"
     save_sim_history(filename, history; history_path = "/run")
-    @test HDF5.attrs(history.log.group)["systems_of_systems_version"] == "0.0.0"
-    @test HDF5.attrs(history.log.fid["run"])["systems_of_systems_version"] ==
+    @test read(history.log.group["systems_of_systems_version"]) == "0.0.0"
+    @test read(history.log.fid["run"]["systems_of_systems_version"]) ==
         string(Base.pkgversion(SystemsOfSystems))
     copied = joinpath(mktempdir(), "copied.h5")
     save_sim_history(copied, history)
@@ -505,9 +512,9 @@ end
     # Package-version provenance is not a compatibility gate and may be absent in files
     # written before it was recorded. Unknown extra metadata is also harmless.
     HDF5.h5open(copied, "r+") do file
-        @test HDF5.attrs(file["log"])["log_format_version"] == 1
-        @test HDF5.attrs(file["log"])["systems_of_systems_version"] == "0.0.0"
-        HDF5.delete_attribute(file["history"], "systems_of_systems_version")
+        @test read(file["log"]["log_format_version"]) == 1
+        @test read(file["log"]["systems_of_systems_version"]) == "0.0.0"
+        HDF5.delete_object(file["history"], "systems_of_systems_version")
         file["history/additional_metadata"] = "Ignored by this reader"
     end
     load_sim_history(copied) do restored
@@ -517,7 +524,8 @@ end
     # A history may point to an unsupported log even when its own metadata is supported.
     # The history loader must still use the log's independent version check.
     HDF5.h5open(copied, "r+") do file
-        HDF5.attrs(file["log"])["log_format_version"] = 2
+        HDF5.delete_object(file["log"], "log_format_version")
+        file["log/log_format_version"] = 2
     end
     @test_throws r"Unsupported log_format_version" load_sim_history(copied)
 
@@ -525,7 +533,7 @@ end
     quiet = small_history(; log = Logs.NullLogOptions())
     save_sim_history(copied, quiet)
     HDF5.h5open(copied, "r") do file
-        @test HDF5.attrs(file["log"])["log_format_version"] == 1
+        @test read(file["log"]["log_format_version"]) == 1
     end
     load_sim_history(copied) do restored
         @test restored.log isa Logs.NullLog
@@ -536,7 +544,7 @@ end
 @testset "Legacy standalone logs remain readable without being relabeled" begin
 
     # Existing unversioned logs can be at the root or in a selected group. Remove the
-    # newly introduced attributes to reproduce those layouts, including omitted metadata
+    # newly introduced datasets to reproduce those layouts, including omitted metadata
     # for which the legacy loader already provides defaults.
     history = small_history()
     for path in ("/", "/log")
@@ -545,8 +553,8 @@ end
         Logs.save_log_to_hdf5(filename, history.log; path)
         HDF5.h5open(filename, "r+") do file
             group = file[path]
-            HDF5.delete_attribute(group, "log_format_version")
-            HDF5.delete_attribute(group, "systems_of_systems_version")
+            HDF5.delete_object(group, "log_format_version")
+            HDF5.delete_object(group, "systems_of_systems_version")
             HDF5.delete_object(group["names"], "models")
             HDF5.delete_object(group["timeseries/x"], "serialized_interpolator")
             close(group)
@@ -562,9 +570,9 @@ end
         save_sim_history(copied, legacy)
         Logs.close_log(log)
         HDF5.h5open(copied, "r") do file
-            @test HDF5.attrs(file["history"])["sim_history_version"] == 1
-            @test !haskey(HDF5.attrs(file["log"]), "log_format_version")
-            @test !haskey(HDF5.attrs(file["log"]), "systems_of_systems_version")
+            @test read(file["history"]["sim_history_version"]) == 1
+            @test !haskey(file["log"], "log_format_version")
+            @test !haskey(file["log"], "systems_of_systems_version")
         end
         load_sim_history(copied) do restored
             @test restored["/child"]["y"].data[:] == history["/child"]["y"].data
