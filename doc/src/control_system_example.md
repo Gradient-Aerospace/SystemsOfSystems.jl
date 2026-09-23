@@ -898,6 +898,45 @@ SystemsOfSystems.plot_ts(
 
 Nothing in this section introduces anything new in SystemsOfSystems. It's simply an example of a useful design pattern in the systems-of-systems space. By designing careful, explicit interfaces for different models, one can create excellently re-usable, composable systems, allowing simulations to grow quite large without getting bogged down in code complexity.
 
+## Saving Results
+
+It can be useful to save a record of the simulation, including its log, start and stop times, and termination reason. Importing HDF5Vectors enables the history saving and loading functions:
+
+```@example controls
+import HDF5Vectors
+SystemsOfSystems.save_sim_history("history.h5", history)
+```
+
+The final model is omitted by default; `save_model = true` can include it when its type supports storage in HDF5Vectors. Here, we'll load the saved run information and log:
+
+```@example controls
+loaded_history = SystemsOfSystems.load_sim_history("history.h5")
+```
+
+That returns a history with a log that reads directly out of the HDF5 file. We can close it when we're done:
+
+```@example controls
+SystemsOfSystems.Logs.close_log(loaded_history.log)
+```
+
+These sim history files are also useful outside of SystemsOfSystems and even outside of Julia. For instance, the time and data entries for the plant's position over time can be found here (using the general HDF5 package):
+
+```@example controls
+import HDF5
+t_position, position_data = HDF5.h5open("history.h5", "r") do fid
+    t = read(fid["/log/models/plant/timeseries/position/time/data/values"])
+    position = read(fid["/log/models/plant/timeseries/position/data/data/values"])
+    return t, position
+end
+@assert t_position == history["/plant"]["position"].time # hide
+@assert position_data == history["/plant"]["position"].data # hide
+nothing # hide
+```
+
+The `do` block closes the file after reading. Both results are ordinary arrays that remain usable afterward. The `time` and `data` groups each hold an HDF5Vector; for the scalar samples in this example, the numeric dataset is at `data/values` inside that vector's group. The [HDF5 file format](hdf5_format.md) describes other sample types and the public metadata entries.
+
+We could of course read these same datasets in other languages as well. Python, MATLAB, and C++ all have excellent HDF5 libraries.
+
 ## Next Steps
 
 This example certainly has a lot that we could add. Next, we could make a new controller that observes the rate of change of the target input, or we could add a disturbance input to the plant that starts at some trigger time, or we could break the controller into sub-models so that new controllers could be built from common pieces. And we could quickly put together Monte-Carlo runs for different targets and different initial conditions. For now, however, we'll wrap up this introductory example.

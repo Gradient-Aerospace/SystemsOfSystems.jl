@@ -2,7 +2,10 @@ module SystemsOfSystemsHDF5Ext
 
 using OrderedCollections: OrderedDict
 import HDF5
+import HDF5Vectors
 import Serialization
+import SystemsOfSystems
+import SystemsOfSystems: save_sim_history, load_sim_history
 using HDF5Vectors: create_hdf5_vector, load_hdf5_vector, copy_to_hdf5_vector
 
 using SystemsOfSystems: TimeSeries, Dimension, VariableDescription, ModelDescription
@@ -15,8 +18,10 @@ import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
     load_hdf5_log, save_log_to_hdf5,
     save_time_series_to_hdf5, load_time_series_from_hdf5
 
+include("format_versions.jl")
+
 """
-    HDF5Log(; fid, model_history_dict)
+    HDF5Log(fid, group, model_history_dict)
 
 A container for the same continuous and discrete states, outputs, and metadata as a
 `BasicLog`, with an HDF5 file as the underlying storage. Constants that cannot be
@@ -27,10 +32,15 @@ slower than a `BasicLog`.
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
 use `save_log_to_hdf5` when the simulation is over.
 
+The `group` field identifies the log's storage location, usually `/log`. The log owns this
+group handle. A non-`nothing` `fid` also gives it responsibility for closing the file;
+`fid = nothing` means the caller owns the file and must keep it open while using the log.
+
 See [`HDF5LogOptions`](@ref) for more.
 """
 mutable struct HDF5Log <: AbstractLog
     fid::Union{HDF5.File, Nothing}
+    group::HDF5.Group
     model_history_dict::OrderedDict{String, ModelHistory}
 end
 
@@ -108,10 +118,20 @@ function create_time_series_for_var(
     discrete,
 ) where {T}
 
+    # Storage paths are relative to the log group, including for the root model, whose
+    # breadcrumbs are empty. The time series' slug remains a model path independent of
+    # where the log is placed in the HDF5 file.
     el_type = figure_out_el_type(T)
-    group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
+    group_path = join(
+        (
+            ("models/$el" for el in breadcrumbs)...,
+            "timeseries",
+            var_name,
+        ),
+        "/",
+    )
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    group = HDF5.create_group(log.fid, group_path)
+    group = HDF5.create_group(log.group, group_path)
     ts = TimeSeries(;
         var.title,
         time = create_hdf5_vector(group, "time", Float64),
@@ -137,10 +157,20 @@ function create_time_series_for_var(
     discrete,
 ) where {T}
 
+    # Storage paths are relative to the log group, including for the root model, whose
+    # breadcrumbs are empty. The time series' slug remains a model path independent of
+    # where the log is placed in the HDF5 file.
     el_type = figure_out_el_type(T)
-    group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/" * var_name
+    group_path = join(
+        (
+            ("models/$el" for el in breadcrumbs)...,
+            "timeseries",
+            var_name,
+        ),
+        "/",
+    )
     slug = join("/" * model for model in breadcrumbs) * "/" * var_name
-    group = HDF5.create_group(log.fid, group_path)
+    group = HDF5.create_group(log.group, group_path)
     ts = TimeSeries(;
         title = slug,
         time = create_hdf5_vector(group, "time", Float64),
@@ -200,11 +230,11 @@ function record_model_description(
 )
 
     # Get the ground started.
-    group_path = join("/models/" * el for el in breadcrumbs)
+    group_path = join(("models/$el" for el in breadcrumbs), "/")
     if !isempty(group_path)
-        group = HDF5.create_group(log.fid, group_path)
+        group = HDF5.create_group(log.group, group_path)
     else
-        group = log.fid["/"] # This exists at creation.
+        group = log.group # This exists at creation.
     end
 
     # Keep a readable name for general HDF5 inspection and the actual Julia type for an
@@ -237,8 +267,7 @@ function record_model_description(
 
     # We record the names of each type of thing. This helps us know if, say, "position" is a
     # state or output or constant.
-    names_group_path = group_path * "/names"
-    names_group = HDF5.create_group(log.fid, names_group_path)
+    names_group = HDF5.create_group(group, "names")
     names_group["constants"] = saved_constants
     names_group["continuous_states"] = String[
         string(k)
@@ -263,25 +292,50 @@ function record_model_description(
 end
 
 function create_log(options::HDF5LogOptions, model_description, time_dimension)
+
+    # Mark the log when it is created, before recording any model data. It is a complete
+    # storage format in its own right, whether or not history metadata is saved later.
     mkpath(dirname(options.filename))
-    fid = HDF5.h5open(options.filename, "w")
-    mhd = OrderedDict{String, ModelHistory}()
-    log = HDF5Log(fid, mhd)
-    logging_policy = options.logging_policy
-    finalizer(close_log, log) # Close the file when this goes out of scope.
-    breadcrumbs = String[]
-    mh = create_time_series_for_model!(
-        log, breadcrumbs, model_description,
-        time_dimension, logging_policy,
-    )
-    return (log, mh)
+    fid = HDF5.h5open(abspath(options.filename), "w")
+    try
+
+        mhd = OrderedDict{String, ModelHistory}()
+        log = HDF5Log(fid, storage_group(fid, options.path), mhd)
+        finalizer(close_log, log)
+        write_format_version(log.group, "log_format_version", log_format_version)
+        logging_policy = options.logging_policy
+        breadcrumbs = String[]
+        mh = create_time_series_for_model!(
+            log, breadcrumbs, model_description,
+            time_dimension, logging_policy,
+        )
+        return (log, mh)
+
+    catch
+
+        # Initialization can fail before a log is returned. Close its file and any
+        # partially created groups or datasets immediately, rather than waiting for GC.
+        close(fid)
+        rethrow()
+
+    end
+
 end
 
 function close_log(log::HDF5Log)
+
+    # Always release the log's own group handle. For a log loaded from a caller-owned file,
+    # this leaves that file and the caller's original group handle open. Filename loaders
+    # also assign fid, so closing those logs closes the file and its remaining datasets.
+    if isvalid(log.group)
+        close(log.group)
+    end
     if !isnothing(log.fid) && isopen(log.fid)
         close(log.fid)
-        log.fid = nothing # TODO: What's the point of this?
+        log.fid = nothing
     end
+    return nothing
+
 end
 
 function load_groups(group)
@@ -462,19 +516,75 @@ function load_hdf5_model!(mhd, group, breadcrumbs)
 
 end
 
-"""
-    load_hdf5_log(filename::AbstractString)
+function load_hdf5_log(filename::AbstractString; path = "/log")
 
-Loads an `HDF5Log` from the given HDF5 file and returns `(log, root_model_history)`. The log
-owns the open file and should be closed with `close_log` when it is no longer needed.
-"""
-function load_hdf5_log(filename::AbstractString)
     fid = HDF5.h5open(filename)
+    try
+
+        # Before /log became the default, standalone files stored the root model at /.
+        # When the default group is absent, its names entry identifies that older layout.
+        # An explicitly selected non-default path is used as supplied.
+        if path == "/log" && !haskey(fid, path) && haskey(fid, "names")
+            path = "/"
+        end
+
+        # The group loader borrows the file. Since this overload opened it, transfer
+        # ownership to the returned log, or close it immediately for a NullLog.
+        log, mh = load_hdf5_log(fid, path)
+        own_log_file(log, fid)
+        return (log, mh)
+
+    catch
+
+        # No log is returned on failure, so the caller has no handle with which to release
+        # the file. Close it here before propagating the loading error.
+        close(fid)
+        rethrow()
+
+    end
+
+end
+
+function load_hdf5_log(group::HDF5.Group)
+
+    # Check the layout before decoding model types or interpreting even a NullLog marker.
+    # Missing versions are accepted only for the existing legacy log representation.
+    check_format_version(group, "log_format_version", log_format_version;
+        allow_unversioned = true)
+
+    # Logging disabled at simulation time is represented explicitly. A NullLog has no
+    # dataset handles to retain, and this group overload leaves the caller's file open.
+    if haskey(group, "is_null") && read(group["is_null"])
+        return (SystemsOfSystems.Logs.NullLog(), nothing)
+    end
+
+    # Rebuild both views of the model histories: a tree for navigating submodels and a
+    # dictionary for looking up model paths. Time-series samples remain on disk.
     mhd = OrderedDict{String, ModelHistory}()
-    breadcrumbs = String[]
-    mh = load_hdf5_model!(mhd, fid["/"], breadcrumbs)
-    log = HDF5Log(fid, mhd)
+    mh = load_hdf5_model!(mhd, group, String[])
+
+    # Open a separate handle to the same group so closing this log does not close the
+    # caller's handle. Nothing in fid means the log borrows the containing file. The
+    # finalizer releases its handle if the caller forgets to call close_log explicitly.
+    log = HDF5Log(nothing, HDF5.open_group(group, "."), mhd)
+    finalizer(close_log, log)
+
     return (log, mh)
+
+end
+
+function load_hdf5_log(parent::Union{HDF5.File, HDF5.Group}, path::AbstractString)
+
+    # This convenience overload scopes the temporary handle opened by parent[path]. The
+    # returned log retains its own group handle, so this one can be closed immediately
+    # on success or failure rather than waiting for garbage collection.
+    group = parent[path]
+    try
+        return load_hdf5_log(group)
+    finally
+        close(group)
+    end
+
 end
 
 function save_time_series_to_hdf5(fid, path, ts::TimeSeries; kwargs...)
@@ -502,20 +612,21 @@ function save_time_series_to_hdf5(fid, path, ts::TimeSeries; kwargs...)
 
 end
 
-function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
+function save_mh_to_hdf5(group, mh; kwargs...)
 
-    # Set up the path to here, like /models/subsystem1/models/subsubsystem2.
-    this_path = join("/models/" * el for el in breadcrumbs)
+    # Save this model's metadata in the supplied group; recursive calls receive their
+    # own child groups. Relative paths keep the same layout at any location in the file.
+    # Retain both the readable type name and the serialized type used by the Julia loader.
+    group["type"] = string(mh.type)
+    group["serialized_type"] = serialize_to_bytes(mh.type)
 
-    # Store both a readable name and the actual Julia type, as direct HDF5 logging does.
-    fid["$this_path/type"] = string(mh.type)
-    fid["$this_path/serialized_type"] = serialize_to_bytes(mh.type)
-
-    # Save the constants. This may fail since the user may have all kinds of constants that
-    # we don't know how to log, so make sure we record only the successful ones.
-    constants_path = this_path * "/constants/"
-    constants_group = HDF5.create_group(fid, constants_path)
+    # Constants may contain values HDF5Vectors cannot encode. Omit those with a warning,
+    # and list only successfully saved names so the loader never looks for missing data.
+    # Model breadcrumbs supply descriptive variable paths, not HDF5 storage locations.
+    constants_group = HDF5.create_group(group, "constants")
+    names_group = HDF5.create_group(group, "names")
     saved_constants = String[]
+    breadcrumbs = split(mh.path, '/'; keepempty = false)
     for (name, constant) in pairs(mh.constants)
         constant_group = HDF5.create_group(constants_group, string(name))
         try
@@ -523,57 +634,79 @@ function save_mh_to_hdf5(fid, mh, breadcrumbs; kwargs...)
             push!(saved_constants, string(name))
         catch err
             trace = catch_backtrace()
-            p = join("/" * el for el in breadcrumbs) * "/$name"
-            message = "Failed to record the $p constant of type $(typeof(constant)) in " *
+            path = rstrip(mh.path, '/') * "/$name"
+            message = "Failed to record the $path constant of type $(typeof(constant)) in " *
                 "the HDF5 output file. Skipping."
             @warn message exception = (err, trace)
             HDF5.delete_object(constant_group)
         end
     end
-    fid["$this_path/names/constants"] = saved_constants
+    names_group["constants"] = saved_constants
 
-    # Now save all states and outputs. We don't use a try-catch here. We need to be able to
-    # save everything, or it's a good idea to throw an error.
+    # States and outputs are the recorded samples, so failures to save them propagate to
+    # the caller. The name lists preserve their order and distinguish the four categories
+    # even though their time series share one storage group.
     for f in (:continuous_states, :discrete_states, :continuous_outputs, :discrete_outputs)
-        fid["$this_path/names/$f"] = String[
+        names_group[string(f)] = String[
             string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))
         ]
         for (name, ts) in pairs(getproperty(mh, f))
-            group_path = join("/models/" * el for el in breadcrumbs) * "/timeseries/$name"
-            save_time_series_to_hdf5(fid, group_path, ts; kwargs...)
+            save_time_series_to_hdf5(group, "timeseries/$name", ts; kwargs...)
         end
     end
 
-    # Preserve the NamedTuple order separately because HDF5 group iteration does not.
-    fid["$this_path/names/models"] = String[string(name) for name in keys(mh.models)]
-
-    # Do the submodels.
+    # Each child gets the same model-history layout. Save child names separately because
+    # iterating the HDF5 groups would not reproduce the original NamedTuple order.
+    names_group["models"] = String[string(name) for name in keys(mh.models)]
     for (name, smh) in pairs(mh.models)
-        save_mh_to_hdf5(fid, smh, vcat(breadcrumbs, string(name)); kwargs...)
+        child_group = HDF5.create_group(group, "models/$name")
+        save_mh_to_hdf5(child_group, smh; kwargs...)
     end
 
     return nothing
 
 end
 
-"""
-    save_log_to_hdf5(filename::AbstractString, log::AbstractLog; kwargs...)
+function save_log_to_hdf5(
+    filename::AbstractString,
+    log::AbstractLog;
+    path = "/log",
+    kwargs...,
+)
 
-Saves any other type of log in the same format used by HDF5Log so that it can be loaded as
-an HDF5Log or loaded outside of Julia. Returns nothing.
-
-Constants that cannot be represented by HDF5Vectors are omitted with a warning.
-
-Any additional keyword arguments are passed through to `HDF5Vectors.copy_to_hdf5_vector`.
-These can allow better control over how the data is stored in the HDF5 file. See that
-package for details.
-"""
-function save_log_to_hdf5(filename::AbstractString, log::AbstractLog; kwargs...)
-    HDF5.h5open(filename, "w") do fid
-        breadcrumbs = String[]
-        save_mh_to_hdf5(fid, log["/"], breadcrumbs; kwargs...)
+    # Opening an existing source log with mode "w" would erase it. Reuse its writable file
+    # when it is also the destination; otherwise create an output file scoped to this call.
+    fid = history_file(log, filename)
+    if isnothing(fid)
+        HDF5.h5open(filename, "w") do output
+            save_log_to_hdf5(output, path, log; kwargs...)
+        end
+    else
+        save_log_to_hdf5(fid, path, log; kwargs...)
     end
     return nothing
+
 end
+
+function save_log_to_hdf5(
+    parent::Union{HDF5.File, HDF5.Group},
+    path::AbstractString,
+    log::AbstractLog;
+    kwargs...,
+)
+
+    # The path overload owns only the group handle it opens. Releasing that handle after
+    # saving must leave the caller's parent file or group available for further work.
+    group = storage_group(parent, path)
+    try
+        save_log_to_hdf5(group, log; kwargs...)
+    finally
+        close(group)
+    end
+    return nothing
+
+end
+
+include("sim_history.jl")
 
 end
