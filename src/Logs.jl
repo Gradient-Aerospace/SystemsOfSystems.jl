@@ -584,6 +584,10 @@ An open log group, or a parent file/group and path, can be supplied instead of a
 These forms borrow the caller's file, which must remain open while the log is in use.
 Closing the log releases its own group handle, leaving the caller's handles open.
 
+An unsupported or malformed `log_format_version` produces an `ArgumentError`. Existing
+unversioned logs remain supported as a legacy format. The HDF5 format guide describes the
+compatibility policy; the writer package version does not control format acceptance.
+
 Interpolators and model types are restored using Julia serialization, so files should come
 only from trusted sources. Custom interpolator types must be available in the loading
 environment. An unavailable model type produces a warning and is represented by `Missing`

@@ -127,7 +127,7 @@ function save_history_metadata(group, history, log_path; save_model)
     # survive a later save. The log remains in its own group, identified by log_path.
     # Floating-point times match the representation used for time-series samples.
     clear_group(group)
-    HDF5.attrs(group)["sim_history_version"] = 1
+    write_format_version(group, "sim_history_version", history_format_version)
     group["log_path"] = log_path
     group["t_start"] = Float64(history.t_start)
     group["t_stop"] = Float64(history.t_stop)
@@ -158,6 +158,7 @@ end
 # tree. Replacing the destination also removes variables omitted from the new log.
 function save_log_to_hdf5(group::HDF5.Group, log::AbstractLog; kwargs...)
     clear_group(group)
+    write_format_version(group, "log_format_version", log_format_version)
     save_mh_to_hdf5(group, log["/"]; kwargs...)
     return nothing
 end
@@ -166,11 +167,18 @@ end
 # of logging from a log group whose expected data is missing.
 function save_log_to_hdf5(group::HDF5.Group, log::SystemsOfSystems.Logs.NullLog; kwargs...)
     clear_group(group)
+    write_format_version(group, "log_format_version", log_format_version)
     group["is_null"] = true
     return nothing
 end
 
 function save_log_to_hdf5(group::HDF5.Group, log::HDF5Log; kwargs...)
+
+    # Copying or reusing a log does not convert its representation. Preserve its version
+    # and writer provenance, including their absence on legacy logs, and reject explicit
+    # unsupported versions before modifying a destination.
+    check_format_version(log.group, "log_format_version", log_format_version;
+        allow_unversioned = true)
 
     # An HDF5 log already contains the saved samples and metadata. When its destination
     # is the same group, leave it intact so the simulation's open dataset handles continue
@@ -300,6 +308,10 @@ function save_sim_history(
 end
 
 function load_sim_history(group::HDF5.Group; load_model = false)
+
+    # Validate the format before reading fields or deserializing values. Writer package
+    # versions are provenance only; they do not decide whether this layout is supported.
+    check_format_version(group, "sim_history_version", history_format_version)
 
     # Restore the small run record eagerly. SimHistory uses exact simulation times even
     # though the file stores them as floats; the saved stop value is a built-in reason or

@@ -1137,6 +1137,10 @@ The final model is loaded only when it was saved and `load_model = true`; otherw
 Supported built-in termination reasons retain their types; custom reasons and reasons
 containing live objects are restored as `RecordedStop` or `RecordedFailure`.
 
+Unsupported or malformed format versions, and a missing history version, produce an
+`ArgumentError`. The HDF5 format guide lists supported history and log versions and the
+policy for retaining older readers. Writer package versions are informational only.
+
 As with `Logs.load_hdf5_log`, files should come from trusted sources, and types used by
 saved models or log metadata must be available in the loading environment.
 """

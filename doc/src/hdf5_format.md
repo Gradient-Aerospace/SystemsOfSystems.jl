@@ -4,6 +4,29 @@ Simulation histories and logs are intended to be useful in ordinary HDF5 tools o
 
 SystemsOfSystems defines the structure that identifies runs, models, variables, and their metadata. Sample values use the documented [HDF5Vectors storage format](https://gradient-aerospace.github.io/HDF5Vectors.jl/stable/storage_layout/). Its portable data and schema entries are also available to external readers; they are not Julia implementation details. The distinction is between documented, externally interpretable data and entries needed only to reconstruct Julia objects.
 
+## Format Versions and Compatibility
+
+History metadata and logs have independent integer format versions because either can be used without the other. These describe the stored layout, not the SystemsOfSystems package release. HDF5Vectors versions its nested value encodings separately.
+
+| Stored object | Format attribute | Versions currently read | Version written for new data |
+| --- | --- | --- | --- |
+| History metadata group | `sim_history_version` | `1` | `1` |
+| Log group, including a NullLog | `log_format_version` | `1`, plus the existing unversioned legacy layout | `1` |
+
+Each loader checks its group's version before interpreting its contents or deserializing Julia objects. A missing history version, a malformed version, or an unsupported explicit version produces an `ArgumentError` identifying the group and the problem. Unversioned logs are the one deliberate exception: the existing legacy log reader handles them, whether stored at the file root or in a selected group. Missing versions do not provide a general way to infer future layouts.
+
+Newly written history and log groups also carry a string attribute, `systems_of_systems_version`, identifying the writer's package release. This is provenance, not a compatibility gate. It is optional when reading, including for files written before provenance was recorded. A newer writer package version does not itself make a supported format unreadable.
+
+Saving an in-memory log writes the current log format. Copying an existing HDF5 log preserves its format version and writer provenance, including absent attributes on a legacy log. The same applies when saving history metadata beside an existing log. Neither operation converts the log to a newer format; new history metadata records its own current version and writer independently.
+
+### Support Policy
+
+SystemsOfSystems uses independent format versions with bounded support. Within a package major release, newer releases retain the supported-format readers provided by earlier releases in that major. A future package major release may drop support for older formats; permanent backward reading is not promised. The support table above and release notes identify supported formats and any removals. A package major release need not change a format version if the storage layout remains compatible.
+
+Format versions change when the interpretation of public data changes incompatibly. Adding optional entries that readers can ignore, or changing compression and chunk sizes, does not require a new format version. Renaming or removing a public entry, changing its meaning, or changing its representation incompatibly does. Such changes to the existing public writer interface belong in a package major release. Configurable group locations are already part of the format and do not require a version change.
+
+Support applies to the documented layout and its portable data. It does not guarantee reconstruction of arbitrary application types or compatibility of Julia-serialized objects across Julia or dependency versions. Changes to internal reconstruction entries do not automatically require a public format-version change, but they still need to respect the package's supported loading behavior. Nested HDF5Vectors encodings have their own compatibility requirements.
+
 ## Locating a Run and Its Log
 
 By default, a saved history has two groups:
@@ -19,7 +42,8 @@ The following entries are relative to the history group:
 
 | Entry | Representation | Meaning |
 | --- | --- | --- |
-| `sim_history_version` | Integer **attribute**, currently `1` | Version of the history metadata format. This is separate from the HDF5Vectors format versions inside stored values. |
+| `sim_history_version` | Integer **attribute**, currently `1` | Version of the history metadata format. |
+| `systems_of_systems_version` | Optional string **attribute** | Writer package version, for provenance only. |
 | `log_path` | Scalar string dataset | Absolute HDF5 path to the log group in the same file. |
 | `t_start`, `t_stop` | Scalar `Float64` datasets | Requested start time and last completed simulation time, using the simulation's time coordinate. |
 | `stop/type` | Scalar string dataset | Original termination reason's type name, for identification when inspecting results. |
@@ -29,13 +53,15 @@ The following entries are relative to the history group:
 | `stop/value/` | HDF5Vectors group | Structured saved termination reason. Its schema describes the recorded fields; it may represent a descriptive record rather than the original reason. |
 | `model/` | Optional HDF5Vectors group | One final model value, present when saved with `save_model = true`. Its schema and portability depend on the application's model type. |
 
-All entries except `stop/details` and `model` are present in a saved history. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the success/failure distinction without parsing either string.
+All entries except `stop/details`, `model`, and the provenance attribute are required in a saved history. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the success/failure distinction without parsing either string.
 
 Because `log_path` is within the file, moving or renaming the file preserves it. Moving a log group within the file requires updating any history that refers to it. A log group with `is_null = true` records that logging was disabled; it has no model tree. Ordinary logs need not have an `is_null` entry.
 
 ## Models and Variables
 
-The log group represents the root model. Each model has the following public entries, relative to its own group:
+The log group carries the integer attribute `log_format_version` and, for newly written logs, the string provenance attribute `systems_of_systems_version`. These attributes describe the whole log and are not repeated on child models. Legacy unversioned logs may lack both attributes.
+
+For an ordinary log, this group also represents the root model. Each model has the following public entries, relative to its own group:
 
 | Entry | Representation | Meaning |
 | --- | --- | --- |

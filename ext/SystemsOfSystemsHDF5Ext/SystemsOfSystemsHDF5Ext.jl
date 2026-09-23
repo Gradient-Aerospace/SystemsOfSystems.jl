@@ -17,6 +17,8 @@ import SystemsOfSystems.Logs: create_log, create_time_series_for_var,
     load_hdf5_log, save_log_to_hdf5,
     save_time_series_to_hdf5, load_time_series_from_hdf5
 
+include("format_versions.jl")
+
 """
     HDF5Log(fid, group, model_history_dict)
 
@@ -289,10 +291,14 @@ function record_model_description(
 end
 
 function create_log(options::HDF5LogOptions, model_description, time_dimension)
+
+    # Mark the log when it is created, before recording any model data. It is a complete
+    # storage format in its own right, whether or not history metadata is saved later.
     mkpath(dirname(options.filename))
     fid = HDF5.h5open(options.filename, "w")
     mhd = OrderedDict{String, ModelHistory}()
     log = HDF5Log(fid, storage_group(fid, options.path), mhd)
+    write_format_version(log.group, "log_format_version", log_format_version)
     logging_policy = options.logging_policy
     finalizer(close_log, log) # Close the file when this goes out of scope.
     breadcrumbs = String[]
@@ -301,6 +307,7 @@ function create_log(options::HDF5LogOptions, model_description, time_dimension)
         time_dimension, logging_policy,
     )
     return (log, mh)
+
 end
 
 function close_log(log::HDF5Log)
@@ -527,6 +534,11 @@ function load_hdf5_log(filename::AbstractString; path = "/log")
 end
 
 function load_hdf5_log(group::HDF5.Group)
+
+    # Check the layout before decoding model types or interpreting even a NullLog marker.
+    # Missing versions are accepted only for the existing legacy log representation.
+    check_format_version(group, "log_format_version", log_format_version;
+        allow_unversioned = true)
 
     # Logging disabled at simulation time is represented explicitly. A NullLog has no
     # dataset handles to retain, and this group overload leaves the caller's file open.
