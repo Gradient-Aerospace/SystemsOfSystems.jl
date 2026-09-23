@@ -6,6 +6,7 @@ module SystemsOfSystems
 
 # Running simulations
 export initialize, simulate, SimHistory, SimOptions, succeeded,
+    save_sim_history, load_sim_history,
     Schedules, Solvers, Hooks, Logs, Resources
 
 # Model descriptions
@@ -31,7 +32,7 @@ public SimulationTimes,
     normalized_scalar_error, normalized_variable_error,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    describe
+    RecordedStop, RecordedFailure, describe
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -909,12 +910,40 @@ struct EncounteredError <: AbstractFailureReason
 end
 
 """
+    RecordedStop(original_type, description, details = "")
+
+A saved record of a normal termination whose live objects are not restored. `original_type`
+is the original type's name, `description` is its human-readable description, and `details`
+contains any additional diagnostic text.
+"""
+struct RecordedStop <: AbstractStopReason
+    original_type::String
+    description::String
+    details::String
+end
+RecordedStop(original_type, description) = RecordedStop(original_type, description, "")
+
+"""
+    RecordedFailure(original_type, description, details = "")
+
+A saved record of a failure whose live objects are not restored. It retains the original
+type's name, description, and any diagnostic text while preserving `succeeded(history)`.
+"""
+struct RecordedFailure <: AbstractFailureReason
+    original_type::String
+    description::String
+    details::String
+end
+RecordedFailure(original_type, description) = RecordedFailure(original_type, description, "")
+
+"""
     describe(reason::AbstractTerminationReason)
 
 Returns a concise, human-readable description of why a simulation stopped.
 """
 describe(reason::AbstractTerminationReason) =
     string(typeof(reason))
+describe(reason::Union{RecordedStop, RecordedFailure}) = reason.description
 describe(stop::UnknownStopReason) =
     "The sim stopped for an unknown reason."
 describe(stop::ReachedEndTime) =
@@ -1040,6 +1069,73 @@ An `Interrupted` stop counts as success. Applications requiring completion can c
 `ReachedEndTime` or their expected model stop reason.
 """
 succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
+
+"""
+    save_sim_history(filename, history; history_path = "/history", log_path = nothing, save_model = false)
+    save_sim_history(parent, path, history; log_path = "/log", save_model = false)
+    save_sim_history(group, history; log_group, save_model = false)
+
+Saves a record of a simulation to HDF5, including its log, start and stop times, and
+termination information. Returns `nothing`.
+
+This function relies on the HDF5Vectors extension, so that package must be imported to save
+and load sim histories.
+
+The final model is omitted by default. With `save_model = true`, it will be saved if it is
+representable by HDF5Vectors.
+
+Histories with an HDF5 log can be saved to their existing writable file without copying
+the log. Otherwise, the destination file (if it exists) is overwritten.
+
+`history_path` sets the history metadata group in HDF5 file.
+
+`log_path` defaults to `/log` for a new file, or the log's existing group when saving to its
+own file.
+
+A `parent` HDF5 file or group and a `path` can be supplied instead, or the history `group`
+and `log_group` directly. Group methods replace the contents of the destination groups,
+preserving an existing log at its own location and leaving the rest of the file untouched.
+History and log groups must be separate, non-overlapping groups in the same file.
+Caller-supplied files stay open.
+
+See the guide's history persistence section for the file layout and termination records.
+"""
+function save_sim_history(args...; kwargs...)
+    error("Please import HDF5Vectors to use save_sim_history.")
+end
+
+"""
+    load_sim_history(filename; history_path = "/history", load_model = false)
+    load_sim_history(f::Function, filename; kwargs...)
+    load_sim_history(parent, path; load_model = false)
+    load_sim_history(group; load_model = false)
+
+Loads a saved `SimHistory`. Its log remains backed by the HDF5 file, so callers can read
+selected data without loading the entire log into memory. The caller can release the file
+with `Logs.close_log(history.log)`.
+
+The filename-based `do` form calls `f(history)`, returns its result, and closes the log
+when the function finishes, including when it throws. Any returned data that will be used
+afterward must be independent of the file, such as copied samples or computed statistics.
+
+This function relies on the HDF5Vectors extension, so that package must be imported to save
+and load sim histories.
+
+An open HDF5 history group, or a parent file/group and path, can be supplied instead. In
+that case the caller retains ownership of the file and must keep it open while using the
+history's log. The history group records the location of its log within the same file.
+
+The returned model is `nothing` unless it was saved and `load_model = true`. Simple built-in
+termination reasons are restored; reasons containing live objects and custom reasons are
+returned as `RecordedStop` or `RecordedFailure`. Times are restored with `exact_time` from
+the saved floating-point values.
+
+As with `Logs.load_hdf5_log`, files should come from trusted sources, and types used by
+saved models or log metadata must be available in the loading environment.
+"""
+function load_sim_history(args...; kwargs...)
+    error("Please import HDF5Vectors to use load_sim_history.")
+end
 
 function Base.show(io::IO, mime::MIME"text/plain", history::SimHistory)
     println(io, "Simulation History:")

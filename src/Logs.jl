@@ -539,10 +539,11 @@ export HDF5LogOptions, load_hdf5_log, save_log_to_hdf5,
     save_time_series_to_hdf5, load_time_series_from_hdf5
 
 """
-    HDF5LogOptions(; filename, logging_policy)
+    HDF5LogOptions(; filename, path = "/log", logging_policy)
     HDF5LogOptions(filename)
 
-A container for HDF5-backed log options, where `filename` is the output file.
+A container for HDF5-backed log options, where `filename` is the output file and `path`
+is the group containing the log. Starting a log overwrites the output file.
 
 `logging_policy` assigns a model logging policy to every model, by path. The default
 `AllPassLoggingPolicy` logs all variables of all models on all samples.
@@ -557,6 +558,7 @@ faster to use a `BasicLog` and call `save_log_to_hdf5` after simulation.
 """
 @kwdef struct HDF5LogOptions <: AbstractLogOptions
     filename::String
+    path::String = "/log"
     logging_policy::AbstractLoggingPolicy = AllPassLoggingPolicy()
 end
 
@@ -568,28 +570,42 @@ end
 HDF5LogOptions(filename) = HDF5LogOptions(; filename)
 
 """
-    load_hdf5_log(filename)
+    load_hdf5_log(filename; path = "/log")
+    load_hdf5_log(parent, path)
+    load_hdf5_log(group)
 
 Loads a log from an HDF5 file and returns `(log, root_model_history)`. The log owns the open
-file and should be closed with `close_log` when it is no longer needed.
+file and should be closed with `close_log` when it is no longer needed. It accepts both
+standalone log files and whole-history files written by `save_sim_history`. Older standalone
+files with log data at the root are also accepted.
+
+With an open HDF5 group, or a parent file/group and path, the caller retains ownership of
+the file and must keep it open while using the log. Closing the log does not close a
+caller-supplied file or group.
 
 Interpolators and model types are restored using Julia serialization, so files should come
 only from trusted sources. Custom interpolator types must be available in the loading
 environment. An unavailable model type produces a warning and is represented by `Missing`
 without preventing the remaining history from loading.
 """
-function load_hdf5_log(filename)
+function load_hdf5_log(args...; kwargs...)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `load_hdf5_log`.")
 end
 
 """
-    save_log_to_hdf5(filename, log)
+    save_log_to_hdf5(filename, log; path = "/log", kwargs...)
+    save_log_to_hdf5(parent, path, log; kwargs...)
+    save_log_to_hdf5(group, log; kwargs...)
 
-Saves a log to an HDF5 file in the same format used by the HDF5Log.
+Saves a log in the same format used by HDF5Log. Filename methods overwrite the destination
+file, except when the log already resides in that file. Group methods replace only the
+selected group's contents. Saving an HDF5 log to its existing group leaves it in place.
+Caller-supplied files and groups remain open. Additional keyword arguments are passed to
+HDF5Vectors when saving in-memory data.
 
 Constants that cannot be represented by HDF5Vectors are omitted with a warning.
 """
-function save_log_to_hdf5(filename, log)
+function save_log_to_hdf5(args...; kwargs...)
     error("Please import the HDF5Vectors package to use HDF5 log functionality like `save_log_to_hdf5`.")
 end
 
