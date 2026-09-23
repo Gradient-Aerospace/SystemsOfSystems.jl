@@ -88,6 +88,8 @@ The caller owns the loaded log's file and can release it with `Logs.close_log`. 
 
 ### File Layout and Models
 
+The [HDF5 file format](hdf5_format.md) documents the public entries for external readers, including model and time-series paths and sample encodings. Readers can rely on those entries while ignoring additional implementation-specific data. The abbreviated tree below also shows some Julia reconstruction entries, identified as such; it is not an exhaustive list of public keys.
+
 The default groups are `/history` for run information and `/log` for logged data. The history's `log_path` dataset identifies the log group within the same HDF5 file. Start and stop times are ordinary floating-point datasets; loading restores them with `exact_time`, so it does not preserve distinctions lost in conversion to floating point. `Logs.load_hdf5_log` can read the log independently of the history metadata.
 
 For example, a run from 0 to 1 second with a root state named `x` and a child model named `child` has the following layout. HDF5Vectors storage details are abbreviated as `...`.
@@ -104,11 +106,11 @@ history.h5
 │   │   ├── description = "The sim reached the specified end time of 1.0."
 │   │   ├── is_failure = false
 │   │   ├── details = ...          # Present for records with diagnostic text
-│   │   └── value/ ...            # Restorable termination record
-│   └── model/ ...                # Present only with save_model = true
+│   │   └── value/ ...            # Structured termination record
+│   └── model/ ...                # Optional final model value
 └── log/
     ├── type = "Nothing"
-    ├── serialized_type = ...
+    ├── serialized_type = ...     # Julia type reconstruction
     ├── constants/
     ├── names/ ...                # Names and ordering of logged variables
     ├── timeseries/

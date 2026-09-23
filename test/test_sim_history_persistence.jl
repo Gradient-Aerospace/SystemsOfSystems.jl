@@ -101,6 +101,63 @@ SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
 
 end
 
+@testset "Public HDF5 paths can be read without Julia reconstruction" begin
+
+    # Direct logging and copying an in-memory log have separate writers. Both must expose
+    # the documented model hierarchy and numeric samples to an ordinary HDF5 consumer.
+    # Custom group locations ensure readers follow log_path rather than assume /log.
+    for direct in (false, true)
+
+        filename = joinpath(mktempdir(), "public.h5")
+        options = direct ? Logs.HDF5LogOptions(; filename, path = "/samples") :
+            Logs.BasicLogOptions()
+        history = small_history(; log = options)
+        root_series = history["/"]["x"]
+        child_series = history["/child"]["y"]
+        expected_time = collect(root_series.time)
+        expected_root = collect(root_series.data)
+        expected_child = collect(child_series.data)
+        save_sim_history(filename, history; history_path = "/run", log_path = "/samples")
+        Logs.close_log(history.log)
+
+        HDF5.h5open(filename, "r+") do file
+
+            # A non-Julia reader must not need serialized types or interpolators. Removing
+            # those entries demonstrates independence; unrelated entries must be ignored.
+            root = file[read(file["run/log_path"])]
+            HDF5.delete_object(root, "serialized_type")
+            HDF5.delete_object(root["timeseries/x"], "serialized_interpolator")
+            root["additional_metadata"] = "Not a model or time series."
+            @test read(root["names/models"]) == ["child"]
+            @test read(root["names/continuous_states"]) == ["x"]
+            @test isempty(read(root["names/discrete_states"]))
+            @test isempty(read(root["names/constants"]))
+            @test read(root["models/child/names/continuous_states"]) == ["y"]
+
+            # The documented paths lead to ordinary HDF5 datasets. HDF5Vectors schema
+            # entries identify the encoding and count without deserializing Julia data.
+            series = root["timeseries/x"]
+            @test read(series["path"]) == "/x"
+            @test read(series["time_label"]) == root_series.time_dimension.label
+            @test read(series["time_units"]) == root_series.time_dimension.units
+            @test read(series["labels"]) == [d.label for d in root_series.dimensions]
+            @test read(series["units"]) == [d.units for d in root_series.dimensions]
+            @test !read(series["discrete"])
+            @test read(series["time/metadata/format_name"]) == "HDF5Vectors"
+            @test read(series["time/metadata/format_version"]) == 1
+            @test read(series["time/metadata/schema/kind"]) == "scalar"
+            @test read(series["time/metadata/schema/codec"]) == "HDF5Vectors.IdentityCodec"
+            @test read(series["time/metadata/count"]) == length(expected_time)
+            @test read(series["time/data/values"]) == expected_time
+            @test read(series["data/data/values"]) == expected_root
+            @test read(root["models/child/timeseries/y/data/data/values"]) == expected_child
+
+        end
+
+    end
+
+end
+
 @testset "Histories without logging retain their run metadata" begin
 
     # Disabling time-series logging should not prevent saving the run's status or model.

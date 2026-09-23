@@ -6,6 +6,7 @@ makedocs(;
         "Introduction" => "index.md",
         "Control System Example" => "control_system_example.md",
         "Simulation" => "simulation.md",
+        "HDF5 File Format" => "hdf5_format.md",
         "Modeling" => "modeling.md",
         "Options" => "options.md",
         "Initialization" => "initialization.md",
