@@ -29,8 +29,9 @@ slower than a `BasicLog`.
 If you're just looking to have an HDF5 file artifact, it's faster to use a BasicLog and then
 use `save_log_to_hdf5` when the simulation is over.
 
-The `group` field identifies the log's storage group, independently of whether it is at
-the default `/log` group or another group selected by the caller.
+The `group` field identifies the log's storage location, usually `/log`. The log owns this
+group handle. A non-`nothing` `fid` also gives it responsibility for closing the file;
+`fid = nothing` means the caller owns the file and must keep it open while using the log.
 
 See [`HDF5LogOptions`](@ref) for more.
 """
@@ -114,6 +115,9 @@ function create_time_series_for_var(
     discrete,
 ) where {T}
 
+    # Storage paths are relative to the log group, including for the root model, whose
+    # breadcrumbs are empty. The time series' slug remains a model path independent of
+    # where the log is placed in the HDF5 file.
     el_type = figure_out_el_type(T)
     group_path = join(
         (
@@ -150,6 +154,9 @@ function create_time_series_for_var(
     discrete,
 ) where {T}
 
+    # Storage paths are relative to the log group, including for the root model, whose
+    # breadcrumbs are empty. The time series' slug remains a model path independent of
+    # where the log is placed in the HDF5 file.
     el_type = figure_out_el_type(T)
     group_path = join(
         (
@@ -297,6 +304,10 @@ function create_log(options::HDF5LogOptions, model_description, time_dimension)
 end
 
 function close_log(log::HDF5Log)
+
+    # Always release the log's own group handle. For a log loaded from a caller-owned file,
+    # this leaves that file and the caller's original group handle open. Filename loaders
+    # also assign fid, so closing those logs closes the file and its remaining datasets.
     if isvalid(log.group)
         close(log.group)
     end
@@ -305,6 +316,7 @@ function close_log(log::HDF5Log)
         log.fid = nothing
     end
     return nothing
+
 end
 
 function load_groups(group)
@@ -490,22 +502,23 @@ function load_hdf5_log(filename::AbstractString; path = "/log")
     fid = HDF5.h5open(filename)
     try
 
-        # Older standalone logs stored the root model directly at the file root, so this is
-        # a simple backwards-compatibility check to load those.
+        # Before /log became the default, standalone files stored the root model at /.
+        # When the default group is absent, its names entry identifies that older layout.
+        # An explicitly selected non-default path is used as supplied.
         if path == "/log" && !haskey(fid, path) && haskey(fid, "names")
             path = "/"
         end
 
+        # The group loader borrows the file. Since this overload opened it, transfer
+        # ownership to the returned log, or close it immediately for a NullLog.
         log, mh = load_hdf5_log(fid, path)
-
-        # If there is no log, there's no point in keeping the HDF5 file open, so we'll close
-        # it.
         own_log_file(log, fid)
-
         return (log, mh)
 
     catch
 
+        # No log is returned on failure, so the caller has no handle with which to release
+        # the file. Close it here before propagating the loading error.
         close(fid)
         rethrow()
 
@@ -515,37 +528,39 @@ end
 
 function load_hdf5_log(group::HDF5.Group)
 
-    # If the log was a NullLog to begin with or it wasn't saved, we can just return a
-    # NullLog.
+    # Logging disabled at simulation time is represented explicitly. A NullLog has no
+    # dataset handles to retain, and this group overload leaves the caller's file open.
     if haskey(group, "is_null") && read(group["is_null"])
         return (SystemsOfSystems.Logs.NullLog(), nothing)
     end
 
-    # Recursively load the ModelHistories, storing entires in the model history dictionary
-    # by slug.
+    # Rebuild both views of the model histories: a tree for navigating submodels and a
+    # dictionary for looking up model paths. Time-series samples remain on disk.
     mhd = OrderedDict{String, ModelHistory}()
     mh = load_hdf5_model!(mhd, group, String[])
 
-    # Now an HDF5Log can store those.
+    # Open a separate handle to the same group so closing this log does not close the
+    # caller's handle. Nothing in fid means the log borrows the containing file. The
+    # finalizer releases its handle if the caller forgets to call close_log explicitly.
     log = HDF5Log(nothing, HDF5.open_group(group, "."), mhd)
-
-    # The user is required to close the log, but this is a helpful follow-up we can provide.
     finalizer(close_log, log)
 
     return (log, mh)
 
 end
 
-# TODO: A comment about why this function is necessary would be helpful. Couldn't the user
-# simply call load_hdf5_log(parent[path]) instead of load_hdf5_log(parent, path)? How does
-# this interface help anyone? Does closing the group when there's an error actually matter?
 function load_hdf5_log(parent::Union{HDF5.File, HDF5.Group}, path::AbstractString)
+
+    # This convenience overload scopes the temporary handle opened by parent[path]. The
+    # returned log retains its own group handle, so this one can be closed immediately
+    # on success or failure rather than waiting for garbage collection.
     group = parent[path]
     try
         return load_hdf5_log(group)
     finally
         close(group)
     end
+
 end
 
 function save_time_series_to_hdf5(fid, path, ts::TimeSeries; kwargs...)
@@ -575,14 +590,15 @@ end
 
 function save_mh_to_hdf5(group, mh; kwargs...)
 
-    # Note: Every path is relative to this model's group, whether the log is standalone or
-    # nested inside a whole-history file.
-
+    # Save this model's metadata in the supplied group; recursive calls receive their
+    # own child groups. Relative paths keep the same layout at any location in the file.
+    # Retain both the readable type name and the serialized type used by the Julia loader.
     group["type"] = string(mh.type)
     group["serialized_type"] = serialize_to_bytes(mh.type)
 
-    # Constants may contain unsupported values. Keep the names of successful entries so
-    # the loader can reconstruct the same ordering while omitting failed saves.
+    # Constants may contain values HDF5Vectors cannot encode. Omit those with a warning,
+    # and list only successfully saved names so the loader never looks for missing data.
+    # Model breadcrumbs supply descriptive variable paths, not HDF5 storage locations.
     constants_group = HDF5.create_group(group, "constants")
     names_group = HDF5.create_group(group, "names")
     saved_constants = String[]
@@ -603,7 +619,9 @@ function save_mh_to_hdf5(group, mh; kwargs...)
     end
     names_group["constants"] = saved_constants
 
-    # States and outputs must all be saved; a failure here is an error.
+    # States and outputs are the recorded samples, so failures to save them propagate to
+    # the caller. The name lists preserve their order and distinguish the four categories
+    # even though their time series share one storage group.
     for f in (:continuous_states, :discrete_states, :continuous_outputs, :discrete_outputs)
         names_group[string(f)] = String[
             string(vn) for vn in fieldnames(typeof(getproperty(mh, f)))
@@ -613,7 +631,8 @@ function save_mh_to_hdf5(group, mh; kwargs...)
         end
     end
 
-    # Preserve submodel order separately because HDF5 group iteration does not.
+    # Each child gets the same model-history layout. Save child names separately because
+    # iterating the HDF5 groups would not reproduce the original NamedTuple order.
     names_group["models"] = String[string(name) for name in keys(mh.models)]
     for (name, smh) in pairs(mh.models)
         child_group = HDF5.create_group(group, "models/$name")
@@ -630,6 +649,9 @@ function save_log_to_hdf5(
     path = "/log",
     kwargs...,
 )
+
+    # Opening an existing source log with mode "w" would erase it. Reuse its writable file
+    # when it is also the destination; otherwise create an output file scoped to this call.
     fid = history_file(log, filename)
     if isnothing(fid)
         HDF5.h5open(filename, "w") do output
@@ -639,6 +661,7 @@ function save_log_to_hdf5(
         save_log_to_hdf5(fid, path, log; kwargs...)
     end
     return nothing
+
 end
 
 function save_log_to_hdf5(
@@ -647,6 +670,9 @@ function save_log_to_hdf5(
     log::AbstractLog;
     kwargs...,
 )
+
+    # The path overload owns only the group handle it opens. Releasing that handle after
+    # saving must leave the caller's parent file or group available for further work.
     group = storage_group(parent, path)
     try
         save_log_to_hdf5(group, log; kwargs...)
@@ -654,6 +680,7 @@ function save_log_to_hdf5(
         close(group)
     end
     return nothing
+
 end
 
 include("sim_history.jl")

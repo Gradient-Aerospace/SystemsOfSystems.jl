@@ -912,9 +912,12 @@ end
 """
     RecordedStop(original_type, description, details = "")
 
-A saved record of a normal termination whose live objects are not restored. `original_type`
-is the original type's name, `description` is its human-readable description, and `details`
-contains any additional diagnostic text.
+A description of a normal termination saved in place of the original reason. This lets a
+history retain the reason for stopping without restoring objects such as a simulation hook.
+
+`original_type` is the original reason's type name, `description` is the text returned by
+`describe`, and `details` holds optional diagnostic text. A history with this reason is
+classified as successful by `succeeded`.
 """
 struct RecordedStop <: AbstractStopReason
     original_type::String
@@ -926,8 +929,10 @@ RecordedStop(original_type, description) = RecordedStop(original_type, descripti
 """
     RecordedFailure(original_type, description, details = "")
 
-A saved record of a failure whose live objects are not restored. It retains the original
-type's name, description, and any diagnostic text while preserving `succeeded(history)`.
+A description of a failure saved in place of the original reason. It retains the original
+reason's type name, its `describe` text, and optional diagnostics in `details`, without
+restoring objects such as an exception and its stack trace. A history with this reason
+remains a failure according to `succeeded`.
 """
 struct RecordedFailure <: AbstractFailureReason
     original_type::String
@@ -1075,30 +1080,26 @@ succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
     save_sim_history(parent, path, history; log_path = "/log", save_model = false)
     save_sim_history(group, history; log_group, save_model = false)
 
-Saves a record of a simulation to HDF5, including its log, start and stop times, and
-termination information. Returns `nothing`.
+Saves a simulation's log, start and stop times, and termination information to an HDF5
+file. Returns `nothing`. Importing HDF5Vectors enables this function.
 
-This function relies on the HDF5Vectors extension, so that package must be imported to save
-and load sim histories.
+For a filename, `history_path` selects the metadata group. The log is saved at `/log` by
+default, or kept at its existing location when it already resides in the destination file.
+`log_path` can select a different location. Saving into a live log's writable file preserves
+that file; other destination files are overwritten.
 
-The final model is omitted by default. With `save_model = true`, it will be saved if it is
-representable by HDF5Vectors.
+The final model is omitted unless `save_model = true`. A requested model must be
+representable by HDF5Vectors; an unsupported model causes the save to fail.
 
-Histories with an HDF5 log can be saved to their existing writable file without copying
-the log. Otherwise, the destination file (if it exists) is overwritten.
+For an open HDF5 file or group, `save_sim_history(parent, path, history; log_path)` selects
+the two destination groups by path. Alternatively, `save_sim_history(group, history;
+log_group)` accepts them directly. These methods replace the groups' contents, preserving
+a log already at its destination and leaving the rest of the file untouched. Both groups
+must be in the same file, and neither may contain the other. Caller-supplied handles stay
+open after saving.
 
-`history_path` sets the history metadata group in HDF5 file.
-
-`log_path` defaults to `/log` for a new file, or the log's existing group when saving to its
-own file.
-
-A `parent` HDF5 file or group and a `path` can be supplied instead, or the history `group`
-and `log_group` directly. Group methods replace the contents of the destination groups,
-preserving an existing log at its own location and leaving the rest of the file untouched.
-History and log groups must be separate, non-overlapping groups in the same file.
-Caller-supplied files stay open.
-
-See the guide's history persistence section for the file layout and termination records.
+The simulation guide gives examples of saving beside a live log, using custom groups, and
+loading termination records.
 """
 function save_sim_history(args...; kwargs...)
     error("Please import HDF5Vectors to use save_sim_history.")
@@ -1110,25 +1111,31 @@ end
     load_sim_history(parent, path; load_model = false)
     load_sim_history(group; load_model = false)
 
-Loads a saved `SimHistory`. Its log remains backed by the HDF5 file, so callers can read
-selected data without loading the entire log into memory. The caller can release the file
-with `Logs.close_log(history.log)`.
+Loads a saved `SimHistory`, keeping its logged samples backed by the HDF5 file so callers
+can read only the data they need. Importing HDF5Vectors enables this function.
 
-The filename-based `do` form calls `f(history)`, returns its result, and closes the log
-when the function finishes, including when it throws. Any returned data that will be used
-afterward must be independent of the file, such as copied samples or computed statistics.
+For a filename, `history_path` selects the metadata group, which identifies the log's
+location in the same file. The returned log owns the open file; `Logs.close_log(history.log)`
+releases it. The filename-based `do` form instead closes the log when the block finishes,
+including when it throws, and returns the block's result:
 
-This function relies on the HDF5Vectors extension, so that package must be imported to save
-and load sim histories.
+```julia
+samples = load_sim_history("history.h5") do history
+    collect(history["/vehicle"]["position"].data)
+end
+```
 
-An open HDF5 history group, or a parent file/group and path, can be supplied instead. In
-that case the caller retains ownership of the file and must keep it open while using the
-history's log. The history group records the location of its log within the same file.
+Copied samples and computed statistics remain usable after the block. Returned histories
+or time series that still depend on the file do not.
 
-The returned model is `nothing` unless it was saved and `load_model = true`. Simple built-in
-termination reasons are restored; reasons containing live objects and custom reasons are
-returned as `RecordedStop` or `RecordedFailure`. Times are restored with `exact_time` from
-the saved floating-point values.
+An open metadata group, or a parent file/group and path, can be supplied instead of a
+filename. The caller then retains ownership of the file and must keep it open while using
+the loaded log. Closing the log leaves the caller's file and group handles open.
+
+The final model is loaded only when it was saved and `load_model = true`; otherwise it is
+`nothing`. Times are restored with `exact_time` from the saved floating-point values.
+Supported built-in termination reasons retain their types; custom reasons and reasons
+containing live objects are restored as `RecordedStop` or `RecordedFailure`.
 
 As with `Logs.load_hdf5_log`, files should come from trusted sources, and types used by
 saved models or log metadata must be available in the loading environment.

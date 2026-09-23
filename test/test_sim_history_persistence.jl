@@ -8,6 +8,8 @@ using SystemsOfSystems: Logs, Solvers, Hooks, exact_time, describe,
 import HDF5
 import HDF5Vectors
 
+# Use both a root model and a child to exercise relative storage paths. Fractional start
+# and stop times also expose the intended conversion through Float64 in the saved record.
 function small_history(; log = Logs.BasicLogOptions())
     return simulate(
         nothing;
@@ -28,6 +30,8 @@ function with_stop(history, stop)
     return SimHistory(history.t_start, history.t_stop, history.log, history.model, stop)
 end
 
+# These reasons deliberately retain a running task, which cannot be reconstructed as part
+# of a saved run. Their round trips should use descriptions without serializing the task.
 struct ResourceHook <: Hooks.AbstractHook
     task::Task
 end
@@ -62,6 +66,8 @@ SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
         @test !haskey(fid, "history/model")
     end
 
+    # Loading restores the recorded times and model hierarchy, but leaves sample vectors
+    # on disk. Asking for an unsaved model should simply return nothing.
     restored = load_sim_history(filename; load_model = true)
     @test restored.t_start == exact_time(Float64(history.t_start))
     @test restored.t_stop == exact_time(Float64(history.t_stop))
@@ -72,8 +78,8 @@ SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
     @test restored["/child"]["y"].data[:] == history["/child"]["y"].data
     Logs.close_log(restored.log)
 
-    # Saving and loading the model are independent choices. The default loader must not
-    # require the saved model, even when its entry cannot be decoded.
+    # Saving the model does not make loading it mandatory. Check both choices against the
+    # same file so opting out cannot accidentally depend on the model entry being absent.
     save_sim_history(filename, history; save_model = true)
     restored = load_sim_history(filename)
     @test isnothing(restored.model)
@@ -81,6 +87,9 @@ SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
     restored = load_sim_history(filename; load_model = true)
     @test restored.model == history.model
     Logs.close_log(restored.log)
+
+    # Replace the model with an invalid encoding to prove the default loader never decodes
+    # it. Explicitly requesting that model should still report the loading error.
     HDF5.h5open(filename, "r+") do fid
         HDF5.delete_object(fid, "history/model")
         fid["history/model"] = "invalid model encoding"
@@ -163,6 +172,9 @@ end
     @test !succeeded(restored)
     @test occursin("Expected saved failure.", restored.stop.details)
     @test occursin("test_sim_history_persistence.jl", restored.stop.details)
+
+    # Saving a restored failure must retain the original exception's name and diagnostics,
+    # both in its Julia record and in the datasets available to other HDF5 readers.
     copied = joinpath(mktempdir(), "copied.h5")
     save_sim_history(copied, restored)
     again = load_sim_history(copied)
@@ -179,14 +191,17 @@ end
 
 @testset "Existing HDF5 logs can become history files without rewriting the log" begin
 
-    # A simulation writing directly to disk should be able to save its history to that
-    # same file. Saving metadata must leave existing dataset handles usable.
+    # Direct logging creates /log before any history metadata exists. Root-model samples
+    # must be inside that group too, so copying the group includes the complete log.
     filename = joinpath(mktempdir(), "live.h5")
     history = small_history(; log = Logs.HDF5LogOptions(filename))
     @test HDF5.name(history.log.group) == "/log"
     @test !haskey(history.log.fid, "history")
     @test haskey(history.log.group, "timeseries/x")
     @test !haskey(history.log.fid, "timeseries")
+
+    # Saving elsewhere should copy both samples and additional metadata without changing
+    # the source log. Include an attribute to cover metadata outside the child datasets.
     expected = history["/child"]["y"].data[:]
     history.log.group["extra_log_metadata"] = "Preserved when saving history."
     HDF5.attributes(history.log.group)["source"] = "Direct simulation"
@@ -197,6 +212,8 @@ end
     @test read(HDF5.attributes(restored.log.group)["source"]) == "Direct simulation"
     Logs.close_log(restored.log)
 
+    # Saving to the original file adds metadata beside the existing log. A second save
+    # replaces that metadata while keeping the original sample handles usable.
     save_sim_history(filename, history; save_model = true)
     @test HDF5.name(history.log.group) == "/log"
     @test read(history.log.group["extra_log_metadata"]) == "Preserved when saving history."
@@ -205,6 +222,8 @@ end
     @test history["/child"]["y"].data[:] == expected
     Logs.close_log(history.log)
 
+    # The second save omitted the model, so the earlier model entry must be gone. This
+    # loaded log is read-only and cannot be used to save back into its own file.
     restored = load_sim_history(filename; load_model = true)
     @test isnothing(restored.model)
     @test restored["/child"]["y"].data[:] == expected
@@ -234,6 +253,8 @@ end
         @test read(hg["log_path"]) == "/runs/two/samples"
         @test read(fid["runs/one/history/log_path"]) == "/runs/one/log"
 
+        # Loading through a caller's group borrows the file. Closing the returned log must
+        # leave all of the caller's handles valid for reading and writing the other runs.
         loaded = load_sim_history(hg; load_model = true)
         @test loaded["/child"]["y"].data[:] == history["/child"]["y"].data
         Logs.close_log(loaded.log)
@@ -256,6 +277,8 @@ end
         save_sim_history(fid, "/quiet/history", quiet; log_path = "/quiet/log")
         @test load_sim_history(fid, "/quiet/history").log isa Logs.NullLog
         @test isopen(fid)
+
+        # Loading just the log follows the same ownership rule as loading a whole history.
         log, root = Logs.load_hdf5_log(lg)
         @test root["x"].data[:] == history["/"]["x"].data
         Logs.close_log(log)
