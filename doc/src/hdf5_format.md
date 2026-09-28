@@ -51,9 +51,12 @@ The following entries are relative to the history group:
 | `stop/is_failure` | Scalar Boolean dataset | Whether the run terminated with a failure reason. A normal early stop is not a failure. |
 | `stop/details` | Optional scalar string dataset | Additional diagnostic text, such as an exception and stack trace. Absence means no additional text was saved. |
 | `stop/value/` | HDF5Vectors group | Structured saved termination reason. Its schema describes the recorded fields; it may represent a descriptive record rather than the original reason. |
+| `cleanup_errors/count` | Optional scalar integer dataset | Number of cleanup failures, in close order. Absence of the group in older files means zero. |
+| `cleanup_errors/<n>/context` | Scalar string dataset | Hook or resource that failed to close, with entries numbered from `1`. |
+| `cleanup_errors/<n>/details` | Scalar string dataset | Readable exception and stack trace text. |
 | `model/` | Optional HDF5Vectors group | One final model value, present when saved with `save_model = true`. Its schema and portability depend on the application's model type. |
 
-All entries except `stop/details`, `model`, and the provenance dataset are required in a saved history. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the success/failure distinction without parsing either string.
+All entries except `stop/details`, `cleanup_errors`, `model`, and the provenance dataset are required in a saved history. New files include `cleanup_errors/count`, even when it is zero. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the primary success/failure distinction without parsing either string; a nonzero cleanup count separately indicates failed teardown.
 
 The Julia history loader restores known built-in termination reasons from their field schemas without deserializing saved schema objects. Descriptive reasons are reconstructed from the readable `stop` datasets. For an unfamiliar stored reason, the loader first tries the ordinary HDF5Vectors reader; if that fails, it warns and uses the readable record, preserving the original type name, description, diagnostics, and failure classification. Malformed fields in a recognized built-in reason remain an error. This recovery applies only to termination reasons, not to log or optional model loading.
 

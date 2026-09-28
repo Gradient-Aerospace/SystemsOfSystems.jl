@@ -145,6 +145,39 @@ function load_stop(group)
 
 end
 
+cleanup_details(error::SystemsOfSystems.CleanupError) =
+    sprint(showerror, error.exception, error.trace)
+cleanup_details(error::SystemsOfSystems.RecordedCleanupError) = error.details
+
+function save_cleanup_errors(group, errors)
+    group["count"] = length(errors)
+    for (index, error) in enumerate(errors)
+        entry = HDF5.create_group(group, string(index))
+        try
+            entry["context"] = error.context
+            entry["details"] = cleanup_details(error)
+        finally
+            close(entry)
+        end
+    end
+    return nothing
+end
+
+function load_cleanup_errors(group)
+    errors = SystemsOfSystems.AbstractCleanupError[]
+    for index in 1:read(group["count"])
+        entry = group[string(index)]
+        try
+            push!(errors, SystemsOfSystems.RecordedCleanupError(
+                read(entry["context"]), read(entry["details"]),
+            ))
+        finally
+            close(entry)
+        end
+    end
+    return errors
+end
+
 # Saving replaces the contents of a destination group, including optional fields from an
 # earlier save. Keep the group itself open so caller-owned handles remain usable.
 function clear_group(group)
@@ -216,6 +249,15 @@ function save_history_metadata(group, history, log_path; save_model)
         record_stop(stop_group, history.stop)
     finally
         close(stop_group)
+    end
+
+    # Cleanup failures are readable text because live exceptions and traces cannot be
+    # reconstructed from a saved run. Older histories have no cleanup_errors group.
+    cleanup_group = HDF5.create_group(group, "cleanup_errors")
+    try
+        save_cleanup_errors(cleanup_group, history.cleanup_errors)
+    finally
+        close(cleanup_group)
     end
 
     # Models can hold resources that are unsuitable for persistence, so saving one is
@@ -417,6 +459,9 @@ function load_sim_history(group::HDF5.Group; load_model = false)
     t_start = SystemsOfSystems.exact_time(read(group["t_start"]))
     t_stop = SystemsOfSystems.exact_time(read(group["t_stop"]))
     stop = load_stop(group["stop"])
+    cleanup_errors = haskey(group, "cleanup_errors") ?
+        load_cleanup_errors(group["cleanup_errors"]) :
+        SystemsOfSystems.AbstractCleanupError[]
 
     # Leave the model entry unread unless requested. This lets callers inspect results
     # without requiring the saved model's types and resources to be reconstructible.
@@ -429,7 +474,7 @@ function load_sim_history(group::HDF5.Group; load_model = false)
     # history tree but leaves samples backed by HDF5, so the caller's file must stay open.
     log_path = read(group["log_path"])
     log, _ = load_hdf5_log(HDF5.file(group), log_path)
-    return SystemsOfSystems.SimHistory(t_start, t_stop, log, model, stop)
+    return SystemsOfSystems.SimHistory(t_start, t_stop, log, model, stop, cleanup_errors)
 
 end
 

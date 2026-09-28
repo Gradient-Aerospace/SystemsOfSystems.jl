@@ -8,7 +8,7 @@ SystemsOfSystems.simulate
 
 ## Simulation Results
 
-`simulate` returns one [`SimHistory`](@ref). It contains the requested start time, the last completed simulation time, the final model, the log, and the reason the simulation stopped.
+`simulate` returns one [`SimHistory`](@ref). It contains the requested start time, the last completed simulation time, the final model, the log, the reason the simulation stopped, and any failures while closing hooks or resources.
 
 ```julia
 history = simulate(...)
@@ -25,7 +25,7 @@ Julia's property destructuring is convenient when only part of the result is nee
 (; t_stop, model) = simulate(...)
 ```
 
-[`succeeded`](@ref) reports whether the simulation ended normally. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. Applications requiring completion can check for `ReachedEndTime` or their expected model stop reason.
+[`succeeded`](@ref) reports whether the simulation ended normally. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. Cleanup failures are independent: `history.cleanup_errors` lists them in close order, with the hook or resource in `context` and the original exception and trace in `exception` and `trace`. Applications requiring finalized outputs can check `isempty(history.cleanup_errors)` in addition to `succeeded(history)`. Applications requiring completion can check for `ReachedEndTime` or their expected model stop reason.
 
 ```julia
 if !succeeded(history)
@@ -108,6 +108,8 @@ history.h5
 │   │   ├── is_failure = false
 │   │   ├── details = ...          # Present for records with diagnostic text
 │   │   └── value/ ...            # Structured termination record
+│   ├── cleanup_errors/
+│   │   └── count = 0             # Number of failed hook or resource closes
 │   └── model/ ...                # Optional final model value
 └── log/
     ├── log_format_version = 1

@@ -32,7 +32,8 @@ public SimulationTimes,
     normalized_scalar_error, normalized_variable_error,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    RecordedStop, RecordedFailure, describe
+    RecordedStop, RecordedFailure, AbstractCleanupError, CleanupError,
+    RecordedCleanupError, describe
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -656,34 +657,45 @@ end
 @kwdef struct ResourceManager
     descriptions::Vector{Resources.AbstractResource} = Resources.AbstractResource[]
     payloads::Vector{Any} = Any[]
+    contexts::Vector{String} = String[]
 end
 function add_resource!(
     manager::ResourceManager,
     description::Resources.AbstractResource,
     payload,
+    context::String = string(description),
 )
     push!(manager.descriptions, description)
     push!(manager.payloads, payload)
+    push!(manager.contexts, context)
     return nothing
 end
-function try_to_close_resource(resource, payload)
-        try
-            Resources.close_resource(resource, payload)
-        catch err
-            trace = catch_backtrace()
-            @error(
-                "Failed to close resource = $resource. Continuing...",
-                exception = (err, trace),
-            )
-        end
+function try_to_close_resource(resource, payload, context = string(resource))
+    try
+        Resources.close_resource(resource, payload)
+        return nothing
+    catch err
+        trace = catch_backtrace()
+        @error(
+            "Failed to close resource = $context. Continuing...",
+            exception = (err, trace),
+        )
+        return CleanupError("resource $context", err, stacktrace(trace))
+    end
 end
 function close_resources(manager::ResourceManager)
+
     # We close in the reverse order in which we opened. That's probably irrelevant, but it
     # may be useful in some situations.
-    for (desc, payload) in Iterators.reverse(zip(manager.descriptions, manager.payloads))
-        try_to_close_resource(desc, payload)
+    errors = AbstractCleanupError[]
+    for (desc, payload, context) in Iterators.reverse(zip(
+        manager.descriptions, manager.payloads, manager.contexts,
+    ))
+        failure = try_to_close_resource(desc, payload, context)
+        isnothing(failure) || push!(errors, failure)
     end
-    return nothing
+    return errors
+
 end
 
 function create_typed_model_description!(
@@ -695,9 +707,9 @@ function create_typed_model_description!(
     # Create the resources one by one, recording a function to close each if something goes
     # wrong.
     payloads = Any[]
-    for resource in desc.resources
+    for (name, resource) in pairs(desc.resources)
         payload = Resources.open_resource(resource, ResourceInputs(; outdir, model_path))
-        add_resource!(manager, resource, payload)
+        add_resource!(manager, resource, payload, "$model_path/$name")
         push!(payloads, payload)
     end
 
@@ -962,6 +974,33 @@ describe(stop::Interrupted) =
 describe(stop::EncounteredError) =
     "The sim experienced an error."
 
+"""
+A failure while closing a hook or resource. `context` identifies what was being closed.
+"""
+abstract type AbstractCleanupError end
+
+"""
+    CleanupError(context, exception, trace)
+
+A cleanup failure from this process, retaining the thrown value and stack trace.
+"""
+struct CleanupError <: AbstractCleanupError
+    context::String
+    exception::Any
+    trace::Any
+end
+
+"""
+    RecordedCleanupError(context, details)
+
+A cleanup failure loaded from a saved history. `details` contains readable exception and
+stack trace text; the original exception object is not restored.
+"""
+struct RecordedCleanupError <: AbstractCleanupError
+    context::String
+    details::String
+end
+
 ##############
 # SimOptions #
 ##############
@@ -1048,6 +1087,7 @@ A container for simulation results, including fields for:
 * `log`: The log containing the time series for each variable of each model
 * `model`: The final model constructed in the sim
 * `stop`: The normal stop or failure reason that ended the simulation
+* `cleanup_errors`: Failures while closing hooks or resources, in close order
 
 This type acts like a log itself, so for instance these do the same thing:
 
@@ -1064,14 +1104,19 @@ struct SimHistory{M}
     log::Logs.AbstractLog
     model::M
     stop::AbstractTerminationReason
+    cleanup_errors::Vector{AbstractCleanupError}
 end
+SimHistory(t_start, t_stop, log, model, stop) =
+    SimHistory(t_start, t_stop, log, model, stop, AbstractCleanupError[])
 
 """
     succeeded(h::SimHistory)
 
 Returns true if the simulation ended without an unexpected error or numerical failure.
 An `Interrupted` stop counts as success. Applications requiring completion can check for
-`ReachedEndTime` or their expected model stop reason.
+`ReachedEndTime` or their expected model stop reason. Cleanup failures do not affect this
+result; applications requiring finalized resources can also check
+`isempty(h.cleanup_errors)`.
 """
 succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
 
@@ -1080,8 +1125,9 @@ succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
     save_sim_history(parent, path, history; log_path = "log", save_model = false)
     save_sim_history(group, history; log_group, save_model = false)
 
-Saves a simulation's log, start and stop times, and termination information to an HDF5
-file. Returns `nothing`. Importing HDF5Vectors enables this function.
+Saves a simulation's log, start and stop times, termination information, and readable
+cleanup failures to an HDF5 file. Returns `nothing`. Importing HDF5Vectors enables this
+function.
 
 For a filename, `history_path` selects the metadata group. The log is saved at `/log` by
 default, or kept at its existing location when it already resides in the destination file.
@@ -1138,7 +1184,8 @@ The final model is loaded only when it was saved and `load_model = true`; otherw
 Supported built-in termination reasons retain their types; custom reasons and reasons
 containing live objects are restored as `RecordedStop` or `RecordedFailure`. If an unfamiliar
 termination representation cannot be loaded, a warning is emitted and its readable record
-is used instead.
+is used instead. Cleanup failures load as `RecordedCleanupError` values with context and
+diagnostic text; original exception objects and stack traces are not restored.
 
 Unsupported or malformed format versions, and a missing history version, produce an
 `ArgumentError`. The HDF5 format guide lists supported history and log versions and the
@@ -1653,14 +1700,20 @@ end
 # Hooks may open resources, so we want to make sure we can always call the close function
 # for them.
 function close_hooks(hooks, t_end, final_model)
-    for hook in Iterators.reverse(hooks)
+    errors = AbstractCleanupError[]
+    for (offset, hook) in enumerate(Iterators.reverse(hooks))
         try
             Hooks.close_hook!(hook, t_end, final_model)
         catch err
             trace = catch_backtrace()
             @error "Failed to close hook = $hook. Continuing..." exception = (err, trace)
+            index = length(hooks) - offset + 1
+            push!(errors, CleanupError(
+                "hook $index ($(typeof(hook)))", err, stacktrace(trace),
+            ))
         end
     end
+    return errors
 end
 
 function validate_requested_times(t)
@@ -1864,6 +1917,7 @@ end
 # Produces the final model, closes the open resources, and wraps up the results.
 function tear_down(runtime, loop_outputs)
     final_model = nothing
+    cleanup_errors = AbstractCleanupError[]
     try
         final_model = model(loop_outputs.msd)
         return SimHistory(
@@ -1872,10 +1926,12 @@ function tear_down(runtime, loop_outputs)
             runtime.log,
             final_model,
             loop_outputs.stop,
+            cleanup_errors,
         )
     finally
-        close_hooks(runtime.hooks, loop_outputs.t_completed, final_model)
-        close_resources(runtime.manager)
+        append!(cleanup_errors,
+            close_hooks(runtime.hooks, loop_outputs.t_completed, final_model))
+        append!(cleanup_errors, close_resources(runtime.manager))
     end
 end
 
@@ -1980,7 +2036,7 @@ end
     simulate(user_data; t, init_fcn, rates_fcn, updates_fcn, seed, options)
 
 Runs a simulation, returning a `SimHistory` containing its log, start and stop times, final
-model, and termination reason.
+model, termination reason, and any hook or resource cleanup failures.
 
 * `user_data`: Can be anything used by the `init_fcn`
 * `t`: A collection of strictly increasing, finite times. The sim will step to exactly each

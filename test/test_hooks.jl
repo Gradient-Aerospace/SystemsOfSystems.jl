@@ -25,6 +25,14 @@ struct CleanupHook <: Hooks.AbstractHook
     close_order::Vector{Symbol}
     fail::Bool
 end
+struct CleanupHookOptions <: Hooks.AbstractHookOptions
+    name::Symbol
+    close_order::Vector{Symbol}
+    fail::Bool
+end
+Hooks.create_hook(options::CleanupHookOptions, t, model) =
+    CleanupHook(options.name, options.close_order, options.fail)
+Hooks.update_hook!(hook::CleanupHook, t, model) = Hooks.HookOutputs()
 function Hooks.create_hook(options::StorageHookOptions, t, model)
     push!(options.t, float(first(t)))
     push!(options.x, model.x)
@@ -129,7 +137,44 @@ end
         CleanupHook(:third, close_order, false),
     ]
 
-    @test_logs (:error,) SystemsOfSystems.close_hooks(hooks, 0, nothing)
+    errors = @test_logs (:error,) SystemsOfSystems.close_hooks(hooks, 0, nothing)
+    @test close_order == [:third, :second, :first]
+    @test length(errors) == 1
+    @test errors[1] isa SystemsOfSystems.CleanupError
+    @test occursin("hook 2", errors[1].context)
+    @test occursin("Expected close failure", sprint(showerror, errors[1].exception))
+
+end
+
+@testset "simulation returns hook cleanup failures independently of its stop" begin
+
+    close_order = Symbol[]
+    options = SimOptions(; hooks = Hooks.AbstractHookOptions[
+        CleanupHookOptions(:first, close_order, false),
+        CleanupHookOptions(:second, close_order, true),
+        CleanupHookOptions(:third, close_order, false),
+    ])
+    run(updates_fcn) = simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(; continuous_states = (; x = 0.)),
+        rates_fcn = (t, model) -> RatesOutput(; rates = (; x = 1.)),
+        updates_fcn,
+        options,
+    )
+
+    completed = @test_logs (:error,) run((args...) -> nothing)
+    @test completed.stop isa SystemsOfSystems.ReachedEndTime
+    @test succeeded(completed)
+    @test length(completed.cleanup_errors) == 1
+    @test occursin("hook 2", only(completed.cleanup_errors).context)
+    @test close_order == [:third, :second, :first]
+
+    empty!(close_order)
+    failed = @test_logs (:error,) (:error,) run((args...) -> error("Model failed"))
+    @test failed.stop isa SystemsOfSystems.EncounteredError
+    @test !succeeded(failed)
+    @test length(failed.cleanup_errors) == 1
     @test close_order == [:third, :second, :first]
 
 end
