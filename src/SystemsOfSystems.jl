@@ -33,7 +33,7 @@ public SimulationTimes,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
     RecordedStop, RecordedFailure, AbstractCleanupError, CleanupError,
-    RecordedCleanupError, describe
+    RecordedCleanupError, describe, record_stop, record_cleanup_error
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -1056,6 +1056,67 @@ include("Logs.jl")
 include("SimulationLogging.jl")
 include("ContinuousProblems.jl")
 include("Solvers.jl")
+
+# The writer and reader share this list so each field-stored reason has a matching
+# reader. These built-ins retain useful fields without restoring live Julia resources.
+const field_stored_stop_types = (
+    UnknownStopReason, ReachedEndTime, ModelRequestedStop, Interrupted,
+    Solvers.SolverFailedToConverge, Solvers.SolverStepSizeUnderflow,
+)
+
+"""
+    record_stop(stop::AbstractTerminationReason)
+
+Return a portable termination record without retaining live hooks or exception objects.
+Simple built-in reasons (including `Interrupted` and solver failures) retain their type
+and fields. Other reasons become `RecordedStop` or `RecordedFailure`, preserving their
+original type name, description, and failure classification. `EncounteredError` also
+retains readable exception and stack-trace diagnostics. Existing records are unchanged.
+
+This conversion performs no file I/O and does not require HDF5. Custom reasons use the
+recorded fallback; their arbitrary fields are not preserved.
+"""
+# Other reasons may contain resources that cannot be restored outside the original run.
+# Their type name and description still explain the termination. A separate failure method
+# preserves the classification used by succeeded(history), without inspecting those fields.
+function record_stop(stop::AbstractTerminationReason)
+    return RecordedStop(string(typeof(stop)), describe(stop))
+end
+
+function record_stop(stop::AbstractFailureReason)
+    return RecordedFailure(string(typeof(stop)), describe(stop))
+end
+
+# An exception's description alone omits the information needed to diagnose it. Rendering
+# the exception and stack trace preserves those diagnostics without saving exception
+# payloads or compiler objects that may be meaningful only in the originating process.
+function record_stop(stop::EncounteredError)
+    return RecordedFailure(
+        string(typeof(stop)), describe(stop),
+        sprint(showerror, stop.exception, stop.trace),
+    )
+end
+
+record_stop(stop::Union{field_stored_stop_types...}) = stop
+
+# A loaded history may be saved again. Keep the original reason's identity and diagnostics
+# rather than replacing them with the type name of its descriptive record.
+record_stop(stop::Union{RecordedStop, RecordedFailure}) = stop
+
+"""
+    record_cleanup_error(error::AbstractCleanupError)
+
+Return a `RecordedCleanupError` containing the cleanup context and readable exception
+and stack-trace diagnostics, without retaining the exception or trace objects. An existing
+`RecordedCleanupError` is returned unchanged. No file I/O or HDF5 dependency is required.
+"""
+function record_cleanup_error(error::CleanupError)
+    return RecordedCleanupError(
+        error.context, sprint(showerror, error.exception, error.trace),
+    )
+end
+
+record_cleanup_error(error::RecordedCleanupError) = error
 
 """
 A container for the options supplied to `simulate`, with fields for:

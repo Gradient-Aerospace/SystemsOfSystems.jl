@@ -26,62 +26,13 @@ function write_stop(group, stop; original_type = string(typeof(stop)), details =
 
 end
 
-# The writer and reader share this list so each field-stored reason has a matching
-# reader. These built-ins retain useful fields without restoring live Julia resources.
-const field_stored_stop_types = (
-    SystemsOfSystems.UnknownStopReason,
-    SystemsOfSystems.ReachedEndTime,
-    SystemsOfSystems.ModelRequestedStop,
-    SystemsOfSystems.Interrupted,
-    SystemsOfSystems.Solvers.SolverFailedToConverge,
-    SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
-)
-
-function record_stop(group, stop::Union{field_stored_stop_types...})
-    return write_stop(group, stop)
-end
-
-# Other reasons may contain resources that cannot be restored outside the original run.
-# Their type name and description still explain the termination. A separate failure method
-# preserves the classification used by succeeded(history), without inspecting those fields.
+# Conversion is shared with callers that retain outcomes outside HDF5 histories.
 function record_stop(group, stop::SystemsOfSystems.AbstractTerminationReason)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedStop(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-        )
-    )
-end
-
-function record_stop(group, stop::SystemsOfSystems.AbstractFailureReason)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedFailure(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-        )
-    )
-end
-
-# An exception's description alone omits the information needed to diagnose it. Rendering
-# the exception and stack trace preserves those diagnostics without saving exception
-# payloads or compiler objects that may be meaningful only in the originating process.
-function record_stop(group, stop::SystemsOfSystems.EncounteredError)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedFailure(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-            sprint(showerror, stop.exception, stop.trace),
-        )
-    )
-end
-
-# A loaded history may be saved again. Keep the original reason's identity and diagnostics
-# rather than replacing them with the type name of its descriptive record.
-function record_stop(
-    group,
-    stop::Union{SystemsOfSystems.RecordedStop, SystemsOfSystems.RecordedFailure}
-)
-    return write_stop(group, stop; stop.original_type, stop.details)
+    record = SystemsOfSystems.record_stop(stop)
+    if record isa Union{SystemsOfSystems.RecordedStop, SystemsOfSystems.RecordedFailure}
+        return write_stop(group, record; record.original_type, record.details)
+    end
+    return write_stop(group, record)
 end
 
 function load_stop_record(group)
@@ -101,7 +52,7 @@ function load_stop(group)
     value_group = group["value"]
     stored_type = read(value_group["metadata/logical_type"])
     known_types = (
-        field_stored_stop_types...,
+        SystemsOfSystems.field_stored_stop_types...,
         SystemsOfSystems.RecordedStop,
         SystemsOfSystems.RecordedFailure,
     )
@@ -145,17 +96,14 @@ function load_stop(group)
 
 end
 
-cleanup_details(error::SystemsOfSystems.CleanupError) =
-    sprint(showerror, error.exception, error.trace)
-cleanup_details(error::SystemsOfSystems.RecordedCleanupError) = error.details
-
 function save_cleanup_errors(group, errors)
     group["count"] = length(errors)
     for (index, error) in enumerate(errors)
+        record = SystemsOfSystems.record_cleanup_error(error)
         entry = HDF5.create_group(group, string(index))
         try
-            entry["context"] = error.context
-            entry["details"] = cleanup_details(error)
+            entry["context"] = record.context
+            entry["details"] = record.details
         finally
             close(entry)
         end

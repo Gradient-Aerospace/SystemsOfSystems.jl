@@ -33,7 +33,22 @@ if !succeeded(history)
 end
 ```
 
+Outcomes can also be retained without the history or an HDF5 dependency:
+
+```julia
+stop = SystemsOfSystems.record_stop(history.stop)
+cleanup_errors = SystemsOfSystems.record_cleanup_error.(history.cleanup_errors)
+```
+
+Simple built-in reasons retain their fields and types, so `stop isa SystemsOfSystems.Interrupted`
+still identifies interruption. Reasons involving live hooks, exceptions, or custom payloads
+become descriptive records that preserve the failure classification. Cleanup records retain
+context and readable diagnostics. These conversions do not change `succeeded` or perform I/O;
+the HDF5 writer uses the same conversions.
+
 ```@docs
+SystemsOfSystems.record_stop
+SystemsOfSystems.record_cleanup_error
 SystemsOfSystems.SimHistory
 SystemsOfSystems.succeeded
 ```
