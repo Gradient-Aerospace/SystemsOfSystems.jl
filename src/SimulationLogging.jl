@@ -68,12 +68,27 @@ function log_continuous_states!(t_f, mh_xc, msd_xc)
     end
 end
 
-function log_continuous_outputs!(t_f, mh_yc, ro_yc)
-    for fn in fieldnames(typeof(mh_yc))
-        if hasfield(typeof(ro_yc), fn)
-            push!(mh_yc[fn], t_f, ro_yc[fn])
+# As with child-model traversal, emit direct field accesses so large heterogeneous output
+# tuples do not get boxed at a runtime Symbol lookup or callback boundary. Generate only
+# the routing; TimeSeries.push! still owns timestamp, missing-value, and storage behavior.
+@generated function log_output_fields!(t_f, mh_y::HT, outputs::OT) where {HT, OT}
+
+    statements = map(fieldnames(HT)) do fn
+        if hasfield(OT, fn)
+            field = QuoteNode(fn)
+            return :(push!(mh_y[$field], t_f, outputs[$field]))
         end
+        return nothing
     end
+    return quote
+        $(statements...)
+        nothing
+    end
+
+end
+
+function log_continuous_outputs!(t_f, mh_yc, ro_yc)
+    return log_output_fields!(t_f, mh_yc, ro_yc)
 end
 
 function log_continuous_state_model! end
@@ -290,11 +305,7 @@ function log_continuous_state_updates!(t_f, mh_xc, uo_updates, prior_xc)
 end
 
 function log_discrete_outputs!(t_f, mh_yd, uo_outputs)
-    for fn in fieldnames(typeof(mh_yd))
-        if hasfield(typeof(uo_outputs), fn)
-            push!(mh_yd[fn], t_f, uo_outputs[fn])
-        end
-    end
+    return log_output_fields!(t_f, mh_yd, uo_outputs)
 end
 
 function log_discrete_event_model! end
