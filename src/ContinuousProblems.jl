@@ -136,7 +136,6 @@ end
 
 Returns a copy of `state` whose continuous states have been advanced by `gain * rates`.
 Everything that is not continuous state is preserved exactly.
-Subtrees with no derivative entries are returned unchanged, sharing their original identity.
 
 This operation is useful for algorithms or sparse tableaus that need only one derivative.
 The tuple overload performs a complete linear combination in one hierarchical traversal.
@@ -259,13 +258,10 @@ end
 
 Returns a copy of `state` advanced by the linear combination of `rates_at_stages` described
 by `gains`.
-Subtrees with no derivative entries at any stage are returned unchanged, sharing their
-original identity.
 
-The stage tuple is expected to have a stable derivative structure: if the first stage omits
-a continuous state, later stages must omit it as well. This is the same modeling contract as
-the original solvers, made explicit here so it can eventually be validated during solver
-initialization rather than repeatedly inside the numerical loop.
+An empty stage tuple leaves `state` unchanged. Otherwise, all stages must have the same
+derivative structure: continuous states and submodels omitted from the first stage must
+also be omitted from every later stage.
 """
 function propagate(
     state::ModelStateDescription,
@@ -273,10 +269,13 @@ function propagate(
     rates_at_stages::Tuple,
 )
 
-    # Check every stage so later-stage submodel structure is not assumed identical.
-    # Leave the original error behavior for an empty stage tuple in place.
-    if !isempty(rates_at_stages) &&
-        all(rates -> isempty(rates.rates) && isempty(rates.models), rates_at_stages)
+    if isempty(rates_at_stages)
+        return state
+    end
+
+    # Every stage has the same derivative structure, so checking the first is sufficient.
+    first_rates = first(rates_at_stages)
+    if isempty(first_rates.rates) && isempty(first_rates.models)
         return state
     end
 
