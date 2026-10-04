@@ -68,9 +68,10 @@ function log_continuous_states!(t_f, mh_xc, msd_xc)
     end
 end
 
-# As with child-model traversal, emit direct field accesses so large heterogeneous output
-# tuples do not get boxed at a runtime Symbol lookup or callback boundary. Generate only
-# the routing; TimeSeries.push! still owns timestamp, missing-value, and storage behavior.
+# Runtime Symbol indexing can cause boxing when outputs have different types.
+# Generate calls with literal field names so the compiler can specialize each
+# push! call. The existing push! methods handle timestamps, missing values,
+# and storage.
 @generated function log_output_fields!(t_f, mh_y::HT, outputs::OT) where {HT, OT}
 
     statements = map(fieldnames(HT)) do fn
