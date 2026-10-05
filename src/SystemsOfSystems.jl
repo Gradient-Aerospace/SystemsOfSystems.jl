@@ -33,7 +33,7 @@ public SimulationTimes,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
     RecordedStop, RecordedFailure, AbstractCleanupError, CleanupError,
-    RecordedCleanupError, describe
+    RecordedCleanupError
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -855,6 +855,13 @@ end
 # Stop Reasons #
 ################
 
+# TODO: The stop reasons could move to a module in a file.
+
+export finished, failed, interrupted, describe, details
+export export_termination_reason, import_termination_reason
+
+# Abstract types
+
 """
 The common supertype for every reason a simulation ceased running.
 
@@ -875,9 +882,55 @@ A condition that prevented the simulation from producing another valid accepted 
 abstract type AbstractFailureReason <: AbstractTerminationReason end
 
 """
+Indicates that the simulation was interrupted, such as by a sigint resulting from ctrl+c.
+"""
+abstract type AbstractInterruption <:  AbstractTerminationReason end
+
+# Termination reason interface
+
+"""
+    finished(stop::AbstractTerminationReason)
+
+Returns true if the simulation propagated to a nominal end state, like reaching the
+specified end time or to a model-requested termination.
+"""
+finished(stop::AbstractTerminationReason) = stop isa AbstractStopReason
+
+"""
+    failed(stop::AbstractTerminationReason)
+
+Returns true if the simulation failed to propagate, such as experiencing a numerical
+failure or exception.
+"""
+failed(stop::AbstractTerminationReason) = stop isa AbstractFailureReason
+
+"""
+Returns true if the simulation was interrupted, such as a sigint, in which case the
+simulation did not continue to a nominal conclusion but also did not fail.
+"""
+interrupted(stop::AbstractTerminationReason) = stop isa AbstractInterruption
+
+"""
+    describe(reason::AbstractTerminationReason)
+
+Returns a concise, human-readable description of why a simulation stopped.
+"""
+describe(reason::AbstractTerminationReason) = string(typeof(reason))
+
+"""
+    details(reason::AbstractTerminationReason)
+
+Returns a string containing detailed information about the termination reason.
+"""
+details(reason::AbstractTerminationReason) = ""
+
+# Individual termination reasons
+
+"""
 Internal sentinel indicating that the simulation loop should continue.
 """
 struct UnknownStopReason <: AbstractStopReason end
+describe(::UnknownStopReason) = "The sim stopped for an unknown reason."
 
 """
 The simulation successfully processed its requested final sample.
@@ -885,6 +938,8 @@ The simulation successfully processed its requested final sample.
 struct ReachedEndTime <: AbstractStopReason
     t_end::ExactTime
 end
+describe(stop::ReachedEndTime) =
+    "The sim reached the specified end time of $(float(stop.t_end))."
 
 """
 The first model encountered in deterministic hierarchy order requested a normal stop.
@@ -893,6 +948,8 @@ struct ModelRequestedStop <: AbstractStopReason
     model_path::String
     reason::String
 end
+describe(stop::ModelRequestedStop) =
+    "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
 
 """
 The first hook encountered in configured order requested a normal stop.
@@ -901,6 +958,8 @@ struct HookRequestedStop <: AbstractStopReason
     t::ExactTime
     hook::Hooks.AbstractHook
 end
+describe(stop::HookRequestedStop) =
+    "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
 
 """
     Interrupted(t)
@@ -908,9 +967,10 @@ end
 A catchable interruption stopped the simulation at its last fully accepted time, `t`.
 This is a normal stop; `succeeded(history)` is true for an interrupted simulation.
 """
-struct Interrupted <: AbstractStopReason
+struct Interrupted <: AbstractInterruption
     t::ExactTime
 end
+describe(stop::Interrupted) = "The sim was interrupted at t = $(float(stop.t))."
 
 """
 User model code or simulation infrastructure raised an unexpected exception.
@@ -920,6 +980,65 @@ struct EncounteredError <: AbstractFailureReason
     exception::Exception
     trace::Any
 end
+describe(stop::EncounteredError) = "The sim experienced an error."
+
+# A portable termination reason that represents the full API.
+
+"""
+Stores the results of the complete API for an `AbstractTerminationReason` in a portable way.
+This simple type is easy to save to and load from an HDF5 file or YAML file, etc.
+
+Fields:
+
+* `type::String`: The string representing the original termination reason's type
+* `finished::Bool`: The result of calling `finished` on the original termination
+* `failed::Bool`: The result of calling `failed` on the original termination
+* `interrupted::Bool`: The result of calling `interrupted` on the original termination
+* `summary::String`: The result of calling `describe` on the original termination
+* `details::String`: The result of calling `details` on the original termination
+
+All defaults are `""` or `false`.
+
+See `export_termination_reason` and `import_termination_reason`.
+"""
+@kwdef struct TerminationSummary <: AbstractTerminationReason
+    type::String = ""
+    finished::Bool = false
+    failed::Bool = false
+    interrupted::Bool = false
+    summary::String = ""
+    details::String = ""
+end
+
+# Fill in the complete API for termination reasons:
+finished(stop::TerminationSummary) = stop.finished
+failed(stop::TerminationSummary) = stop.failed
+interrupted(stop::TerminationSummary) = stop.interrupted
+describe(stop::TerminationSummary) = stop.description
+details(stop::TerminationSummary) = stop.details
+
+"""
+    export_termination_reason(stop::AbstractTerminationReason)
+
+Returns a `TerminationSummary` for the given termination reason.
+"""
+function export_termination_reason(stop::AbstractTerminationReason)
+    return TerminationSummary(;
+        type = string(typeof(stop)),
+        finished = finished(stop),
+        failed = failed(stop),
+        interrupted = interrupted(stop),
+        summary = describe(stop),
+        details = details(stop),
+    )
+end
+
+# This is defined in the HDF5Vectors extension
+function import_termination_reason end
+
+
+
+# TODO: Remove RecordedStop and RecordedFailure in favor of TerminationSummary.
 
 """
     RecordedStop(original_type, description, details = "")
@@ -937,6 +1056,7 @@ struct RecordedStop <: AbstractStopReason
     details::String
 end
 RecordedStop(original_type, description) = RecordedStop(original_type, description, "")
+describe(reason::RecordedStop) = reason.description
 
 """
     RecordedFailure(original_type, description, details = "")
@@ -952,27 +1072,9 @@ struct RecordedFailure <: AbstractFailureReason
     details::String
 end
 RecordedFailure(original_type, description) = RecordedFailure(original_type, description, "")
+describe(reason::RecordedFailure) = reason.description
 
-"""
-    describe(reason::AbstractTerminationReason)
-
-Returns a concise, human-readable description of why a simulation stopped.
-"""
-describe(reason::AbstractTerminationReason) =
-    string(typeof(reason))
-describe(reason::Union{RecordedStop, RecordedFailure}) = reason.description
-describe(stop::UnknownStopReason) =
-    "The sim stopped for an unknown reason."
-describe(stop::ReachedEndTime) =
-    "The sim reached the specified end time of $(float(stop.t_end))."
-describe(stop::ModelRequestedStop) =
-    "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
-describe(stop::HookRequestedStop) =
-    "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
-describe(stop::Interrupted) =
-    "The sim was interrupted at t = $(float(stop.t))."
-describe(stop::EncounteredError) =
-    "The sim experienced an error."
+# TODO: Should cleanup errors have a similar "portable" container that stores API results, like the termination reasons do, or is this irrevelent because we never need to load them and have them do anything?
 
 """
 A failure while closing a hook or resource. `context` identifies what was being closed.
@@ -1113,12 +1215,12 @@ SimHistory(t_start, t_stop, log, model, stop) =
     succeeded(h::SimHistory)
 
 Returns true if the simulation ended without an unexpected error or numerical failure.
-An `Interrupted` stop counts as success. Applications requiring completion can check for
+An interruption counts as success. Applications requiring completion can check for
 `ReachedEndTime` or their expected model stop reason. Cleanup failures do not affect this
 result; applications requiring finalized resources can also check
 `isempty(h.cleanup_errors)`.
 """
-succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
+succeeded(h::SimHistory) = !failed(h.stop)
 
 """
     save_sim_history(filename, history; history_path = "/history", log_path = nothing, save_model = false)
