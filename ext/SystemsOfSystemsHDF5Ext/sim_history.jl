@@ -6,11 +6,11 @@
 # Saved termination reasons retain their API results without restoring hooks, tasks,
 # or exception objects.
 
-using SystemsOfSystems: export_termination_reason, TerminationSummary
+using SystemsOfSystems: TerminationSummary
 
 # Saves the termination reason to a group.
 function write_stop(group, stop)
-    summary = export_termination_reason(stop)
+    summary = TerminationSummary(stop)
     for f in fieldnames(TerminationSummary)
         group[string(f)] = getproperty(summary, f)
     end

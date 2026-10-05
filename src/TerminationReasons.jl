@@ -3,8 +3,7 @@ module TerminationReasons
 export AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     AbstractInterruption, finished, failed, interrupted, describe, details,
     UnknownStopReason, ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted,
-    EncounteredError,
-    export_termination_reason, TerminationSummary
+    EncounteredError, TerminationSummary
 
 using ..SystemsOfSystems: ExactTime, Hooks
 
@@ -137,6 +136,9 @@ details(stop::EncounteredError) = sprint(showerror, stop.exception, stop.trace)
 # A portable termination reason that represents the full API.
 
 """
+    TerminationSummary(; type, finished, failed, interrupted, summary, details)
+    TerminationSummary(reason::AbstractTerminationReason)
+
 Stores the results of the complete API for an `AbstractTerminationReason` in a portable way.
 This simple type is easy to save to and load from an HDF5 file or YAML file, etc.
 
@@ -150,8 +152,6 @@ Fields:
 * `details::String`: The result of calling `details` on the original termination
 
 All defaults are `""` or `false`.
-
-See `export_termination_reason`.
 """
 @kwdef struct TerminationSummary <: AbstractTerminationReason
     type::String = ""
@@ -162,19 +162,12 @@ See `export_termination_reason`.
     details::String = ""
 end
 
-# Fill in the complete API for termination reasons:
-finished(stop::TerminationSummary) = stop.finished
-failed(stop::TerminationSummary) = stop.failed
-interrupted(stop::TerminationSummary) = stop.interrupted
-describe(stop::TerminationSummary) = stop.summary
-details(stop::TerminationSummary) = stop.details
-
 """
-    export_termination_reason(stop::AbstractTerminationReason)
+    TerminationSummary(reason::AbstractTerminationReason)
 
 Returns a `TerminationSummary` for the given termination reason.
 """
-function export_termination_reason(stop::AbstractTerminationReason)
+function TerminationSummary(stop::AbstractTerminationReason)
     return TerminationSummary(;
         type = string(typeof(stop)),
         finished = finished(stop),
@@ -184,10 +177,13 @@ function export_termination_reason(stop::AbstractTerminationReason)
         details = details(stop),
     )
 end
+TerminationSummary(reason::TerminationSummary) = reason
 
-# If it's already a summary, just keep it.
-function export_termination_reason(stop::TerminationSummary)
-    return stop
-end
+# Fill in the complete API for termination reasons:
+finished(stop::TerminationSummary) = stop.finished
+failed(stop::TerminationSummary) = stop.failed
+interrupted(stop::TerminationSummary) = stop.interrupted
+describe(stop::TerminationSummary) = stop.summary
+details(stop::TerminationSummary) = stop.details
 
 end

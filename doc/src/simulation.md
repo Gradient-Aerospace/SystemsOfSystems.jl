@@ -238,7 +238,7 @@ The same summary is useful without saving a history. For example, we can collect
 ```julia
 using SystemsOfSystems.TerminationReasons
 
-summary = export_termination_reason(history.stop)
+summary = TerminationSummary(history.stop)
 summary.type
 summary.summary
 summary.details
@@ -249,7 +249,6 @@ finished(summary) == finished(history.stop) # true
 SystemsOfSystems.save_sim_history
 SystemsOfSystems.load_sim_history
 SystemsOfSystems.TerminationSummary
-SystemsOfSystems.export_termination_reason
 ```
 
 ## Time-Series Utilities
