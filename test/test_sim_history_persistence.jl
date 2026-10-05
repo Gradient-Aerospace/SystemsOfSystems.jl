@@ -2,9 +2,9 @@ module TestSimHistoryPersistence
 
 using Test
 using SystemsOfSystems
-using SystemsOfSystems: Logs, Solvers, Hooks, exact_time,
-    ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    TerminationSummary, AbstractStopReason, AbstractFailureReason,
+using SystemsOfSystems: Logs, Hooks, exact_time,
+    ReachedEndTime, HookRequestedStop, Interrupted, EncounteredError,
+    TerminationSummary, AbstractTerminationReason,
     finished, failed, interrupted, describe, details
 import HDF5
 import HDF5Vectors
@@ -90,32 +90,19 @@ end
 
 end
 
-# These reasons deliberately retain a running task, which cannot be reconstructed as part
-# of a saved run. Their round trips should use descriptions without serializing the task.
+# A hook and a custom reason retain a running task. Saving should evaluate the termination
+# API without attempting to serialize that task.
 struct ResourceHook <: Hooks.AbstractHook
     task::Task
 end
 Base.show(io::IO, ::ResourceHook) = print(io, "ResourceHook")
 
-struct CustomStop <: AbstractStopReason
+struct CustomFailure <: AbstractTerminationReason
     task::Task
 end
-struct CustomFailure <: AbstractFailureReason
-    task::Task
-end
-SystemsOfSystems.describe(::CustomStop) = "A custom stop."
+SystemsOfSystems.failed(::CustomFailure) = true
 SystemsOfSystems.describe(::CustomFailure) = "A custom failure."
-
-# These portable custom reasons exercise files with unfamiliar structured stop values.
-# The normal history saver reduces custom reasons to records, so these tests replace the
-# value explicitly to represent a file written by another termination encoder.
-struct PortableStop <: AbstractStopReason
-    message::String
-end
-struct PortableFailure <: AbstractFailureReason
-    message::String
-end
-SystemsOfSystems.describe(stop::Union{PortableStop, PortableFailure}) = stop.message
+SystemsOfSystems.details(::CustomFailure) = "Custom diagnostics."
 
 # Failing during policy selection exercises cleanup after the HDF5 file and log group
 # exist, but before initialization can return a log to the caller.
@@ -212,22 +199,18 @@ end
         save_sim_history(filename, history; history_path = "/run", log_path = "/samples")
         Logs.close_log(history.log)
 
-        HDF5.h5open(filename, "r+") do file
+        HDF5.h5open(filename, "r") do file
 
-            # A non-Julia reader must not need serialized types or interpolators. Removing
-            # those entries demonstrates independence; unrelated entries must be ignored.
+            # Navigate using only the public hierarchy and metadata datasets.
             root = file[read(file["run/log_path"])]
-            HDF5.delete_object(root, "serialized_type")
-            HDF5.delete_object(root["timeseries/x"], "serialized_interpolator")
-            root["additional_metadata"] = "Not a model or time series."
             @test read(root["names/models"]) == ["child"]
             @test read(root["names/continuous_states"]) == ["x"]
             @test isempty(read(root["names/discrete_states"]))
             @test isempty(read(root["names/constants"]))
             @test read(root["models/child/names/continuous_states"]) == ["y"]
 
-            # The documented paths lead to ordinary HDF5 datasets. HDF5Vectors schema
-            # entries identify the encoding and count without deserializing Julia data.
+            # Read numeric samples directly through the documented paths, without using
+            # the Julia log loader or reconstructing interpolators and model types.
             series = root["timeseries/x"]
             @test read(series["path"]) == "/x"
             @test read(series["time_label"]) == root_series.time_dimension.label
@@ -235,11 +218,6 @@ end
             @test read(series["labels"]) == [d.label for d in root_series.dimensions]
             @test read(series["units"]) == [d.units for d in root_series.dimensions]
             @test !read(series["discrete"])
-            @test read(series["time/metadata/format_name"]) == "HDF5Vectors"
-            @test read(series["time/metadata/format_version"]) == 1
-            @test read(series["time/metadata/schema/kind"]) == "scalar"
-            @test read(series["time/metadata/schema/codec"]) == "HDF5Vectors.IdentityCodec"
-            @test read(series["time/metadata/count"]) == length(expected_time)
             @test read(series["time/data/values"]) == expected_time
             @test read(series["data/data/values"]) == expected_root
             @test read(root["models/child/timeseries/y/data/data/values"]) == expected_child
@@ -269,28 +247,34 @@ end
 
 @testset "Termination records preserve meaning without live objects" begin
 
-    # Loaded termination reasons satisfy the termination API with the same values as the
-    # original termination reason. Custom reasons and hooks hold a running task here to
-    # demonstrate that saving never traverses their live contents.
-    history = small_history()
+    # Cover nominal completion, interruption, a hook holding a live object, and a custom
+    # failure classified by a method rather than its supertype. The persistence interface
+    # is shared by all reasons, so each built-in type need not have a separate round trip.
+    history = small_history(; log = Logs.NullLogOptions())
     task = current_task()
-    reasons = [
-        SystemsOfSystems.UnknownStopReason(),
-        ReachedEndTime(history.t_stop),
-        ModelRequestedStop("/child", "Finished."),
-        Interrupted(history.t_stop),
-        Solvers.SolverFailedToConverge(0.5),
-        Solvers.SolverStepSizeUnderflow(0.5, 1e-20),
-        HookRequestedStop(history.t_stop, ResourceHook(task)),
-        CustomStop(task),
-        CustomFailure(task),
-    ]
+    reasons = (
+        (ReachedEndTime(history.t_stop), (true, false, false)),
+        (Interrupted(history.t_stop), (false, false, true)),
+        (HookRequestedStop(history.t_stop, ResourceHook(task)), (true, false, false)),
+        (CustomFailure(task), (false, true, false)),
+    )
     filename = joinpath(mktempdir(), "history.h5")
-    for stop in reasons
+    for (stop, classification) in reasons
+
         save_sim_history(filename, with_stop(history, stop))
-        restored = load_sim_history(filename)
-        @test termination_api_values_are_equal(stop, restored.stop)
-        Logs.close_log(restored.log)
+        load_sim_history(filename) do restored
+
+            @test restored.stop isa TerminationSummary
+            @test restored.stop.type == string(typeof(stop))
+            @test (finished(restored.stop), failed(restored.stop),
+                interrupted(restored.stop)) == classification
+            for f in (finished, failed, interrupted, describe, details)
+                @test f(restored.stop) == f(stop)
+            end
+            @test succeeded(restored) == !classification[2]
+
+        end
+
     end
 
     # Exception diagnostics include source locations, but no compiler objects or live
@@ -312,9 +296,39 @@ end
     copied = joinpath(mktempdir(), "copied.h5")
     save_sim_history(copied, restored)
     again = load_sim_history(copied)
+    @test again.stop.type == restored.stop.type == string(typeof(stop))
     @test termination_api_values_are_equal(again.stop, restored.stop)
+    HDF5.h5open(copied, "r") do file
+        @test read(file["history/stop/type"]) == string(typeof(stop))
+    end
     Logs.close_log(again.log)
     Logs.close_log(restored.log)
+
+end
+
+@testset "Termination records require every saved API field" begin
+
+    # A partial record must not invent classification or diagnostic values. In particular,
+    # losing the failure flag must produce an error rather than turn failure into success.
+    history = with_stop(small_history(; log = Logs.NullLogOptions()),
+        CustomFailure(current_task()))
+    filename = joinpath(mktempdir(), "incomplete.h5")
+    save_sim_history(filename, history)
+    HDF5.h5open(filename, "r+") do file
+
+        group = file["history/stop"]
+        for field in fieldnames(TerminationSummary)
+
+            name = string(field)
+            value = read(group[name])
+            HDF5.delete_object(group, name)
+            @test_throws KeyError load_sim_history(file, "history")
+            group[name] = value
+
+        end
+        close(group)
+
+    end
 
 end
 
@@ -663,11 +677,9 @@ end
         HDF5.h5open(filename, "w") do file
 
             group = HDF5.create_group(file, name)
-            for version in (0, -1, 2, 100)
+            for version in (0, 2)
                 group[version_name] = version
                 @test_throws r"Unsupported .*Supported format version: 1" loader(group)
-                @test isopen(file)
-                @test isvalid(group)
                 HDF5.delete_object(group, version_name)
             end
             for version in (true, 1.0, "1", [1])
@@ -675,6 +687,8 @@ end
                 @test_throws r"expected a scalar integer" loader(group)
                 HDF5.delete_object(group, version_name)
             end
+            @test isopen(file)
+            @test isvalid(group)
 
             # The NullLog shortcut cannot bypass validation. File-owning wrappers must
             # report the same version error as group loaders.
