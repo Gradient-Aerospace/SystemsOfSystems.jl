@@ -1,7 +1,7 @@
 module TestCleanupErrors
 
 using Test
-using SystemsOfSystems: CleanupError, CleanupErrorSummary, cleanup_context, cleanup_details
+using SystemsOfSystems.CleanupErrors
 
 @testset "Cleanup summaries retain the diagnostic API without persistence" begin
 

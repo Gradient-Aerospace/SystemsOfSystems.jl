@@ -255,15 +255,15 @@ SystemsOfSystems.TerminationSummary
 
 A live `CleanupError` retains the original exception and stack trace. Saving converts each cleanup error to a [`CleanupErrorSummary`](@ref SystemsOfSystems.CleanupErrorSummary), which stores its original type name and the results of `cleanup_context` and `cleanup_details`. Loading returns these summaries in the same order, without reconstructing exception objects or stack traces.
 
-We can also construct a summary without saving a history, or report diagnostics through the shared interface:
+The `CleanupErrors` module exports the cleanup types and diagnostic functions. We can construct a summary without saving a history, or report diagnostics through the shared interface:
 
 ```julia
-using SystemsOfSystems: CleanupErrorSummary, cleanup_context, cleanup_details
+using SystemsOfSystems.CleanupErrors
 
-for error in history.cleanup_errors
-    println(cleanup_context(error))
-    println(cleanup_details(error))
-    summary = CleanupErrorSummary(error)
+for err in history.cleanup_errors
+    println(cleanup_context(err))
+    println(cleanup_details(err))
+    summary = CleanupErrorSummary(err)
     println(summary.type)
 end
 ```
