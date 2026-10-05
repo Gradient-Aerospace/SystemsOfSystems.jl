@@ -19,12 +19,12 @@ end
 
 function read_stop(group)
     return TerminationSummary(;
-        type = haskey(group, "type") ? read(group["type"]) : "",
-        finished = haskey(group, "finished") ? read(group["finished"]) : false,
-        failed = haskey(group, "failed") ? read(group["failed"]) : false,
-        interrupted = haskey(group, "interrupted") ? read(group["interrupted"]) : false,
-        summary = haskey(group, "summary") ? read(group["summary"]) : "",
-        details = haskey(group, "details") ? read(group["details"]) : "",
+        type = read(group["type"]),
+        finished = read(group["finished"]),
+        failed = read(group["failed"]),
+        interrupted = read(group["interrupted"]),
+        summary = read(group["summary"]),
+        details = read(group["details"]),
     )
 end
 
@@ -128,7 +128,7 @@ function save_history_metadata(group, history, log_path; save_model)
     # The termination writer chooses a restorable representation for the reason. Release
     # its temporary group handle even if writing fails: the caller may keep the file open.
     stop_group = HDF5.create_group(group, "stop")
-    try # TODO: Remove this try? What's the value here?
+    try
         write_stop(stop_group, history.stop)
     finally
         close(stop_group)
