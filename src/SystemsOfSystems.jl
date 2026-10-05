@@ -1018,8 +1018,8 @@ SimHistory(t_start, t_stop, log, model, stop) =
     succeeded(h::SimHistory)
 
 Returns true if the simulation ended without an unexpected error or numerical failure.
-An interruption counts as success. Applications requiring completion can check for
-`ReachedEndTime` or their expected model stop reason. Cleanup failures do not affect this
+An interruption counts as success. `finished(h.stop)` reports whether the run reached a
+nominal end condition, including a deliberate early stop. Cleanup failures do not affect this
 result; applications requiring finalized resources can also check
 `isempty(h.cleanup_errors)`.
 """

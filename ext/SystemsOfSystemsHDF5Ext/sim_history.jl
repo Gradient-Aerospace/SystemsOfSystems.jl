@@ -3,8 +3,8 @@
 # wherever the caller needs them. An existing HDF5 log can stay in place while its history
 # metadata is saved alongside it.
 #
-# Saved histories describe completed runs. Termination reasons that contain hooks, tasks,
-# or exceptions become descriptive records rather than attempts to restore those objects.
+# Saved termination reasons retain their API results without restoring hooks, tasks,
+# or exception objects.
 
 using SystemsOfSystems: export_termination_reason, TerminationSummary
 
@@ -125,8 +125,8 @@ function save_history_metadata(group, history, log_path; save_model)
     group["t_start"] = Float64(history.t_start)
     group["t_stop"] = Float64(history.t_stop)
 
-    # The termination writer chooses a restorable representation for the reason. Release
-    # its temporary group handle even if writing fails: the caller may keep the file open.
+    # Save the termination API results as ordinary datasets. Close the temporary group
+    # handle even if writing fails: the caller may keep the file open.
     stop_group = HDF5.create_group(group, "stop")
     try
         write_stop(stop_group, history.stop)
@@ -337,8 +337,7 @@ function load_sim_history(group::HDF5.Group; load_model = false)
     check_format_version(group, "sim_history_version", history_format_version)
 
     # Restore the small run record eagerly. SimHistory uses exact simulation times even
-    # though the file stores them as floats; the saved stop value is a built-in reason or
-    # one of the descriptive records selected by record_stop.
+    # though the file stores them as floats. Restore the termination reason as a summary.
     t_start = SystemsOfSystems.exact_time(read(group["t_start"]))
     t_stop = SystemsOfSystems.exact_time(read(group["t_stop"]))
     stop = read_stop(group["stop"])
