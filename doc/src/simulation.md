@@ -27,7 +27,7 @@ Julia's property destructuring is convenient when only part of the result is nee
 
 [`succeeded`](@ref) reports whether the simulation ended without a failure: it is equivalent to `!failed(history.stop)`. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. [`finished`](@ref SystemsOfSystems.finished) distinguishes a nominal end condition from an interruption, but includes deliberate early stops. These functions work for both a newly returned history and a loaded history.
 
-Cleanup failures are independent: `history.cleanup_errors` lists them in close order, with the hook or resource in `context` and the original exception and trace in `exception` and `trace`. Applications requiring finalized outputs can check `isempty(history.cleanup_errors)` in addition to `succeeded(history)`. Loaded cleanup errors retain their context and diagnostic text, rather than their exception objects and traces.
+Cleanup failures are independent: `history.cleanup_errors` lists them in close order. [`cleanup_context`](@ref SystemsOfSystems.cleanup_context) identifies what was being closed, and [`cleanup_details`](@ref SystemsOfSystems.cleanup_details) provides diagnostic text. Both functions work for live errors and loaded summaries. Applications requiring finalized outputs can check `isempty(history.cleanup_errors)` in addition to `succeeded(history)`.
 
 ```julia
 if !succeeded(history)
@@ -249,6 +249,33 @@ finished(summary) == finished(history.stop) # true
 SystemsOfSystems.save_sim_history
 SystemsOfSystems.load_sim_history
 SystemsOfSystems.TerminationSummary
+```
+
+### Cleanup Error Records
+
+A live `CleanupError` retains the original exception and stack trace. Saving converts each cleanup error to a [`CleanupErrorSummary`](@ref SystemsOfSystems.CleanupErrorSummary), which stores its original type name and the results of `cleanup_context` and `cleanup_details`. Loading returns these summaries in the same order, without reconstructing exception objects or stack traces.
+
+We can also construct a summary without saving a history, or report diagnostics through the shared interface:
+
+```julia
+using SystemsOfSystems: CleanupErrorSummary, cleanup_context, cleanup_details
+
+for error in history.cleanup_errors
+    println(cleanup_context(error))
+    println(cleanup_details(error))
+    summary = CleanupErrorSummary(error)
+    println(summary.type)
+end
+```
+
+Custom cleanup errors subtype `AbstractCleanupError` and implement `cleanup_context` and `cleanup_details`, each returning a string. Summary conversion calls these methods without inspecting other fields. The type name is descriptive text; it does not restore the original type. Older saved entries without a type label load with an empty label, while missing context or diagnostic fields produce a loading error.
+
+```@docs
+SystemsOfSystems.AbstractCleanupError
+SystemsOfSystems.CleanupError
+SystemsOfSystems.CleanupErrorSummary
+SystemsOfSystems.cleanup_context
+SystemsOfSystems.cleanup_details
 ```
 
 ## Time-Series Utilities

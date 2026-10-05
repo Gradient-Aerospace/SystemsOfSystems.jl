@@ -5,7 +5,8 @@ using SystemsOfSystems
 using SystemsOfSystems: Logs, Hooks, exact_time,
     ReachedEndTime, HookRequestedStop, Interrupted, EncounteredError,
     TerminationSummary, AbstractTerminationReason,
-    finished, failed, interrupted, describe, details
+    finished, failed, interrupted, describe, details,
+    AbstractCleanupError, CleanupError, CleanupErrorSummary, cleanup_context, cleanup_details
 import HDF5
 import HDF5Vectors
 
@@ -41,17 +42,25 @@ function termination_api_values_are_equal(a, b)
     )
 end
 
-@testset "Cleanup failures survive history persistence as readable records" begin
+# This custom error has no context or details fields. Persistence must use its API and
+# must not traverse the live task stored in its payload.
+struct CustomCleanupError <: AbstractCleanupError
+    payload::Task
+end
+SystemsOfSystems.cleanup_context(::CustomCleanupError) = "resource /output"
+SystemsOfSystems.cleanup_details(::CustomCleanupError) = "Flush failed."
 
-    original = small_history()
-    cleanup_errors = SystemsOfSystems.AbstractCleanupError[
-        SystemsOfSystems.CleanupError(
+@testset "Cleanup summaries preserve diagnostics and order through re-saving" begin
+
+    original = small_history(; log = Logs.NullLogOptions())
+    cleanup_errors = AbstractCleanupError[
+        CleanupError(
             "hook TestHook", ErrorException("Hook close failed"), stacktrace(),
         ),
-        SystemsOfSystems.CleanupError(
-            "resource /output", ErrorException("Flush failed"), stacktrace(),
-        ),
+        CustomCleanupError(current_task()),
     ]
+    expected = [(string(typeof(err)), cleanup_context(err), cleanup_details(err))
+        for err in cleanup_errors]
     history = SimHistory(
         original.t_start, original.t_stop, original.log, original.model, original.stop,
         cleanup_errors,
@@ -61,26 +70,52 @@ end
 
     HDF5.h5open(filename, "r") do file
         @test read(file["history/cleanup_errors/count"]) == 2
-        @test read(file["history/cleanup_errors/1/context"]) == "hook TestHook"
-        @test occursin("Hook close failed", read(file["history/cleanup_errors/1/details"]))
+        for (index, values) in enumerate(expected)
+            entry = file["history/cleanup_errors/$index"]
+            @test Tuple(read(entry[name]) for name in ("type", "context", "details")) == values
+            close(entry)
+        end
     end
     load_sim_history(filename) do loaded
-        @test termination_api_values_are_equal(loaded.stop, history.stop)
+
+        # Check the whole ordered diagnostic record, including the original type labels,
+        # both on loading and after saving the loaded summaries again.
         @test succeeded(loaded)
-        @test length(loaded.cleanup_errors) == 2
-        @test all(error -> error isa SystemsOfSystems.RecordedCleanupError,
-            loaded.cleanup_errors)
-        @test loaded.cleanup_errors[2].context == "resource /output"
-        @test occursin("Flush failed", loaded.cleanup_errors[2].details)
+        @test all(err -> err isa CleanupErrorSummary, loaded.cleanup_errors)
+        @test [(err.type, cleanup_context(err), cleanup_details(err))
+            for err in loaded.cleanup_errors] == expected
 
         copied = joinpath(mktempdir(), "copied.h5")
         save_sim_history(copied, loaded)
         load_sim_history(copied) do reloaded
-            @test reloaded.cleanup_errors[2].details == loaded.cleanup_errors[2].details
+            @test [(err.type, cleanup_context(err), cleanup_details(err))
+                for err in reloaded.cleanup_errors] == expected
         end
+
     end
 
-    # Version-one files written before this optional field existed remain readable.
+    # Type labels are optional provenance for older entries. Actual context and diagnostic
+    # text are required; a partial entry must fail rather than invent those API results.
+    HDF5.h5open(filename, "r+") do file
+
+        entry = file["history/cleanup_errors/1"]
+        HDF5.delete_object(entry, "type")
+        loaded = load_sim_history(file, "history")
+        @test first(loaded.cleanup_errors).type == ""
+        @test cleanup_details(first(loaded.cleanup_errors)) == expected[1][3]
+        for name in ("context", "details")
+
+            value = read(entry[name])
+            HDF5.delete_object(entry, name)
+            @test_throws KeyError load_sim_history(file, "history")
+            entry[name] = value
+
+        end
+        close(entry)
+
+    end
+
+    # Files without the optional cleanup group still represent an empty error list.
     HDF5.h5open(filename, "r+") do file
         HDF5.delete_object(file["history"], "cleanup_errors")
     end

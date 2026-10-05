@@ -6,7 +6,7 @@
 # Saved termination reasons retain their API results without restoring hooks, tasks,
 # or exception objects.
 
-using SystemsOfSystems: TerminationSummary
+using SystemsOfSystems: TerminationSummary, CleanupErrorSummary
 
 # Saves the termination reason to a group.
 function write_stop(group, stop)
@@ -28,17 +28,15 @@ function read_stop(group)
     )
 end
 
-cleanup_details(error::SystemsOfSystems.CleanupError) =
-    sprint(showerror, error.exception, error.trace)
-cleanup_details(error::SystemsOfSystems.RecordedCleanupError) = error.details
-
 function save_cleanup_errors(group, errors)
     group["count"] = length(errors)
-    for (index, error) in enumerate(errors)
+    for (index, err) in enumerate(errors)
         entry = HDF5.create_group(group, string(index))
         try
-            entry["context"] = error.context
-            entry["details"] = cleanup_details(error)
+            summary = CleanupErrorSummary(err)
+            for field in fieldnames(CleanupErrorSummary)
+                entry[string(field)] = getproperty(summary, field)
+            end
         finally
             close(entry)
         end
@@ -51,8 +49,10 @@ function load_cleanup_errors(group)
     for index in 1:read(group["count"])
         entry = group[string(index)]
         try
-            push!(errors, SystemsOfSystems.RecordedCleanupError(
-                read(entry["context"]), read(entry["details"]),
+            push!(errors, CleanupErrorSummary(;
+                type = haskey(entry, "type") ? read(entry["type"]) : "",
+                context = read(entry["context"]),
+                details = read(entry["details"]),
             ))
         finally
             close(entry)

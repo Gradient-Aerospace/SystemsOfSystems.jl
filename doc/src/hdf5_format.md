@@ -53,13 +53,16 @@ The following entries are relative to the history group:
 | `stop/summary` | Scalar string dataset | Human-readable reason for termination. |
 | `stop/details` | Scalar string dataset | Human-readable details about termination. |
 | `cleanup_errors/count` | Optional scalar integer dataset | Number of cleanup failures, in close order. Absence of the group in older files means zero. |
+| `cleanup_errors/<n>/type` | Optional scalar string dataset | Original cleanup error's type name. New files include it; older entries load with an empty type label. |
 | `cleanup_errors/<n>/context` | Scalar string dataset | Hook or resource that failed to close, with entries numbered from `1`. |
-| `cleanup_errors/<n>/details` | Scalar string dataset | Readable exception and stack trace text. |
+| `cleanup_errors/<n>/details` | Scalar string dataset | Diagnostic text returned by `cleanup_details`, including the rendered exception and stack trace for a live `CleanupError`. |
 | `model/` | Optional HDF5Vectors group | One final model value, present when saved with `save_model = true`. Its schema and portability depend on the application's model type. |
 
-All entries except `cleanup_errors`, `model`, and the provenance dataset are required in a saved history. New files include `cleanup_errors/count`, even when it is zero. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme.
+All entries except `cleanup_errors`, `model`, and the provenance dataset are required in a saved history. New files include `cleanup_errors/count`, even when it is zero. Within each cleanup entry, `context` and `details` are required, while `type` is optional for compatibility with older files. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme.
 
 The Julia history loader constructs a `TerminationSummary` directly from the six `stop` datasets. It preserves the results of `finished`, `failed`, `interrupted`, `describe`, and `details`, along with the original type name as descriptive text. It does not reconstruct the original termination reason.
+
+Cleanup entries likewise load directly as `CleanupErrorSummary` values. Their `context` and `details` datasets preserve the results of `cleanup_context` and `cleanup_details`. The summaries retain the saved type labels and error order when re-saved. No exception objects or stack traces are reconstructed.
 
 Because `log_path` is within the file, moving or renaming the file preserves it. Moving a log group within the file requires updating any history that refers to it. A log group with `is_null = true` records that logging was disabled; it has no model tree. Ordinary logs need not have an `is_null` entry.
 

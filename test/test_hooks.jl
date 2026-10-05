@@ -141,7 +141,7 @@ end
     @test close_order == [:third, :second, :first]
     @test length(errors) == 1
     @test errors[1] isa SystemsOfSystems.CleanupError
-    @test occursin("hook 2", errors[1].context)
+    @test occursin("hook 2", SystemsOfSystems.cleanup_context(errors[1]))
     @test occursin("Expected close failure", sprint(showerror, errors[1].exception))
 
 end
@@ -167,7 +167,7 @@ end
     @test completed.stop isa SystemsOfSystems.ReachedEndTime
     @test succeeded(completed)
     @test length(completed.cleanup_errors) == 1
-    @test occursin("hook 2", only(completed.cleanup_errors).context)
+    @test occursin("hook 2", SystemsOfSystems.cleanup_context(only(completed.cleanup_errors)))
     @test close_order == [:third, :second, :first]
 
     empty!(close_order)
