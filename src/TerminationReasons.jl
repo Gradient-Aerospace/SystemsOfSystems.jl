@@ -30,7 +30,7 @@ A condition that prevented the simulation from producing another valid accepted 
 abstract type AbstractFailureReason <: AbstractTerminationReason end
 
 """
-Indicates that the simulation was interrupted, such as by a sigint resulting from ctrl+c.
+The simulation was interrupted, e.g. with ctrl+c.
 """
 abstract type AbstractInterruption <:  AbstractTerminationReason end
 
@@ -53,8 +53,10 @@ failure or exception.
 failed(stop::AbstractTerminationReason) = stop isa AbstractFailureReason
 
 """
-Returns true if the simulation was interrupted, such as a sigint, in which case the
-simulation did not continue to a nominal conclusion but also did not fail.
+    interrupted(stop::AbstractTerminationReason)
+
+Returns true if the simulation was interrupted before a nominal conclusion, without
+reporting a failure.
 """
 interrupted(stop::AbstractTerminationReason) = stop isa AbstractInterruption
 
@@ -113,7 +115,8 @@ describe(stop::HookRequestedStop) =
     Interrupted(t)
 
 A catchable interruption stopped the simulation at its last fully accepted time, `t`.
-This is a normal stop; `succeeded(history)` is true for an interrupted simulation.
+`interrupted` returns true, while `finished` and `failed` return false.
+`succeeded(history)` remains true because an interruption is not a failure.
 """
 struct Interrupted <: AbstractInterruption
     t::ExactTime
