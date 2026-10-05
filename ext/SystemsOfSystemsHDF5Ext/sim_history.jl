@@ -6,143 +6,26 @@
 # Saved histories describe completed runs. Termination reasons that contain hooks, tasks,
 # or exceptions become descriptive records rather than attempts to restore those objects.
 
-function write_stop(group, stop; original_type = string(typeof(stop)), details = "")
+using SystemsOfSystems: export_termination_reason, TerminationSummary
 
-    # Ordinary datasets let HDF5 readers inspect the termination without understanding
-    # Julia types. For a descriptive record, original_type identifies the reason from the
-    # run rather than the RecordedStop or RecordedFailure used to store it.
-    group["type"] = original_type
-    group["description"] = SystemsOfSystems.describe(stop)
-    group["is_failure"] = stop isa SystemsOfSystems.AbstractFailureReason
-    if !isempty(details)
-        group["details"] = details
+# Saves the termination reason to a group.
+function write_stop(group, stop)
+    summary = export_termination_reason(stop)
+    for f in fieldnames(TerminationSummary)
+        group[string(f)] = getproperty(summary, f)
     end
-
-    # The Julia loader also needs a value it can reconstruct. record_stop supplies either
-    # a supported built-in reason or a descriptive record; a one-element HDF5Vector lets
-    # both use the same encoding as other structured values in the file.
-    copy_to_hdf5_vector(group, "value", [stop]; chunk_length = 1)
     return nothing
-
 end
 
-# The writer and reader share this list so each field-stored reason has a matching
-# reader. These built-ins retain useful fields without restoring live Julia resources.
-const field_stored_stop_types = (
-    SystemsOfSystems.UnknownStopReason,
-    SystemsOfSystems.ReachedEndTime,
-    SystemsOfSystems.ModelRequestedStop,
-    SystemsOfSystems.Interrupted,
-    SystemsOfSystems.Solvers.SolverFailedToConverge,
-    SystemsOfSystems.Solvers.SolverStepSizeUnderflow,
-)
-
-function record_stop(group, stop::Union{field_stored_stop_types...})
-    return write_stop(group, stop)
-end
-
-# Other reasons may contain resources that cannot be restored outside the original run.
-# Their type name and description still explain the termination. A separate failure method
-# preserves the classification used by succeeded(history), without inspecting those fields.
-function record_stop(group, stop::SystemsOfSystems.AbstractTerminationReason)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedStop(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-        )
+function read_stop(group)
+    return TerminationSummary(;
+        type = haskey(group, "type") ? read(group["type"]) : "",
+        finished = haskey(group, "finished") ? read(group["finished"]) : false,
+        failed = haskey(group, "failed") ? read(group["failed"]) : false,
+        interrupted = haskey(group, "interrupted") ? read(group["interrupted"]) : false,
+        summary = haskey(group, "summary") ? read(group["summary"]) : "",
+        details = haskey(group, "details") ? read(group["details"]) : "",
     )
-end
-
-function record_stop(group, stop::SystemsOfSystems.AbstractFailureReason)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedFailure(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-        )
-    )
-end
-
-# An exception's description alone omits the information needed to diagnose it. Rendering
-# the exception and stack trace preserves those diagnostics without saving exception
-# payloads or compiler objects that may be meaningful only in the originating process.
-function record_stop(group, stop::SystemsOfSystems.EncounteredError)
-    return record_stop(
-        group,
-        SystemsOfSystems.RecordedFailure(
-            string(typeof(stop)), SystemsOfSystems.describe(stop),
-            sprint(showerror, stop.exception, stop.trace),
-        )
-    )
-end
-
-# A loaded history may be saved again. Keep the original reason's identity and diagnostics
-# rather than replacing them with the type name of its descriptive record.
-function record_stop(
-    group,
-    stop::Union{SystemsOfSystems.RecordedStop, SystemsOfSystems.RecordedFailure}
-)
-    return write_stop(group, stop; stop.original_type, stop.details)
-end
-
-function load_stop_record(group)
-
-    type = read(group["is_failure"]) ? SystemsOfSystems.RecordedFailure :
-        SystemsOfSystems.RecordedStop
-    details = haskey(group, "details") ? read(group["details"]) : ""
-    return type(read(group["type"]), read(group["description"]), details)
-
-end
-
-function load_stop(group)
-
-    # Select a reader from the stored value's type, not the original reason's name in
-    # type. A hook, for example, is saved as a RecordedStop while retaining the hook
-    # termination's original type name in the readable record.
-    value_group = group["value"]
-    stored_type = read(value_group["metadata/logical_type"])
-    known_types = (
-        field_stored_stop_types...,
-        SystemsOfSystems.RecordedStop,
-        SystemsOfSystems.RecordedFailure,
-    )
-    for type in known_types
-
-        if stored_type != sprint(show, type; context = :module => nothing)
-            continue
-        end
-        if type <: Union{SystemsOfSystems.RecordedStop, SystemsOfSystems.RecordedFailure}
-            return load_stop_record(group)
-        end
-
-        # Our built-in reasons have known field layouts. Supplying their schema avoids
-        # restoring Julia schema objects, even if those saved objects are unavailable.
-        # Invalid fields still indicate a malformed file and should propagate an error.
-        schema = HDF5Vectors.infer_schema(type)
-        return load_hdf5_vector(value_group, schema)[1]
-
-    end
-
-    # An unfamiliar representation may still be readable by HDF5Vectors. If its schema
-    # or value cannot be restored, the ordinary datasets retain the run's explanation
-    # and failure classification. Keep this recovery limited to the unfamiliar reader.
-    stop = try
-
-        value = load_hdf5_vector(value_group)[1]
-        if !(value isa SystemsOfSystems.AbstractTerminationReason)
-            throw(ArgumentError("Stored stop value is not a termination reason."))
-        end
-        value
-
-    catch err
-
-        err isa InterruptException && rethrow()
-        message = "Could not restore the saved termination reason; using its readable record."
-        @warn message exception = (err, catch_backtrace())
-        nothing
-
-    end
-    return isnothing(stop) ? load_stop_record(group) : stop
-
 end
 
 cleanup_details(error::SystemsOfSystems.CleanupError) =
@@ -245,8 +128,8 @@ function save_history_metadata(group, history, log_path; save_model)
     # The termination writer chooses a restorable representation for the reason. Release
     # its temporary group handle even if writing fails: the caller may keep the file open.
     stop_group = HDF5.create_group(group, "stop")
-    try
-        record_stop(stop_group, history.stop)
+    try # TODO: Remove this try? What's the value here?
+        write_stop(stop_group, history.stop)
     finally
         close(stop_group)
     end
@@ -458,7 +341,7 @@ function load_sim_history(group::HDF5.Group; load_model = false)
     # one of the descriptive records selected by record_stop.
     t_start = SystemsOfSystems.exact_time(read(group["t_start"]))
     t_stop = SystemsOfSystems.exact_time(read(group["t_stop"]))
-    stop = load_stop(group["stop"])
+    stop = read_stop(group["stop"])
     cleanup_errors = haskey(group, "cleanup_errors") ?
         load_cleanup_errors(group["cleanup_errors"]) :
         SystemsOfSystems.AbstractCleanupError[]
