@@ -45,7 +45,8 @@ public AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     TerminationSummary
 
 # Cleanup errors
-public AbstractCleanupError, CleanupError, RecordedCleanupError
+public AbstractCleanupError, CleanupError, CleanupErrorSummary,
+    cleanup_context, cleanup_details
 
 # Integration
 public normalized_scalar_error, normalized_variable_error
@@ -874,15 +875,29 @@ function copy_model_state_description_except(
 end
 
 ####################
-# Cleanup Faiulres #
+# Cleanup Failures #
 ####################
 
-# TODO: Should cleanup errors have a similar "portable" container that stores API results, like the termination reasons do, or is this irrevelent because we never need to load them and have them do anything?
-
 """
-A failure while closing a hook or resource. `context` identifies what was being closed.
+A failure while closing a hook or resource. Custom errors implement `cleanup_context`
+and `cleanup_details`, returning strings that identify the context and describe the failure.
 """
 abstract type AbstractCleanupError end
+
+"""
+    cleanup_context(err::AbstractCleanupError)
+
+Returns a string identifying the hook or resource that failed to close.
+"""
+function cleanup_context end
+
+"""
+    cleanup_details(err::AbstractCleanupError)
+
+Returns a string containing diagnostic information about the cleanup failure.
+For a `CleanupError`, this includes the rendered exception and stack trace.
+"""
+function cleanup_details end
 
 """
     CleanupError(context, exception, trace)
@@ -894,17 +909,38 @@ struct CleanupError <: AbstractCleanupError
     exception::Any
     trace::Any
 end
+cleanup_context(err::CleanupError) = err.context
+cleanup_details(err::CleanupError) = sprint(showerror, err.exception, err.trace)
 
 """
-    RecordedCleanupError(context, details)
+    CleanupErrorSummary(err::AbstractCleanupError)
+    CleanupErrorSummary(; type = "", context = "", details = "")
 
-A cleanup failure loaded from a saved history. `details` contains readable exception and
-stack trace text; the original exception object is not restored.
+Stores the cleanup-error API results as portable text, without retaining exception objects
+or stack traces. Constructing a summary from an existing summary returns it unchanged.
+
+Fields:
+
+* `type::String`: The original cleanup error's type name, for identification.
+* `context::String`: The result of `cleanup_context` on the original error.
+* `details::String`: The result of `cleanup_details` on the original error.
 """
-struct RecordedCleanupError <: AbstractCleanupError
-    context::String
-    details::String
+@kwdef struct CleanupErrorSummary <: AbstractCleanupError
+    type::String = ""
+    context::String = ""
+    details::String = ""
 end
+cleanup_context(err::CleanupErrorSummary) = err.context
+cleanup_details(err::CleanupErrorSummary) = err.details
+
+function CleanupErrorSummary(err::AbstractCleanupError)
+    return CleanupErrorSummary(;
+        type = string(typeof(err)),
+        context = cleanup_context(err),
+        details = cleanup_details(err),
+    )
+end
+CleanupErrorSummary(err::CleanupErrorSummary) = err
 
 ##############
 # SimOptions #
@@ -1088,8 +1124,9 @@ The final model is loaded only when it was saved and `load_model = true`; otherw
 `nothing`. Times are restored with `exact_time` from the saved floating-point values.
 Termination reasons load as `TerminationSummary`, which retains the full API for termination
 reasons (`finished`, `failed`, `interrupted`, `describe`, `details`). Cleanup failures load
-as `RecordedCleanupError` values with context and diagnostic text; original exception
-objects and stack traces are not restored.
+as `CleanupErrorSummary` values, preserving `cleanup_context` and `cleanup_details` along
+with the original type name when available. Exception objects and stack traces are not
+restored.
 
 Unsupported or malformed format versions, and a missing history version, produce an
 `ArgumentError`. The HDF5 format guide lists supported history and log versions and the
