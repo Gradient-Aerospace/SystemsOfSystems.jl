@@ -320,7 +320,6 @@ SystemsOfSystems.cleanup_details
 SystemsOfSystems.AbstractTerminationReason
 SystemsOfSystems.AbstractStopReason
 SystemsOfSystems.AbstractFailureReason
-SystemsOfSystems.AbstractInterruption
 SystemsOfSystems.ReachedEndTime
 SystemsOfSystems.ModelRequestedStop
 SystemsOfSystems.HookRequestedStop

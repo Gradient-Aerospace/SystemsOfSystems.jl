@@ -39,7 +39,7 @@ public AbstractTimeSeriesInterpolator, select
 # Termination reasons
 export TerminationReasons
 public AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
-    AbstractInterruption, finished, failed, interrupted, describe, details,
+    finished, failed, interrupted, describe, details,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
     TerminationSummary
 
