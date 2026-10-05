@@ -28,9 +28,8 @@ export Samplers, LoggingPolicies
 
 # Triggering and schedules
 export AbstractSchedule, RegularSchedule, OffsetRegularSchedule, AlwaysTriggeringSchedule,
-    KEEP_T_NEXT, NO_T_NEXT,
     on_triggering, is_triggering, next_trigger_time, next_regular_time
-public SimulationTimes,
+public SimulationTimes, KEEP_T_NEXT, NO_T_NEXT,
     is_regular_step_triggering # backward compatibility
 
 # TimeSeries
@@ -1471,7 +1470,7 @@ function step!(
     return (
         t_next,
         msd,
-        isnothing(stop) ? UnknownStopReason() : stop,
+        isnothing(stop) ? TerminationReasons.UnknownStopReason() : stop,
         result.t_next_crv_draw,
     )
 
@@ -1714,7 +1713,7 @@ function loop!(runtime)
     # These are updated by the loop.
     t_completed = first(runtime.t)
     msd = runtime.msd
-    stop = UnknownStopReason()
+    stop = TerminationReasons.UnknownStopReason()
     has_continuous_random_variables =
         !isempty(ommd.continuous_random_variables) ||
         ommd.models_have_continuous_random_variables
@@ -1723,7 +1722,7 @@ function loop!(runtime)
     # No matter what happens, this function returns all of the progress it's made.
     try
 
-        while isa(stop, UnknownStopReason)
+        while isa(stop, TerminationReasons.UnknownStopReason)
 
             # `step!` returns only after the accepted continuous endpoint and its discrete
             # update are complete. Assigning its result here is the simulation's commit
@@ -1739,14 +1738,18 @@ function loop!(runtime)
             # not run this path, even if their reported time happens to equal `t_end`.
             should_sample_terminal_rates = (
                 stop isa AbstractStopReason &&
-                (t_completed == t_end || !(stop isa UnknownStopReason))
+                (t_completed == t_end || !(stop isa TerminationReasons.UnknownStopReason))
             )
             if should_sample_terminal_rates
 
                 # `UnknownStopReason` means that reaching `t_end` initiated termination; it
                 # is an internal loop sentinel, not a reason that should take precedence
                 # over a terminal model request or `ReachedEndTime`.
-                terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                terminal_stop = if stop isa TerminationReasons.UnknownStopReason
+                    nothing
+                else
+                    stop
+                end
                 SimulationLogging.log_continuous_state_stuff!(
                     t_completed, float(t_completed), logging_runtime, msd,
                 )

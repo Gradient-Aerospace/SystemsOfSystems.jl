@@ -92,6 +92,42 @@ Custom reasons can subtype `AbstractTerminationReason` and provide custom method
 
 Applications requiring a particular end condition can inspect the concrete reason in a history returned by `simulate`, for example with `history.stop isa ReachedEndTime`. `finished` reports nominal termination generally, so it does not distinguish reaching the requested end time from stopping early at a model's request. The summary's type name and descriptions are descriptive text rather than a stable machine-readable classification of specific reasons.
 
+### Interruption
+
+A catchable `InterruptException` raised during the simulation loop produces `Interrupted(history.t_stop)`. The returned time and model describe the last fully accepted simulation sample, including its discrete update. An interrupted intermediate solver stage is discarded. Hooks and resources follow the normal teardown path and receive the accepted endpoint.
+
+Interruption leaves logging unchanged, just as an unexpected exception does. No final sample is added and no new continuous outputs are evaluated. With regular sampling, the last logged state may therefore be older than `history.t_stop`; `history.model` contains the last accepted state.
+
+For an interruption, `interrupted(history.stop)` is true, while `finished(history.stop)` and `failed(history.stop)` are false. `succeeded(history)` remains true because it reports the absence of failure rather than functional completion. These results are preserved when saving and loading the history.
+
+SystemsOfSystems handles catchable Julia interruptions during the simulation loop. Applications control operating-system signal handling and process exit codes. Uncatchable termination cannot guarantee cleanup or complete log files.
+
+## Time-Series Utilities
+
+[`SystemsOfSystems.select`](@ref) derives a new time series while preserving its timestamps and metadata. It is public but qualified because `select` is a common name in data-analysis packages.
+
+```julia
+speed = SystemsOfSystems.select(history["/"]["velocity"]; title = "Speed") do velocity
+    abs(velocity)
+end
+```
+
+[`plot_ts`](@ref) creates a new Makie figure. [`plot_ts!`](@ref) adds a time series to an existing figure or layout target. Either function requires a loaded Makie backend.
+
+```julia
+using CairoMakie
+
+figure = Figure()
+plot_ts!(figure[1, 1], history["/"]["position"])
+figure
+```
+
+```@docs
+SystemsOfSystems.select
+SystemsOfSystems.plot_ts
+SystemsOfSystems.plot_ts!
+```
+
 ## Saving and Loading Histories
 
 [`save_sim_history`](@ref) saves a record of a run to a single HDF5 file. [`load_sim_history`](@ref) restores its times, termination information, and a disk-backed log. Loading does not read all of the log into memory, so we can select just the series or samples needed for an analysis.
@@ -277,42 +313,6 @@ SystemsOfSystems.CleanupErrorSummary
 SystemsOfSystems.cleanup_context
 SystemsOfSystems.cleanup_details
 ```
-
-## Time-Series Utilities
-
-[`SystemsOfSystems.select`](@ref) derives a new time series while preserving its timestamps and metadata. It is public but qualified because `select` is a common name in data-analysis packages.
-
-```julia
-speed = SystemsOfSystems.select(history["/"]["velocity"]; title = "Speed") do velocity
-    abs(velocity)
-end
-```
-
-[`plot_ts`](@ref) creates a new Makie figure. [`plot_ts!`](@ref) adds a time series to an existing figure or layout target. Either function requires a loaded Makie backend.
-
-```julia
-using CairoMakie
-
-figure = Figure()
-plot_ts!(figure[1, 1], history["/"]["position"])
-figure
-```
-
-```@docs
-SystemsOfSystems.select
-SystemsOfSystems.plot_ts
-SystemsOfSystems.plot_ts!
-```
-
-### Interruption
-
-A catchable `InterruptException` raised during the simulation loop produces `Interrupted(history.t_stop)`. The returned time and model describe the last fully accepted simulation sample, including its discrete update. An interrupted intermediate solver stage is discarded. Hooks and resources follow the normal teardown path and receive the accepted endpoint.
-
-Interruption leaves logging unchanged, just as an unexpected exception does. No final sample is added and no new continuous outputs are evaluated. With regular sampling, the last logged state may therefore be older than `history.t_stop`; `history.model` contains the last accepted state.
-
-For an interruption, `interrupted(history.stop)` is true, while `finished(history.stop)` and `failed(history.stop)` are false. `succeeded(history)` remains true because it reports the absence of failure rather than functional completion. These results are preserved when saving and loading the history.
-
-SystemsOfSystems handles catchable Julia interruptions during the simulation loop. Applications control operating-system signal handling and process exit codes. Uncatchable termination cannot guarantee cleanup or complete log files.
 
 ### Reference
 
