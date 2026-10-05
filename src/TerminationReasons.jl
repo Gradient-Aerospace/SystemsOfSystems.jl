@@ -2,7 +2,7 @@ module TerminationReasons
 
 export AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     AbstractInterruption, finished, failed, interrupted, describe, details,
-    UnknownStopReason, ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted,
+    ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted,
     EncounteredError, TerminationSummary
 
 using ..SystemsOfSystems: ExactTime, Hooks
@@ -31,7 +31,7 @@ abstract type AbstractFailureReason <: AbstractTerminationReason end
 """
 The simulation was interrupted, e.g. with ctrl+c.
 """
-abstract type AbstractInterruption <:  AbstractTerminationReason end
+abstract type AbstractInterruption <: AbstractTerminationReason end
 
 # Termination reason interface
 
