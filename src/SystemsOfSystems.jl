@@ -42,7 +42,7 @@ export TerminationReasons
 public AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     AbstractInterruption, finished, failed, interrupted, describe, details,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    export_termination_reason, TerminationSummary
+    TerminationSummary
 
 # Cleanup errors
 public AbstractCleanupError, CleanupError, RecordedCleanupError
