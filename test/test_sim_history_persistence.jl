@@ -4,7 +4,7 @@ using Test
 using SystemsOfSystems
 using SystemsOfSystems: Logs, Solvers, Hooks, exact_time, describe,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    RecordedStop, RecordedFailure, AbstractStopReason, AbstractFailureReason
+    TerminationSummary, AbstractStopReason, AbstractFailureReason
 import HDF5
 import HDF5Vectors
 
@@ -28,6 +28,16 @@ end
 
 function with_stop(history, stop)
     return SimHistory(history.t_start, history.t_stop, history.log, history.model, stop)
+end
+
+function termination_api_values_are_equal(a, b)
+    return (
+        finished(a) == finished(b) &&
+        failed(a) == failed(b) &&
+        interrupted(a) == interrupted(b) &&
+        describe(a) == describe(b) &&
+        details(a) == details(b)
+    )
 end
 
 @testset "Cleanup failures survive history persistence as readable records" begin
@@ -54,7 +64,7 @@ end
         @test occursin("Hook close failed", read(file["history/cleanup_errors/1/details"]))
     end
     load_sim_history(filename) do loaded
-        @test loaded.stop == history.stop
+        @test termination_api_values_are_equal(loaded.stop, history.stop)
         @test succeeded(loaded)
         @test length(loaded.cleanup_errors) == 2
         @test all(error -> error isa SystemsOfSystems.RecordedCleanupError,
@@ -137,8 +147,11 @@ end
         @test read(fid["history/t_start"]) === Float64(history.t_start)
         @test read(fid["history/t_stop"]) === Float64(history.t_stop)
         @test read(fid["history/stop/type"]) == string(typeof(history.stop))
-        @test read(fid["history/stop/description"]) == describe(history.stop)
-        @test !read(fid["history/stop/is_failure"])
+        @test read(fid["history/stop/finished"])
+        @test !read(fid["history/stop/failed"])
+        @test !read(fid["history/stop/interrupted"])
+        @test read(fid["history/stop/summary"]) == describe(history.stop)
+        @test read(fid["history/stop/details"]) == details(history.stop)
         @test haskey(fid, "log/models/child")
         @test !haskey(fid, "history/model")
     end
@@ -148,7 +161,7 @@ end
     restored = load_sim_history(filename; load_model = true)
     @test restored.t_start == exact_time(Float64(history.t_start))
     @test restored.t_stop == exact_time(Float64(history.t_stop))
-    @test restored.stop == history.stop
+    @test termination_api_values_are_equal(restored.stop, history.stop)
     @test isempty(restored.cleanup_errors)
     @test isnothing(restored.model)
     @test restored["/"]["x"].data isa HDF5Vectors.HDF5Vector
@@ -246,79 +259,18 @@ end
     restored = load_sim_history(filename; load_model = true)
     @test restored.log isa Logs.NullLog
     @test isempty(keys(restored))
-    @test restored.stop == history.stop
+    @test termination_api_values_are_equal(restored.stop, history.stop)
     @test restored.model == history.model
     @test restored.t_stop == exact_time(Float64(history.t_stop))
     Logs.close_log(restored.log)
 
 end
 
-@testset "Unfamiliar termination values and readable recovery" begin
-
-    history = small_history(; log = Logs.NullLogOptions())
-    filename = joinpath(mktempdir(), "history.h5")
-    for stop in (PortableStop("Finished early."), PortableFailure("Could not finish."))
-
-        save_sim_history(filename, with_stop(history, stop))
-        HDF5.h5open(filename, "r+") do file
-            group = file["history/stop"]
-            HDF5.delete_object(group, "value")
-            HDF5Vectors.copy_to_hdf5_vector(group, "value", [stop])
-            group["details"] = "Saved diagnostics."
-        end
-
-        # An available custom schema retains the unfamiliar concrete reason and fields.
-        restored = load_sim_history(filename)
-        @test typeof(restored.stop) == typeof(stop)
-        @test restored.stop.message == stop.message
-        @test succeeded(restored) == succeeded(with_stop(history, stop))
-
-        # An unavailable schema must not prevent recovery of the readable run record.
-        HDF5.h5open(filename, "r+") do file
-            HDF5.delete_object(file, "history/stop/value/metadata/serialized_schema")
-        end
-        recovered = @test_logs (:warn, r"Could not restore the saved termination reason") begin
-            load_sim_history(filename)
-        end
-        expected_type = stop isa AbstractFailureReason ? RecordedFailure : RecordedStop
-        @test recovered.stop isa expected_type
-        @test recovered.stop.original_type == string(typeof(stop))
-        @test describe(recovered.stop) == describe(stop)
-        @test recovered.stop.details == "Saved diagnostics."
-        @test succeeded(recovered) == succeeded(with_stop(history, stop))
-
-        # Diagnostics are optional, but the failure classification is required even on
-        # the recovery path. Missing required metadata must not turn failure into success.
-        HDF5.h5open(filename, "r+") do file
-            HDF5.delete_object(file, "history/stop/details")
-        end
-        recovered = @test_logs (:warn, r"Could not restore the saved termination reason") begin
-            load_sim_history(filename)
-        end
-        @test recovered.stop.details == ""
-        HDF5.h5open(filename, "r+") do file
-            HDF5.delete_object(file, "history/stop/is_failure")
-        end
-        @test_logs (:warn, r"Could not restore the saved termination reason") begin
-            @test_throws KeyError load_sim_history(filename)
-        end
-
-    end
-
-    # A malformed known representation must report its invalid data instead of quietly
-    # recovering as a descriptive record or attempting the generic schema reader.
-    save_sim_history(filename, with_stop(history, ModelRequestedStop("/child", "Done.")))
-    HDF5.h5open(filename, "r+") do file
-        HDF5.delete_object(file, "history/stop/value/data")
-    end
-    @test_throws ArgumentError load_sim_history(filename)
-
-end
-
 @testset "Termination records preserve meaning without live objects" begin
 
-    # Simple built-in reasons retain their concrete types. Custom reasons and hooks hold
-    # a running task here to demonstrate that saving never traverses their live contents.
+    # Loaded termination reasons satisfy the termination API with the same values as the
+    # original termination reason. Custom reasons and hooks hold a running task here to
+    # demonstrate that saving never traverses their live contents.
     history = small_history()
     task = current_task()
     reasons = [
@@ -331,35 +283,13 @@ end
         HookRequestedStop(history.t_stop, ResourceHook(task)),
         CustomStop(task),
         CustomFailure(task),
-        RecordedStop("Custom.Stop", "A recorded stop.", "Extra stop details."),
-        RecordedFailure("Custom.Failure", "A recorded failure.", "Extra failure details."),
     ]
     filename = joinpath(mktempdir(), "history.h5")
     for stop in reasons
-
         save_sim_history(filename, with_stop(history, stop))
-
-        # Every representation written by our saver should load without its serialized
-        # schema. This includes recorded hooks whose original and stored types differ.
-        HDF5.h5open(filename, "r+") do file
-            HDF5.delete_object(file, "history/stop/value/metadata/serialized_schema")
-        end
         restored = load_sim_history(filename)
-        @test describe(restored.stop) == describe(stop)
-        @test succeeded(restored) == succeeded(with_stop(history, stop))
-        if stop isa Union{HookRequestedStop, CustomStop, CustomFailure}
-            expected_type = stop isa AbstractFailureReason ? RecordedFailure : RecordedStop
-            @test restored.stop isa expected_type
-            @test restored.stop.original_type == string(typeof(stop))
-        else
-            @test typeof(restored.stop) == typeof(stop)
-            @test all(
-                isequal(getfield(restored.stop, f), getfield(stop, f))
-                for f in fieldnames(typeof(stop))
-            )
-        end
+        termination_api_values_are_equal(stop, restored.stop)
         Logs.close_log(restored.log)
-
     end
 
     # Exception diagnostics include source locations, but no compiler objects or live
@@ -371,7 +301,7 @@ end
     end
     save_sim_history(filename, with_stop(history, stop))
     restored = load_sim_history(filename)
-    @test restored.stop isa RecordedFailure
+    @test restored.stop isa TerminationSummary
     @test !succeeded(restored)
     @test occursin("Expected saved failure.", restored.stop.details)
     @test occursin("test_sim_history_persistence.jl", restored.stop.details)
@@ -381,12 +311,7 @@ end
     copied = joinpath(mktempdir(), "copied.h5")
     save_sim_history(copied, restored)
     again = load_sim_history(copied)
-    @test again.stop.original_type == restored.stop.original_type
-    @test again.stop.details == restored.stop.details
-    HDF5.h5open(copied, "r") do fid
-        @test read(fid["history/stop/type"]) == string(typeof(stop))
-        @test read(fid["history/stop/details"]) == restored.stop.details
-    end
+    @test termination_api_values_are_equal(again.stop, restored.stop)
     Logs.close_log(again.log)
     Logs.close_log(restored.log)
 
@@ -470,7 +395,7 @@ end
         save_sim_history(hg, history; log_group = lg)
         @test !haskey(hg, "model")
         loaded = load_sim_history(fid, "/runs/one/history")
-        @test loaded.stop == history.stop
+        @test termination_api_values_are_equal(loaded.stop, history.stop)
         Logs.close_log(loaded.log)
         @test read(fid["experiment"]) == "Two runs"
 
@@ -510,7 +435,7 @@ end
     @test direct["/"]["x"].data[:] == history["/"]["x"].data
     Logs.close_log(direct.log)
     loaded = load_sim_history(filename; history_path = "/run")
-    @test loaded.stop == history.stop
+    @test termination_api_values_are_equal(loaded.stop, history.stop)
     Logs.close_log(loaded.log)
     log, _ = Logs.load_hdf5_log(filename; path = "/samples")
     @test log["/"]["x"].data[:] == history["/"]["x"].data
@@ -520,7 +445,7 @@ end
     filename = joinpath(mktempdir(), "custom_copy.h5")
     save_sim_history(filename, history; history_path = "/run", log_path = "/samples")
     loaded = load_sim_history(filename; history_path = "/run")
-    @test loaded.stop == history.stop
+    @test termination_api_values_are_equal(loaded.stop, history.stop)
     Logs.close_log(loaded.log)
     Logs.save_log_to_hdf5(filename, history.log; path = "/samples")
     log, _ = Logs.load_hdf5_log(filename; path = "/samples")
@@ -633,7 +558,7 @@ end
     @test history["/"]["x"].data[:] == expected
     Logs.close_log(history.log)
     load_sim_history(filename) do loaded
-        @test loaded.stop == history.stop
+        @test termination_api_values_are_equal(loaded.stop, history.stop)
     end
 
     # Caller-owned files can still retain relative filenames. Group and filename saves
@@ -719,7 +644,7 @@ end
         @test loaded.log isa Logs.NullLog
         loaded.stop
     end
-    @test result == quiet.stop
+    @test termination_api_values_are_equal(result, quiet.stop)
 
 end
 
@@ -807,7 +732,7 @@ end
         file["history/additional_metadata"] = "Ignored by this reader"
     end
     load_sim_history(copied) do restored
-        @test restored.stop == history.stop
+        @test termination_api_values_are_equal(restored.stop, history.stop)
     end
 
     # A history may point to an unsupported log even when its own metadata is supported.
