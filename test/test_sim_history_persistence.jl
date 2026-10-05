@@ -2,9 +2,10 @@ module TestSimHistoryPersistence
 
 using Test
 using SystemsOfSystems
-using SystemsOfSystems: Logs, Solvers, Hooks, exact_time, describe,
+using SystemsOfSystems: Logs, Solvers, Hooks, exact_time,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    TerminationSummary, AbstractStopReason, AbstractFailureReason
+    TerminationSummary, AbstractStopReason, AbstractFailureReason,
+    finished, failed, interrupted, describe, details
 import HDF5
 import HDF5Vectors
 
@@ -288,7 +289,7 @@ end
     for stop in reasons
         save_sim_history(filename, with_stop(history, stop))
         restored = load_sim_history(filename)
-        termination_api_values_are_equal(stop, restored.stop)
+        @test termination_api_values_are_equal(stop, restored.stop)
         Logs.close_log(restored.log)
     end
 
