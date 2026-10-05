@@ -32,8 +32,7 @@ public SimulationTimes,
     normalized_scalar_error, normalized_variable_error,
     AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    RecordedStop, RecordedFailure, AbstractCleanupError, CleanupError,
-    RecordedCleanupError
+    AbstractCleanupError, CleanupError, RecordedCleanupError
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -858,7 +857,7 @@ end
 # TODO: The stop reasons could move to a module in a file.
 
 export finished, failed, interrupted, describe, details
-export export_termination_reason, import_termination_reason
+export export_termination_reason, import_termination_reason, TerminationSummary
 
 # Abstract types
 
@@ -980,7 +979,8 @@ struct EncounteredError <: AbstractFailureReason
     exception::Exception
     trace::Any
 end
-describe(stop::EncounteredError) = "The sim experienced an error."
+describe(::EncounteredError) = "The sim experienced an error."
+details(stop::EncounteredError) = sprint(showerror, stop.exception, stop.trace)
 
 # A portable termination reason that represents the full API.
 
@@ -1014,7 +1014,7 @@ end
 finished(stop::TerminationSummary) = stop.finished
 failed(stop::TerminationSummary) = stop.failed
 interrupted(stop::TerminationSummary) = stop.interrupted
-describe(stop::TerminationSummary) = stop.description
+describe(stop::TerminationSummary) = stop.summary
 details(stop::TerminationSummary) = stop.details
 
 """
@@ -1038,41 +1038,6 @@ function import_termination_reason end
 
 
 
-# TODO: Remove RecordedStop and RecordedFailure in favor of TerminationSummary.
-
-"""
-    RecordedStop(original_type, description, details = "")
-
-A description of a normal termination saved in place of the original reason. This lets a
-history retain the reason for stopping without restoring objects such as a simulation hook.
-
-`original_type` is the original reason's type name, `description` is the text returned by
-`describe`, and `details` holds optional diagnostic text. A history with this reason is
-classified as successful by `succeeded`.
-"""
-struct RecordedStop <: AbstractStopReason
-    original_type::String
-    description::String
-    details::String
-end
-RecordedStop(original_type, description) = RecordedStop(original_type, description, "")
-describe(reason::RecordedStop) = reason.description
-
-"""
-    RecordedFailure(original_type, description, details = "")
-
-A description of a failure saved in place of the original reason. It retains the original
-reason's type name, its `describe` text, and optional diagnostics in `details`, without
-restoring objects such as an exception and its stack trace. A history with this reason
-remains a failure according to `succeeded`.
-"""
-struct RecordedFailure <: AbstractFailureReason
-    original_type::String
-    description::String
-    details::String
-end
-RecordedFailure(original_type, description) = RecordedFailure(original_type, description, "")
-describe(reason::RecordedFailure) = reason.description
 
 # TODO: Should cleanup errors have a similar "portable" container that stores API results, like the termination reasons do, or is this irrevelent because we never need to load them and have them do anything?
 
@@ -1283,11 +1248,10 @@ the loaded log. Closing the log leaves the caller's file and group handles open.
 
 The final model is loaded only when it was saved and `load_model = true`; otherwise it is
 `nothing`. Times are restored with `exact_time` from the saved floating-point values.
-Supported built-in termination reasons retain their types; custom reasons and reasons
-containing live objects are restored as `RecordedStop` or `RecordedFailure`. If an unfamiliar
-termination representation cannot be loaded, a warning is emitted and its readable record
-is used instead. Cleanup failures load as `RecordedCleanupError` values with context and
-diagnostic text; original exception objects and stack traces are not restored.
+Termination reasons load as `TerminationSummary`, which retains the full API for termination
+reasons (`finished`, `failed`, `interrupted`, `describe`, `details`). Cleanup failures load
+as `RecordedCleanupError` values with context and diagnostic text; original exception
+objects and stack traces are not restored.
 
 Unsupported or malformed format versions, and a missing history version, produce an
 `ArgumentError`. The HDF5 format guide lists supported history and log versions and the

@@ -104,10 +104,11 @@ history.h5
 │   ├── t_stop = 1.0
 │   ├── stop/
 │   │   ├── type = "SystemsOfSystems.ReachedEndTime"
-│   │   ├── description = "The sim reached the specified end time of 1.0."
-│   │   ├── is_failure = false
-│   │   ├── details = ...          # Present for records with diagnostic text
-│   │   └── value/ ...            # Structured termination record
+│   │   ├── finished = true
+│   │   ├── failed = false
+│   │   ├── interrupted = false
+│   │   ├── summary = "The sim reached the specified end time of 1.0."
+│   │   ├── details = ""
 │   ├── cleanup_errors/
 │   │   └── count = 0             # Number of failed hook or resource closes
 │   └── model/ ...                # Optional final model value
@@ -197,17 +198,12 @@ Saving replaces the destination contents and is not transactional. If a write fa
 
 ### Termination Records
 
-`history/stop/type`, `history/stop/description`, and `history/stop/is_failure` are ordinary HDF5 datasets that can be inspected without Julia. `history/stop/value` stores the restorable reason through HDF5Vectors. Simple built-in reasons (`ReachedEndTime`, `ModelRequestedStop`, `Interrupted`, the unknown-stop sentinel, and numerical solver failures) retain their concrete types and fields.
-
-Hooks, exceptions, and custom termination reasons may hold live objects that do not belong in a saved record. These load as [`SystemsOfSystems.RecordedStop`](@ref) or [`SystemsOfSystems.RecordedFailure`](@ref), retaining the original type name and description. The failure distinction preserves `succeeded(history)`. Custom reason authors do not need to implement a persistence interface; a useful `describe` method provides the recorded description.
-
-For `EncounteredError`, the recorded failure's `details` field contains the rendered exception and stack trace. The same text is available at `history/stop/details` for direct HDF5 inspection. Neither the exception object nor its compiler state is reconstructed. Re-saving a recorded reason retains its original identity and diagnostic text.
+In general, termination reasons (`<: AbstractTerminationReason`) can be flexible and store information that cannot always be meaningfully saved and loaded. When saving a `SimHistory`, this information is discarded, and a `TerminationSummary` will be saved in its stead. The `TerminationSummary` stores the results of the API for termination reasons, and hence it can be loaded and completely satisfy the same API. However, the specific type information for a termination reason is lost on saving.
 
 ```@docs
 SystemsOfSystems.save_sim_history
 SystemsOfSystems.load_sim_history
-SystemsOfSystems.RecordedStop
-SystemsOfSystems.RecordedFailure
+SystemsOfSystems.TerminationSummary
 ```
 
 ## Time-Series Utilities
