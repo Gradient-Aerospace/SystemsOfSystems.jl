@@ -1,7 +1,7 @@
 module TerminationReasons
 
 export AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
-    AbstractInterruption, finished, failed, interrupted, describe, details,
+    finished, failed, interrupted, describe, details,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted,
     EncounteredError, TerminationSummary
 
@@ -28,11 +28,6 @@ A condition that prevented the simulation from producing another valid accepted 
 """
 abstract type AbstractFailureReason <: AbstractTerminationReason end
 
-"""
-The simulation was interrupted, e.g. with ctrl+c.
-"""
-abstract type AbstractInterruption <: AbstractTerminationReason end
-
 # Termination reason interface
 
 """
@@ -57,7 +52,7 @@ failed(stop::AbstractTerminationReason) = stop isa AbstractFailureReason
 Returns true if the simulation was interrupted before a nominal conclusion, without
 reporting a failure.
 """
-interrupted(stop::AbstractTerminationReason) = stop isa AbstractInterruption
+interrupted(stop::AbstractTerminationReason) = false
 
 """
     describe(reason::AbstractTerminationReason)
@@ -117,10 +112,12 @@ A catchable interruption stopped the simulation at its last fully accepted time,
 `interrupted` returns true, while `finished` and `failed` return false.
 `succeeded(history)` remains true because an interruption is not a failure.
 """
-struct Interrupted <: AbstractInterruption
+struct Interrupted <: AbstractStopReason
     t::ExactTime
 end
 describe(stop::Interrupted) = "The sim was interrupted at t = $(float(stop.t))."
+interrupted(::Interrupted) = true
+finished(::Interrupted) = false
 
 """
 User model code or simulation infrastructure raised an unexpected exception.
