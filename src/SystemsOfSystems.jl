@@ -1632,6 +1632,9 @@ function make_runtime(inputs)
     validate_requested_times(t)
     t_start = first(t)
 
+    # Turn the GC policy request into a policy runtime before opening any resources.
+    gc_policy = GCPolicies.create_gc_runtime(inputs.options.gc_policy)
+
     # Pull out the full model description from the initialization function, as well as the
     # typed model description, and finally the model state description.
     context = initialization_context(;
@@ -1675,9 +1678,6 @@ function make_runtime(inputs)
             close_hooks(hooks, t_start, initial_model)
             rethrow(err)
         end
-
-        # We'll forward the GC policy directly.
-        gc_policy = inputs.options.gc_policy
 
         return (;
             inputs.updates_fcn,
