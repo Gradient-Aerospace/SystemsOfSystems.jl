@@ -8,6 +8,7 @@
 * Added independent HDF5 history and log format-version checks and writer-package provenance. Existing unversioned logs remain readable; copied HDF5 logs retain their original format and provenance.
 * Changed default HDF5 group for `save_log_to_hdf5` from "/" to "/log".
 * Added `cleanup_errors` to `SimHistory`.
+* Added an API for termination reasons (`finished`, `failed`, `interrupted`, `describe`, and `details`).
 
 ## v1.1.0
 

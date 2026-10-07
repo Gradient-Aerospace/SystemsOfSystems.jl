@@ -4,6 +4,10 @@ discrete dynamics, events, random variables, resources, and configurable logging
 """
 module SystemsOfSystems
 
+#######
+# API #
+#######
+
 # Running simulations
 export initialize, simulate, SimHistory, SimOptions, succeeded,
     save_sim_history, load_sim_history,
@@ -17,23 +21,39 @@ export ModelDescription, VariableDescription, RandomVariableDescription,
 # Utilities
 export Dimension,
     BranchingSeed, branch,
-    TimeSeries, SampleAndHold, LinearInterpolation,
-    plot_ts, plot_ts!,
-    ContinuousWhiteNoise, DiscreteWhiteNoise,
-    AbstractSchedule, RegularSchedule, OffsetRegularSchedule, AlwaysTriggeringSchedule,
-    on_triggering, is_triggering, next_trigger_time, next_regular_time,
-    Samplers, LoggingPolicies
+    ContinuousWhiteNoise, DiscreteWhiteNoise
 
-# Qualified public interfaces
-public SimulationTimes,
-    KEEP_T_NEXT, NO_T_NEXT,
-    is_regular_step_triggering, # backward compatibility
-    AbstractTimeSeriesInterpolator, select,
-    normalized_scalar_error, normalized_variable_error,
-    AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
+# Logging
+export Samplers, LoggingPolicies
+
+# Triggering and schedules
+export AbstractSchedule, RegularSchedule, OffsetRegularSchedule, AlwaysTriggeringSchedule,
+    on_triggering, is_triggering, next_trigger_time, next_regular_time
+public SimulationTimes, KEEP_T_NEXT, NO_T_NEXT,
+    is_regular_step_triggering # backward compatibility
+
+# TimeSeries
+export TimeSeries, SampleAndHold, LinearInterpolation, plot_ts, plot_ts!
+public AbstractTimeSeriesInterpolator, select
+
+# Termination reasons
+export TerminationReasons
+public AbstractTerminationReason, AbstractStopReason, AbstractFailureReason,
+    finished, failed, interrupted, describe, details,
     ReachedEndTime, ModelRequestedStop, HookRequestedStop, Interrupted, EncounteredError,
-    RecordedStop, RecordedFailure, AbstractCleanupError, CleanupError,
-    RecordedCleanupError, describe
+    TerminationSummary
+
+# Cleanup errors
+export CleanupErrors
+public AbstractCleanupError, CleanupError, CleanupErrorSummary,
+    cleanup_context, cleanup_details
+
+# Integration
+public normalized_scalar_error, normalized_variable_error
+
+################
+# Dependencies #
+################
 
 using Dimensions: eachdim
 using Random: Xoshiro, randn
@@ -63,6 +83,12 @@ using .Samplers
 
 include("LoggingPolicies.jl")
 using .LoggingPolicies
+
+include("TerminationReasons.jl")
+using .TerminationReasons
+
+include("CleanupErrors.jl")
+using .CleanupErrors
 
 #########################
 # User Function Outputs #
@@ -851,156 +877,6 @@ function copy_model_state_description_except(
     )
 end
 
-################
-# Stop Reasons #
-################
-
-"""
-The common supertype for every reason a simulation ceased running.
-
-Normal stop requests and failures are deliberately separate categories. A model or hook
-request is part of the modeled lifecycle; a numerical or software failure means that
-lifecycle could not produce another valid sample.
-"""
-abstract type AbstractTerminationReason end
-
-"""
-A normal, successfully processed request to stop a simulation.
-"""
-abstract type AbstractStopReason <: AbstractTerminationReason end
-
-"""
-A condition that prevented the simulation from producing another valid accepted sample.
-"""
-abstract type AbstractFailureReason <: AbstractTerminationReason end
-
-"""
-Internal sentinel indicating that the simulation loop should continue.
-"""
-struct UnknownStopReason <: AbstractStopReason end
-
-"""
-The simulation successfully processed its requested final sample.
-"""
-struct ReachedEndTime <: AbstractStopReason
-    t_end::ExactTime
-end
-
-"""
-The first model encountered in deterministic hierarchy order requested a normal stop.
-"""
-struct ModelRequestedStop <: AbstractStopReason
-    model_path::String
-    reason::String
-end
-
-"""
-The first hook encountered in configured order requested a normal stop.
-"""
-struct HookRequestedStop <: AbstractStopReason
-    t::ExactTime
-    hook::Hooks.AbstractHook
-end
-
-"""
-    Interrupted(t)
-
-A catchable interruption stopped the simulation at its last fully accepted time, `t`.
-This is a normal stop; `succeeded(history)` is true for an interrupted simulation.
-"""
-struct Interrupted <: AbstractStopReason
-    t::ExactTime
-end
-
-"""
-User model code or simulation infrastructure raised an unexpected exception.
-"""
-struct EncounteredError <: AbstractFailureReason
-    time::Float64
-    exception::Exception
-    trace::Any
-end
-
-"""
-    RecordedStop(original_type, description, details = "")
-
-A description of a normal termination saved in place of the original reason. This lets a
-history retain the reason for stopping without restoring objects such as a simulation hook.
-
-`original_type` is the original reason's type name, `description` is the text returned by
-`describe`, and `details` holds optional diagnostic text. A history with this reason is
-classified as successful by `succeeded`.
-"""
-struct RecordedStop <: AbstractStopReason
-    original_type::String
-    description::String
-    details::String
-end
-RecordedStop(original_type, description) = RecordedStop(original_type, description, "")
-
-"""
-    RecordedFailure(original_type, description, details = "")
-
-A description of a failure saved in place of the original reason. It retains the original
-reason's type name, its `describe` text, and optional diagnostics in `details`, without
-restoring objects such as an exception and its stack trace. A history with this reason
-remains a failure according to `succeeded`.
-"""
-struct RecordedFailure <: AbstractFailureReason
-    original_type::String
-    description::String
-    details::String
-end
-RecordedFailure(original_type, description) = RecordedFailure(original_type, description, "")
-
-"""
-    describe(reason::AbstractTerminationReason)
-
-Returns a concise, human-readable description of why a simulation stopped.
-"""
-describe(reason::AbstractTerminationReason) =
-    string(typeof(reason))
-describe(reason::Union{RecordedStop, RecordedFailure}) = reason.description
-describe(stop::UnknownStopReason) =
-    "The sim stopped for an unknown reason."
-describe(stop::ReachedEndTime) =
-    "The sim reached the specified end time of $(float(stop.t_end))."
-describe(stop::ModelRequestedStop) =
-    "A model ($(stop.model_path)) requested a stop: $(stop.reason)."
-describe(stop::HookRequestedStop) =
-    "A $(stop.hook) hook requested a stop at t = $(float(stop.t))."
-describe(stop::Interrupted) =
-    "The sim was interrupted at t = $(float(stop.t))."
-describe(stop::EncounteredError) =
-    "The sim experienced an error."
-
-"""
-A failure while closing a hook or resource. `context` identifies what was being closed.
-"""
-abstract type AbstractCleanupError end
-
-"""
-    CleanupError(context, exception, trace)
-
-A cleanup failure from this process, retaining the thrown value and stack trace.
-"""
-struct CleanupError <: AbstractCleanupError
-    context::String
-    exception::Any
-    trace::Any
-end
-
-"""
-    RecordedCleanupError(context, details)
-
-A cleanup failure loaded from a saved history. `details` contains readable exception and
-stack trace text; the original exception object is not restored.
-"""
-struct RecordedCleanupError <: AbstractCleanupError
-    context::String
-    details::String
-end
-
 ##############
 # SimOptions #
 ##############
@@ -1113,12 +989,12 @@ SimHistory(t_start, t_stop, log, model, stop) =
     succeeded(h::SimHistory)
 
 Returns true if the simulation ended without an unexpected error or numerical failure.
-An `Interrupted` stop counts as success. Applications requiring completion can check for
-`ReachedEndTime` or their expected model stop reason. Cleanup failures do not affect this
+An interruption counts as success. `finished(h.stop)` reports whether the run reached a
+nominal end condition, including a deliberate early stop. Cleanup failures do not affect this
 result; applications requiring finalized resources can also check
 `isempty(h.cleanup_errors)`.
 """
-succeeded(h::SimHistory) = !(h.stop isa AbstractFailureReason)
+succeeded(h::SimHistory) = !failed(h.stop)
 
 """
     save_sim_history(filename, history; history_path = "/history", log_path = nothing, save_model = false)
@@ -1181,11 +1057,11 @@ the loaded log. Closing the log leaves the caller's file and group handles open.
 
 The final model is loaded only when it was saved and `load_model = true`; otherwise it is
 `nothing`. Times are restored with `exact_time` from the saved floating-point values.
-Supported built-in termination reasons retain their types; custom reasons and reasons
-containing live objects are restored as `RecordedStop` or `RecordedFailure`. If an unfamiliar
-termination representation cannot be loaded, a warning is emitted and its readable record
-is used instead. Cleanup failures load as `RecordedCleanupError` values with context and
-diagnostic text; original exception objects and stack traces are not restored.
+Termination reasons load as `TerminationSummary`, which retains the full API for termination
+reasons (`finished`, `failed`, `interrupted`, `describe`, `details`). Cleanup failures load
+as `CleanupErrorSummary` values, preserving `cleanup_context` and `cleanup_details` along
+with the original type name when available. Exception objects and stack traces are not
+restored.
 
 Unsupported or malformed format versions, and a missing history version, produce an
 `ArgumentError`. The HDF5 format guide lists supported history and log versions and the
@@ -1594,7 +1470,7 @@ function step!(
     return (
         t_next,
         msd,
-        isnothing(stop) ? UnknownStopReason() : stop,
+        isnothing(stop) ? TerminationReasons.UnknownStopReason() : stop,
         result.t_next_crv_draw,
     )
 
@@ -1837,7 +1713,7 @@ function loop!(runtime)
     # These are updated by the loop.
     t_completed = first(runtime.t)
     msd = runtime.msd
-    stop = UnknownStopReason()
+    stop = TerminationReasons.UnknownStopReason()
     has_continuous_random_variables =
         !isempty(ommd.continuous_random_variables) ||
         ommd.models_have_continuous_random_variables
@@ -1846,7 +1722,7 @@ function loop!(runtime)
     # No matter what happens, this function returns all of the progress it's made.
     try
 
-        while isa(stop, UnknownStopReason)
+        while isa(stop, TerminationReasons.UnknownStopReason)
 
             # `step!` returns only after the accepted continuous endpoint and its discrete
             # update are complete. Assigning its result here is the simulation's commit
@@ -1862,14 +1738,18 @@ function loop!(runtime)
             # not run this path, even if their reported time happens to equal `t_end`.
             should_sample_terminal_rates = (
                 stop isa AbstractStopReason &&
-                (t_completed == t_end || !(stop isa UnknownStopReason))
+                (t_completed == t_end || !(stop isa TerminationReasons.UnknownStopReason))
             )
             if should_sample_terminal_rates
 
                 # `UnknownStopReason` means that reaching `t_end` initiated termination; it
                 # is an internal loop sentinel, not a reason that should take precedence
                 # over a terminal model request or `ReachedEndTime`.
-                terminal_stop = stop isa UnknownStopReason ? nothing : stop
+                terminal_stop = if stop isa TerminationReasons.UnknownStopReason
+                    nothing
+                else
+                    stop
+                end
                 SimulationLogging.log_continuous_state_stuff!(
                     t_completed, float(t_completed), logging_runtime, msd,
                 )

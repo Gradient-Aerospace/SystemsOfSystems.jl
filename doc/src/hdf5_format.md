@@ -47,18 +47,22 @@ The following entries are relative to the history group:
 | `log_path` | Scalar string dataset | Absolute HDF5 path to the log group in the same file. |
 | `t_start`, `t_stop` | Scalar `Float64` datasets | Requested start time and last completed simulation time, using the simulation's time coordinate. |
 | `stop/type` | Scalar string dataset | Original termination reason's type name, for identification when inspecting results. |
-| `stop/description` | Scalar string dataset | Human-readable reason for termination. |
-| `stop/is_failure` | Scalar Boolean dataset | Whether the run terminated with a failure reason. A normal early stop is not a failure. |
-| `stop/details` | Optional scalar string dataset | Additional diagnostic text, such as an exception and stack trace. Absence means no additional text was saved. |
-| `stop/value/` | HDF5Vectors group | Structured saved termination reason. Its schema describes the recorded fields; it may represent a descriptive record rather than the original reason. |
+| `stop/finished` | Scalar Boolean dataset | Whether the run propagated up to a nominal termination condition. |
+| `stop/failed` | Scalar Boolean dataset | Whether the run terminated with a failure reason. |
+| `stop/interrupted` | Scalar Boolean dataset | Whether the run terminated due to an interrupt signal (e.g., ctrl+c). |
+| `stop/summary` | Scalar string dataset | Human-readable reason for termination. |
+| `stop/details` | Scalar string dataset | Human-readable details about termination. |
 | `cleanup_errors/count` | Optional scalar integer dataset | Number of cleanup failures, in close order. Absence of the group in older files means zero. |
+| `cleanup_errors/<n>/type` | Optional scalar string dataset | Original cleanup error's type name. New files include it; older entries load with an empty type label. |
 | `cleanup_errors/<n>/context` | Scalar string dataset | Hook or resource that failed to close, with entries numbered from `1`. |
-| `cleanup_errors/<n>/details` | Scalar string dataset | Readable exception and stack trace text. |
+| `cleanup_errors/<n>/details` | Scalar string dataset | Diagnostic text returned by `cleanup_details`, including the rendered exception and stack trace for a live `CleanupError`. |
 | `model/` | Optional HDF5Vectors group | One final model value, present when saved with `save_model = true`. Its schema and portability depend on the application's model type. |
 
-All entries except `stop/details`, `cleanup_errors`, `model`, and the provenance dataset are required in a saved history. New files include `cleanup_errors/count`, even when it is zero. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme. `stop/is_failure` supplies the primary success/failure distinction without parsing either string; a nonzero cleanup count separately indicates failed teardown.
+All entries except `cleanup_errors`, `model`, and the provenance dataset are required in a saved history. New files include `cleanup_errors/count`, even when it is zero. Within each cleanup entry, `context` and `details` are required, while `type` is optional for compatibility with older files. Type names and descriptions are descriptive text: their wording is not a machine-readable classification scheme.
 
-The Julia history loader restores known built-in termination reasons from their field schemas without deserializing saved schema objects. Descriptive reasons are reconstructed from the readable `stop` datasets. For an unfamiliar stored reason, the loader first tries the ordinary HDF5Vectors reader; if that fails, it warns and uses the readable record, preserving the original type name, description, diagnostics, and failure classification. Malformed fields in a recognized built-in reason remain an error. This recovery applies only to termination reasons, not to log or optional model loading.
+The Julia history loader constructs a `TerminationSummary` directly from the six `stop` datasets. It preserves the results of `finished`, `failed`, `interrupted`, `describe`, and `details`, along with the original type name as descriptive text. It does not reconstruct the original termination reason.
+
+Cleanup entries likewise load directly as `CleanupErrorSummary` values. Their `context` and `details` datasets preserve the results of `cleanup_context` and `cleanup_details`. The summaries retain the saved type labels and error order when re-saved. No exception objects or stack traces are reconstructed.
 
 Because `log_path` is within the file, moving or renaming the file preserves it. Moving a log group within the file requires updating any history that refers to it. A log group with `is_null = true` records that logging was disabled; it has no model tree. Ordinary logs need not have an `is_null` entry.
 
@@ -154,6 +158,6 @@ Constants supplied with `VariableDescription` also have the grouping and `interp
 
 The public entries above are sufficient to navigate a run and read its portably encoded log data. Other entries are not part of the SystemsOfSystems external-reader contract. In particular, `serialized_type`, `serialized_value_type`, and `serialized_interpolator` store Julia reconstruction information. The `is_variable_description` flag selects a Julia wrapper when loading a constant. These entries may change without changing the public layout.
 
-The public HDF5Vectors groups, including `stop/value` and the optional final `model`, can be inspected according to their ordinary stored schemas. SystemsOfSystems does not promise one fixed set of fields for arbitrary application models or all termination reasons: the schema describes the value actually saved. The readable `stop` datasets provide a uniform termination summary without interpreting a particular reason's structure. Julia-serialized schemas and payloads remain Julia-specific, even when stored inside an otherwise public group.
+The public HDF5Vectors groups for logged values and the optional final `model` can be inspected according to their ordinary stored schemas. SystemsOfSystems does not promise one fixed set of fields for arbitrary application models: the schema describes the value actually saved. Termination information has the fixed layout of six ordinary `stop` datasets described above. Julia-serialized schemas and payloads remain Julia-specific, even when stored inside an otherwise public group.
 
 Adding entries does not invalidate this layout. Existing public paths and their meanings are compatibility commitments, while unlisted entries may change. Readers should also honor the separate HDF5Vectors format version before interpreting vector storage. This page describes newly written files; older standalone logs may use a root-level model layout or lack metadata introduced in later releases.

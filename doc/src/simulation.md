@@ -25,7 +25,9 @@ Julia's property destructuring is convenient when only part of the result is nee
 (; t_stop, model) = simulate(...)
 ```
 
-[`succeeded`](@ref) reports whether the simulation ended normally. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. Cleanup failures are independent: `history.cleanup_errors` lists them in close order, with the hook or resource in `context` and the original exception and trace in `exception` and `trace`. Applications requiring finalized outputs can check `isempty(history.cleanup_errors)` in addition to `succeeded(history)`. Applications requiring completion can check for `ReachedEndTime` or their expected model stop reason.
+[`succeeded`](@ref) reports whether the simulation ended without a failure: it is equivalent to `!failed(history.stop)`. Reaching the requested end time, a deliberate stop request, and a catchable interruption count as success; an unexpected exception or numerical solver failure does not. [`finished`](@ref SystemsOfSystems.finished) distinguishes a nominal end condition from an interruption, but includes deliberate early stops. These functions work for both a newly returned history and a loaded history.
+
+Cleanup failures are independent: `history.cleanup_errors` lists them in close order. [`cleanup_context`](@ref SystemsOfSystems.cleanup_context) identifies what was being closed, and [`cleanup_details`](@ref SystemsOfSystems.cleanup_details) provides diagnostic text. Both functions work for live errors and loaded summaries. Applications requiring finalized outputs can check `isempty(history.cleanup_errors)` in addition to `succeeded(history)`.
 
 ```julia
 if !succeeded(history)
@@ -59,6 +61,71 @@ position = all_series["/vehicle:position"]
 ```@docs
 SystemsOfSystems.Logs.ModelHistory
 SystemsOfSystems.Logs.gather_all_time_series
+```
+
+## Stop Reasons
+
+The history returned from `simulate` includes a `stop` field which contains an `AbstractTerminationReason`, which has the following interface:
+
+| Function | Result |
+| --- | --- |
+| `finished(reason)::Bool` | Whether the simulation reached a nominal end condition, including a model or hook stop request. |
+| `failed(reason)::Bool` | Whether an unexpected exception or numerical failure prevented propagation. |
+| `interrupted(reason)::Bool` | Whether the simulation was interrupted. |
+| `describe(reason)::String` | A concise description of why the simulation stopped. |
+| `details(reason)::String` | Additional diagnostic text, or an empty string. |
+
+For example, we can report a run's status without depending on its concrete reason type:
+
+```julia
+using SystemsOfSystems.TerminationReasons
+
+println(describe(history.stop))
+if interrupted(history.stop)
+    println("The run was interrupted before a nominal end condition.")
+elseif failed(history.stop)
+    println(details(history.stop))
+end
+```
+
+Custom reasons can subtype `AbstractTerminationReason` and provide custom methods for the interface functions above.
+
+Applications requiring a particular end condition can inspect the concrete reason in a history returned by `simulate`, for example with `history.stop isa ReachedEndTime`. `finished` reports nominal termination generally, so it does not distinguish reaching the requested end time from stopping early at a model's request. The summary's type name and descriptions are descriptive text rather than a stable machine-readable classification of specific reasons.
+
+### Interruption
+
+A catchable `InterruptException` raised during the simulation loop produces `Interrupted(history.t_stop)`. The returned time and model describe the last fully accepted simulation sample, including its discrete update. An interrupted intermediate solver stage is discarded. Hooks and resources follow the normal teardown path and receive the accepted endpoint.
+
+Interruption leaves logging unchanged, just as an unexpected exception does. No final sample is added and no new continuous outputs are evaluated. With regular sampling, the last logged state may therefore be older than `history.t_stop`; `history.model` contains the last accepted state.
+
+For an interruption, `interrupted(history.stop)` is true, while `finished(history.stop)` and `failed(history.stop)` are false. `succeeded(history)` remains true because it reports the absence of failure rather than functional completion. These results are preserved when saving and loading the history.
+
+SystemsOfSystems handles catchable Julia interruptions during the simulation loop. Applications control operating-system signal handling and process exit codes. Uncatchable termination cannot guarantee cleanup or complete log files.
+
+## Time-Series Utilities
+
+[`SystemsOfSystems.select`](@ref) derives a new time series while preserving its timestamps and metadata. It is public but qualified because `select` is a common name in data-analysis packages.
+
+```julia
+speed = SystemsOfSystems.select(history["/"]["velocity"]; title = "Speed") do velocity
+    abs(velocity)
+end
+```
+
+[`plot_ts`](@ref) creates a new Makie figure. [`plot_ts!`](@ref) adds a time series to an existing figure or layout target. Either function requires a loaded Makie backend.
+
+```julia
+using CairoMakie
+
+figure = Figure()
+plot_ts!(figure[1, 1], history["/"]["position"])
+figure
+```
+
+```@docs
+SystemsOfSystems.select
+SystemsOfSystems.plot_ts
+SystemsOfSystems.plot_ts!
 ```
 
 ## Saving and Loading Histories
@@ -103,11 +170,12 @@ history.h5
 │   ├── t_start = 0.0
 │   ├── t_stop = 1.0
 │   ├── stop/
-│   │   ├── type = "SystemsOfSystems.ReachedEndTime"
-│   │   ├── description = "The sim reached the specified end time of 1.0."
-│   │   ├── is_failure = false
-│   │   ├── details = ...          # Present for records with diagnostic text
-│   │   └── value/ ...            # Structured termination record
+│   │   ├── type = "SystemsOfSystems.TerminationReasons.ReachedEndTime"
+│   │   ├── finished = true
+│   │   ├── failed = false
+│   │   ├── interrupted = false
+│   │   ├── summary = "The sim reached the specified end time of 1.0."
+│   │   └── details = ""
 │   ├── cleanup_errors/
 │   │   └── count = 0             # Number of failed hook or resource closes
 │   └── model/ ...                # Optional final model value
@@ -195,60 +263,56 @@ Older standalone logs stored their data at the file root. `Logs.load_hdf5_log` s
 
 Saving replaces the destination contents and is not transactional. If a write fails, the destination may contain a partial result, and previous contents may already have been replaced. This includes failures while saving an optional model. When an existing result needs to be preserved until a new save succeeds, the new result can be saved to a separate file first. Saving metadata beside a live log preserves that log, but failed metadata writes may leave an incomplete history group.
 
-### Termination Records
+### Termination Summaries
 
-`history/stop/type`, `history/stop/description`, and `history/stop/is_failure` are ordinary HDF5 datasets that can be inspected without Julia. `history/stop/value` stores the restorable reason through HDF5Vectors. Simple built-in reasons (`ReachedEndTime`, `ModelRequestedStop`, `Interrupted`, the unknown-stop sentinel, and numerical solver failures) retain their concrete types and fields.
+In general, termination reasons (`<: AbstractTerminationReason`) can be flexible and store information that cannot always be meaningfully saved and loaded. When saving a `SimHistory`, this information is discarded, and a [`TerminationSummary`](@ref SystemsOfSystems.TerminationSummary) will be saved in its stead. The `TerminationSummary` stores the results of the API for termination reasons (`finished`, `failed`, `interrupted`, `describe`, and `details`), and hence it can be loaded and return the same values for those functions. However, the specific type information for a termination reason is lost on saving.
 
-Hooks, exceptions, and custom termination reasons may hold live objects that do not belong in a saved record. These load as [`SystemsOfSystems.RecordedStop`](@ref) or [`SystemsOfSystems.RecordedFailure`](@ref), retaining the original type name and description. The failure distinction preserves `succeeded(history)`. Custom reason authors do not need to implement a persistence interface; a useful `describe` method provides the recorded description.
+The original type name is retained in the summary's `type` field for identification. Reason-specific fields, such as a model path or solver step size, are available only through the saved descriptions when those descriptions include them. Hooks, exceptions, and stack traces are not restored. For `EncounteredError`, `details` retains the rendered exception and stack trace as text.
 
-For `EncounteredError`, the recorded failure's `details` field contains the rendered exception and stack trace. The same text is available at `history/stop/details` for direct HDF5 inspection. Neither the exception object nor its compiler state is reconstructed. Re-saving a recorded reason retains its original identity and diagnostic text.
+The same summary is useful without saving a history. For example, we can collect portable information for another application:
+
+```julia
+using SystemsOfSystems.TerminationReasons
+
+summary = TerminationSummary(history.stop)
+summary.type
+summary.summary
+summary.details
+finished(summary) == finished(history.stop) # true
+```
 
 ```@docs
 SystemsOfSystems.save_sim_history
 SystemsOfSystems.load_sim_history
-SystemsOfSystems.RecordedStop
-SystemsOfSystems.RecordedFailure
+SystemsOfSystems.TerminationSummary
 ```
 
-## Time-Series Utilities
+### Cleanup Error Records
 
-[`SystemsOfSystems.select`](@ref) derives a new time series while preserving its timestamps and metadata. It is public but qualified because `select` is a common name in data-analysis packages.
+A live `CleanupError` retains the original exception and stack trace. Saving converts each cleanup error to a [`CleanupErrorSummary`](@ref SystemsOfSystems.CleanupErrorSummary), which stores its original type name and the results of `cleanup_context` and `cleanup_details`. Loading returns these summaries in the same order, without reconstructing exception objects or stack traces.
+
+The `CleanupErrors` module exports the cleanup types and diagnostic functions. We can construct a summary without saving a history, or report diagnostics through the shared interface:
 
 ```julia
-speed = SystemsOfSystems.select(history["/"]["velocity"]; title = "Speed") do velocity
-    abs(velocity)
+using SystemsOfSystems.CleanupErrors
+
+for err in history.cleanup_errors
+    println(cleanup_context(err))
+    println(cleanup_details(err))
+    summary = CleanupErrorSummary(err)
+    println(summary.type)
 end
 ```
 
-[`plot_ts`](@ref) creates a new Makie figure. [`plot_ts!`](@ref) adds a time series to an existing figure or layout target. Either function requires a loaded Makie backend.
-
-```julia
-using CairoMakie
-
-figure = Figure()
-plot_ts!(figure[1, 1], history["/"]["position"])
-figure
-```
+Custom cleanup errors subtype `AbstractCleanupError` and implement `cleanup_context` and `cleanup_details`, each returning a string. Summary conversion calls these methods without inspecting other fields. The type name is descriptive text; it does not restore the original type. Older saved entries without a type label load with an empty label, while missing context or diagnostic fields produce a loading error.
 
 ```@docs
-SystemsOfSystems.select
-SystemsOfSystems.plot_ts
-SystemsOfSystems.plot_ts!
+SystemsOfSystems.AbstractCleanupError
+SystemsOfSystems.CleanupError
+SystemsOfSystems.CleanupErrorSummary
+SystemsOfSystems.cleanup_context
+SystemsOfSystems.cleanup_details
 ```
-
-## Stop Reasons
-
-The `history.stop` field retains the specific reason the simulation ended. Normal stop reasons subtype `AbstractStopReason`, while unexpected exceptions and numerical failures subtype `AbstractFailureReason`.
-
-### Interruption
-
-A catchable `InterruptException` raised during the simulation loop produces `Interrupted(history.t_stop)`. The returned time and model describe the last fully accepted simulation sample, including its discrete update. An interrupted intermediate solver stage is discarded. Hooks and resources follow the normal teardown path and receive the accepted endpoint.
-
-Interruption leaves logging unchanged, just as an unexpected exception does. No final sample is added and no new continuous outputs are evaluated. With regular sampling, the last logged state may therefore be older than `history.t_stop`; `history.model` contains the last accepted state.
-
-`succeeded(history)` is true for `Interrupted`: this reports a normal engine lifecycle, not functional completion. For example, a workflow requiring the requested end time can test `history.stop isa SystemsOfSystems.ReachedEndTime`.
-
-SystemsOfSystems handles catchable Julia interruptions during the simulation loop. Applications control operating-system signal handling and process exit codes. Uncatchable termination cannot guarantee cleanup or complete log files.
 
 ### Reference
 
@@ -264,4 +328,8 @@ SystemsOfSystems.EncounteredError
 SystemsOfSystems.Solvers.SolverFailedToConverge
 SystemsOfSystems.Solvers.SolverStepSizeUnderflow
 SystemsOfSystems.describe
+SystemsOfSystems.finished
+SystemsOfSystems.failed
+SystemsOfSystems.interrupted
+SystemsOfSystems.details
 ```

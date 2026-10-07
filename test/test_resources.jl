@@ -426,7 +426,7 @@ end
     @test history.stop isa SystemsOfSystems.ReachedEndTime
     @test close_order == [:third, :second, :first]
     @test length(history.cleanup_errors) == 2
-    @test [error.context for error in history.cleanup_errors] ==
+    @test map(SystemsOfSystems.cleanup_context, history.cleanup_errors) ==
         ["resource /third", "resource /second"]
     @test occursin("Resource close failed", sprint(showerror,
         history.cleanup_errors[2].exception))
