@@ -382,3 +382,13 @@ SystemsOfSystems.LoggingPolicies.NoVariables
 SystemsOfSystems.LoggingPolicies.VariableList
 SystemsOfSystems.LoggingPolicies.VariableExclusionList
 ```
+
+## Garbage Collection
+
+Simulations that interact with real-time processes or external hardware sometimes require consistent runtime for every sample. For long-running simulations, Julia's automatic garbage collection (GC) can trigger, making some samples longer than others (anywhere from 1ms to 500ms). In order to regularize garbage collection, the `SimOptions` struct provides a `gc_policy` field to control how garbage collection happens during simulation. The available policies are described below. There is currently no public interface for creating new GC policies.
+
+```@docs
+SystemsOfSystems.GCPolicies.AutomaticGC
+SystemsOfSystems.GCPolicies.MinorGCInTheLoop
+SystemsOfSystems.GCPolicies.NoGCInTheLoop
+```

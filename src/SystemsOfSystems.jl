@@ -48,6 +48,10 @@ export CleanupErrors
 public AbstractCleanupError, CleanupError, CleanupErrorSummary,
     cleanup_context, cleanup_details
 
+# Garbage collection
+export GCPolicies
+public AutomaticGC, NoGCInTheLoop, MinorGCInTheLoop
+
 # Integration
 public normalized_scalar_error, normalized_variable_error
 
@@ -89,6 +93,9 @@ using .TerminationReasons
 
 include("CleanupErrors.jl")
 using .CleanupErrors
+
+include("GCPolicies.jl")
+using .GCPolicies
 
 #########################
 # User Function Outputs #
@@ -941,6 +948,8 @@ A container for the options supplied to `simulate`, with fields for:
 * `solver`: Solver to use (e.g., `Solvers.DormandPrince54Options()`)
 * `hooks`: A vector of hooks (e.g., `[Hooks.ProgressBarOptions(),]`)
 * `time_dimension`: A `Dimension` for the time unit (e.g., `"time" => "s"`).
+* `gc_policy`: A policy for directly managing Julia garbage collection during simulation,
+  defaulting to `GCPolicies.AutomaticGC()`, which does not interact with Julia's GC strategy
 """
 @kwdef struct SimOptions
     outdir::Union{Nothing, String} = nothing
@@ -948,7 +957,7 @@ A container for the options supplied to `simulate`, with fields for:
     solver::Solvers.AbstractSolverOptions = Solvers.DormandPrince54Options()
     hooks::Vector{Hooks.AbstractHookOptions} = []
     time_dimension::Dimension = Dimension("time", "s")
-    # catch_errors::Bool = true
+    gc_policy::GCPolicies.AbstractGCPolicy = GCPolicies.AutomaticGC()
 end
 
 ##############
@@ -1667,6 +1676,9 @@ function make_runtime(inputs)
             rethrow(err)
         end
 
+        # We'll forward the GC policy directly.
+        gc_policy = inputs.options.gc_policy
+
         return (;
             inputs.updates_fcn,
             ommd,
@@ -1674,7 +1686,7 @@ function make_runtime(inputs)
             msd,
             log, logging_runtime,
             problem, integrator,
-            hooks, manager,
+            hooks, manager, gc_policy,
         )
 
     catch err
@@ -1709,6 +1721,7 @@ function loop!(runtime)
     integrator = runtime.integrator
     hooks = runtime.hooks
     t_end = last(runtime.t)
+    gc_policy = runtime.gc_policy
 
     # These are updated by the loop.
     t_completed = first(runtime.t)
@@ -1718,6 +1731,9 @@ function loop!(runtime)
         !isempty(ommd.continuous_random_variables) ||
         ommd.models_have_continuous_random_variables
     t_next_crv_draw = has_continuous_random_variables ? t_completed : NO_T_NEXT
+
+    # Allow the GC policy to prepare for the simulation loop.
+    GCPolicies.initialize_gc!(gc_policy)
 
     # No matter what happens, this function returns all of the progress it's made.
     try
@@ -1772,21 +1788,35 @@ function loop!(runtime)
 
             end
 
+            # Allow GC to run whatever type it needs.
+            GCPolicies.step_gc!(gc_policy)
+
         end
 
     catch err
 
+        # Interruptions are exceptions, but we want to treat these in a special way because
+        # some simulations run forever and require an interruption to end, so it's a nominal
+        # termination reason for those.
         if err isa InterruptException
 
             stop = Interrupted(t_completed)
 
         else
 
+            # Otherwise, we'll record the exception and then end the loop and move forward
+            # with teardown.
             trace = catch_backtrace()
             @error "The simulation encountered an error." exception = (err, trace)
             stop = EncounteredError(float(t_completed), err, stacktrace(trace))
 
         end
+
+    finally
+
+        # Absolutely no matter what, return the GC status to its prior state when we're done
+        # here.
+        GCPolicies.terminate_gc!(gc_policy)
 
     end
 
