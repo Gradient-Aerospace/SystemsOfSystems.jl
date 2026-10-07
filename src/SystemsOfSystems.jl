@@ -1732,11 +1732,11 @@ function loop!(runtime)
         ommd.models_have_continuous_random_variables
     t_next_crv_draw = has_continuous_random_variables ? t_completed : NO_T_NEXT
 
-    # Allow the GC policy to prepare for the simulation loop.
-    GCPolicies.initialize_gc!(gc_policy)
-
     # No matter what happens, this function returns all of the progress it's made.
     try
+
+        # Allow the GC policy to prepare for the simulation loop.
+        GCPolicies.initialize_gc!(gc_policy)
 
         while isa(stop, TerminationReasons.UnknownStopReason)
 

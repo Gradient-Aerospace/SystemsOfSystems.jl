@@ -33,6 +33,18 @@ Allows a garbage collection policy to return GC to a normal state.
 function terminate_gc! end
 
 """
+    set_full_collection_status(status)
+
+This *experimental* function calls Julia's C internals to enable/disable full garbage
+collection. This is not part of Julia's API and hence may break even with minor updates. It
+is provided because it is extremely useful since Julia has no API for disabling full
+collections while still allowing minor collections.
+"""
+function set_full_collection_status(status)
+    return ccall(:jl_gc_enable_auto_full_collection, Cint, (Cint,), status)
+end
+
+"""
     AutomaticGC <: AbstractGCPolicy
 
 This GC management policy does not interact with Julia's garbage collection in any way and
@@ -40,7 +52,7 @@ is the default for `simulate`.
 """
 mutable struct AutomaticGC <: AbstractGCPolicy end
 initialize_gc!(::AutomaticGC) = nothing
-step_gc!(::AutomaticGC) = nothing
+@inline step_gc!(::AutomaticGC) = nothing
 terminate_gc!(::AutomaticGC) = nothing
 
 """
@@ -54,31 +66,37 @@ it should only be used where there are absolutely no allocations or for short si
     prior_gc_state::Bool = false
 end
 function initialize_gc!(policy::NoGCInTheLoop)
-    policy.prior_gc_state = GC.enable(false)
-end
-step_gc!(::NoGCInTheLoop) = nothing
-terminate_gc!(policy::NoGCInTheLoop) = GC.enable(policy.prior_gc_state)
-
-"""
-    MinorGCInTheLoop <: AbstractGCPolicy
-
-This GC management policy turns off automatic GC and runs a minor collection at the end of
-every step of the simulation, allowing all temporary allocations from the step to be
-immediately cleaned up. This is a good policy for simulations that need predictable
-runtime on each step, such as simulations that interact with external real-time processes or
-hardware.
-"""
-@kwdef mutable struct MinorGCInTheLoop <: AbstractGCPolicy
-    prior_gc_state::Bool = false
-    steps_per_gc::Int64 = 1
-    steps_until_gc::Int64 = 0
-end
-function initialize_gc!(policy::MinorGCInTheLoop)
     GC.gc(true)
     policy.prior_gc_state = GC.enable(false)
+end
+@inline step_gc!(::NoGCInTheLoop) = nothing
+function terminate_gc!(policy::NoGCInTheLoop)
+    GC.enable(policy.prior_gc_state)
+end
+
+"""
+    MinorGCInTheLoop(; steps_per_gc = 1) <: AbstractGCPolicy
+
+This GC *experimental* management policy runs a full garbage collection prior to beginning
+the simulation loop and then disables automatic GC and directly runs a minor collection
+every `steps_per_gc` samples, allowing all temporary allocations from recent steps to be
+immediately cleaned up. This is a good policy for simulations that need predictable runtime,
+such as simulations that interact with external real-time processes or hardware. However,
+this policy is experimental because it relies on non-public Julia GC behavior. This policy
+may cease to function in future Julia versions.
+"""
+mutable struct MinorGCInTheLoop <: AbstractGCPolicy
+    steps_per_gc::Int64
+    prior_gc_state::Int
+    steps_until_gc::Int64
+end
+MinorGCInTheLoop(; steps_per_gc = 1) = MinorGCInTheLoop(steps_per_gc, 0, steps_per_gc)
+function initialize_gc!(policy::MinorGCInTheLoop)
+    GC.gc(true)
+    policy.prior_gc_state = set_full_collection_status(0)
     policy.steps_until_gc = policy.steps_per_gc
 end
-function step_gc!(::MinorGCInTheLoop)
+@inline function step_gc!(policy::MinorGCInTheLoop)
     policy.steps_until_gc -= 1
     if policy.steps_until_gc <= 0
         GC.gc(false)
@@ -86,8 +104,7 @@ function step_gc!(::MinorGCInTheLoop)
     end
 end
 function terminate_gc!(policy::MinorGCInTheLoop)
-    GC.enable(policy.prior_gc_state)
-    GC.gc(true)
+    set_full_collection_status(policy.prior_gc_state)
 end
 
 end

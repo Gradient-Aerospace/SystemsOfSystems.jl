@@ -392,3 +392,7 @@ SystemsOfSystems.GCPolicies.AutomaticGC
 SystemsOfSystems.GCPolicies.MinorGCInTheLoop
 SystemsOfSystems.GCPolicies.NoGCInTheLoop
 ```
+
+For example, `SimOptions(; gc_policy = GCPolicies.MinorGCInTheLoop(; steps_per_gc = 10))` requests a minor collection every ten simulation samples. A full collection is requested before the loop. The policy restores the prior GC state when the loop ends, including after a model error or interruption. (Note that `MinorGCInTheLoop` relies on non-public Julia implementation details and hence is an experimental feature that may break with subsequent Julia releases.)
+
+GC enablement applies to the whole Julia process, so managed policies affect other tasks running in the same process. They are intended for simulations that have exclusive control of GC.
