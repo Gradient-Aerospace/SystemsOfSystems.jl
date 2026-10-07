@@ -85,8 +85,8 @@ end
 This *experimental* GC management policy requests a full collection before the simulation
 loop (if GC was enabled), suppresses automatic full collections during the loop, and
 requests a minor collection every `steps_per_gc` samples. (A full collection examines all
-symbols to see if they're still used and is expensive, whereas a minor collection only
-examines new symbols. In the sim loop, allocations from `rates_fcn` and `updates_fcn` can
+objects to see if they're still used and is expensive, whereas a minor collection only
+examines new objects. In the sim loop, allocations from `rates_fcn` and `updates_fcn` can
 likely be cleaned up as a routine minor collection.) _Automatic_ minor collections remain
 enabled if GC was enabled before simulation.
 
