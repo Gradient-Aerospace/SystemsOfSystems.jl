@@ -385,7 +385,11 @@ SystemsOfSystems.LoggingPolicies.VariableExclusionList
 
 ## Garbage Collection
 
-Simulations that interact with real-time processes or external hardware sometimes require consistent runtime for every sample. For long-running simulations, Julia's automatic garbage collection (GC) can trigger, making some samples longer than others (anywhere from 1ms to 500ms). In order to regularize garbage collection, the `SimOptions` struct provides a `gc_policy` field to control how garbage collection happens during simulation. The available policies are described below. There is currently no public interface for creating new GC policies.
+Simulations that interact with real-time processes or external hardware sometimes require consistent runtime for every sample. For long-running simulations, Julia's automatic garbage collection (GC) can trigger, making some samples longer than others (anywhere from 1ms to 500ms). In order to regularize garbage collection, the `SimOptions` struct provides a `gc_policy` field to control how garbage collection happens during simulation.
+
+For example, `SimOptions(; gc_policy = GCPolicies.MinorGCInTheLoop(; steps_per_gc = 8))` requests a minor collection every eight simulation samples, with no major collections occurring inside the loop.
+
+The available policies are described in more detail below.
 
 ```@docs
 SystemsOfSystems.GCPolicies.AutomaticGC
@@ -393,6 +397,6 @@ SystemsOfSystems.GCPolicies.MinorGCInTheLoop
 SystemsOfSystems.GCPolicies.NoGCInTheLoop
 ```
 
-For example, `SimOptions(; gc_policy = GCPolicies.MinorGCInTheLoop(; steps_per_gc = 10))` requests a minor collection every ten simulation samples. A full collection is requested before the loop. The policy restores the prior GC state when the loop ends, including after a model error or interruption. (Note that `MinorGCInTheLoop` relies on non-public Julia implementation details and hence is an experimental feature that may break with subsequent Julia releases.)
+There is currently no public interface for creating new GC policies.
 
-GC enablement applies to the whole Julia process, so managed policies affect other tasks running in the same process. They are intended for simulations that have exclusive control of GC.
+When using `MinorGCInTheLoop` and `NoGCInTheLoop`, note that these policies will affect GC for the entire Julia process (even other threads).
