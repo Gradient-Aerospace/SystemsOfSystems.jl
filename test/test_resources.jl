@@ -381,8 +381,55 @@ end
         SystemsOfSystems.add_resource!(manager, resource, name)
     end
 
-    @test_logs (:error,) SystemsOfSystems.close_resources(manager)
+    errors = @test_logs (:error,) SystemsOfSystems.close_resources(manager)
     @test close_order == [:third, :second, :first]
+    @test length(errors) == 1
+    @test occursin("resource", only(errors).context)
+
+end
+
+@testset "simulation returns resource cleanup failures" begin
+
+    close_order = Symbol[]
+    history = @test_logs (:error,) (:error,) simulate(
+        nothing;
+        t = (0, 1),
+        init_fcn = (args...) -> ModelDescription(;
+            continuous_states = (; x = 0.),
+            resources = (;
+                first = Resource(;
+                    open_args = (),
+                    open_fcn = inputs -> :first,
+                    close_fcn = payload -> push!(close_order, payload),
+                ),
+                second = Resource(;
+                    open_args = (),
+                    open_fcn = inputs -> :second,
+                    close_fcn = payload -> begin
+                        push!(close_order, payload)
+                        error("Resource close failed")
+                    end,
+                ),
+                third = Resource(;
+                    open_args = (),
+                    open_fcn = inputs -> :third,
+                    close_fcn = payload -> begin
+                        push!(close_order, payload)
+                        error("Third resource close failed")
+                    end,
+                ),
+            ),
+        ),
+        rates_fcn = (t, model) -> RatesOutput(; rates = (; x = 1.)),
+    )
+    @test succeeded(history)
+    @test history.stop isa SystemsOfSystems.ReachedEndTime
+    @test close_order == [:third, :second, :first]
+    @test length(history.cleanup_errors) == 2
+    @test [error.context for error in history.cleanup_errors] ==
+        ["resource /third", "resource /second"]
+    @test occursin("Resource close failed", sprint(showerror,
+        history.cleanup_errors[2].exception))
 
 end
 

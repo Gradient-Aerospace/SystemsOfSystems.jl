@@ -30,6 +30,55 @@ function with_stop(history, stop)
     return SimHistory(history.t_start, history.t_stop, history.log, history.model, stop)
 end
 
+@testset "Cleanup failures survive history persistence as readable records" begin
+
+    original = small_history()
+    cleanup_errors = SystemsOfSystems.AbstractCleanupError[
+        SystemsOfSystems.CleanupError(
+            "hook TestHook", ErrorException("Hook close failed"), stacktrace(),
+        ),
+        SystemsOfSystems.CleanupError(
+            "resource /output", ErrorException("Flush failed"), stacktrace(),
+        ),
+    ]
+    history = SimHistory(
+        original.t_start, original.t_stop, original.log, original.model, original.stop,
+        cleanup_errors,
+    )
+    filename = joinpath(mktempdir(), "cleanup.h5")
+    save_sim_history(filename, history)
+
+    HDF5.h5open(filename, "r") do file
+        @test read(file["history/cleanup_errors/count"]) == 2
+        @test read(file["history/cleanup_errors/1/context"]) == "hook TestHook"
+        @test occursin("Hook close failed", read(file["history/cleanup_errors/1/details"]))
+    end
+    load_sim_history(filename) do loaded
+        @test loaded.stop == history.stop
+        @test succeeded(loaded)
+        @test length(loaded.cleanup_errors) == 2
+        @test all(error -> error isa SystemsOfSystems.RecordedCleanupError,
+            loaded.cleanup_errors)
+        @test loaded.cleanup_errors[2].context == "resource /output"
+        @test occursin("Flush failed", loaded.cleanup_errors[2].details)
+
+        copied = joinpath(mktempdir(), "copied.h5")
+        save_sim_history(copied, loaded)
+        load_sim_history(copied) do reloaded
+            @test reloaded.cleanup_errors[2].details == loaded.cleanup_errors[2].details
+        end
+    end
+
+    # Version-one files written before this optional field existed remain readable.
+    HDF5.h5open(filename, "r+") do file
+        HDF5.delete_object(file["history"], "cleanup_errors")
+    end
+    load_sim_history(filename) do loaded
+        @test isempty(loaded.cleanup_errors)
+    end
+
+end
+
 # These reasons deliberately retain a running task, which cannot be reconstructed as part
 # of a saved run. Their round trips should use descriptions without serializing the task.
 struct ResourceHook <: Hooks.AbstractHook
@@ -69,6 +118,7 @@ end
     # Saving an in-memory log separates metadata from samples. The model is opt-in,
     # and times and termination labels should be readable using only HDF5.
     history = small_history()
+    @test isempty(history.cleanup_errors)
     filename = joinpath(mktempdir(), "history.h5")
     @test isnothing(save_sim_history(filename, history))
     HDF5.h5open(filename, "r") do fid
@@ -99,6 +149,7 @@ end
     @test restored.t_start == exact_time(Float64(history.t_start))
     @test restored.t_stop == exact_time(Float64(history.t_stop))
     @test restored.stop == history.stop
+    @test isempty(restored.cleanup_errors)
     @test isnothing(restored.model)
     @test restored["/"]["x"].data isa HDF5Vectors.HDF5Vector
     @test restored["/"]["x"].data[:] == history["/"]["x"].data
