@@ -145,6 +145,12 @@ function propagate(
     gain,
     rates::RatesOutput,
 )
+
+    # An omitted derivative hierarchy leaves this entire state subtree unchanged.
+    if isempty(rates.rates) && isempty(rates.models)
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
         continuous_states = propagate_set(
@@ -154,6 +160,7 @@ function propagate(
         ),
         models = propagate_models(state.models, gain, rates.models),
     )
+
 end
 
 # These helpers apply a statically sized linear combination of derivatives. Tuple recursion
@@ -252,16 +259,26 @@ end
 Returns a copy of `state` advanced by the linear combination of `rates_at_stages` described
 by `gains`.
 
-The stage tuple is expected to have a stable derivative structure: if the first stage omits
-a continuous state, later stages must omit it as well. This is the same modeling contract as
-the original solvers, made explicit here so it can eventually be validated during solver
-initialization rather than repeatedly inside the numerical loop.
+An empty stage tuple leaves `state` unchanged. Otherwise, all stages must have the same
+derivative structure: continuous states and submodels omitted from the first stage must
+also be omitted from every later stage.
 """
 function propagate(
     state::ModelStateDescription,
     gains::Tuple,
     rates_at_stages::Tuple,
 )
+
+    if isempty(rates_at_stages)
+        return state
+    end
+
+    # Every stage has the same derivative structure, so checking the first is sufficient.
+    first_rates = first(rates_at_stages)
+    if isempty(first_rates.rates) && isempty(first_rates.models)
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
         continuous_states = propagate_set(
@@ -275,6 +292,7 @@ function propagate(
             map(rates -> rates.models, rates_at_stages),
         ),
     )
+
 end
 
 # The adaptive controller receives one normalized error per continuous variable through
