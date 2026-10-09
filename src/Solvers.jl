@@ -632,12 +632,12 @@ function step!(
 
 end
 
-function suggested_dt(controller, dt, error, embedded_order)
-    if iszero(error)
+function suggested_dt(controller, dt, err, embedded_order)
+    if iszero(err)
         return controller.max_dt
     end
     return min(
-        controller.safety_factor * dt * error^(-1 / (embedded_order + 1)),
+        controller.safety_factor * dt * err^(-1 / (embedded_order + 1)),
         controller.max_dt,
     )
 end
@@ -700,7 +700,7 @@ function step!(
 
         # Figure out how much normalized error we have, and what dt that suggests for next
         # time.
-        error = normalized_error(
+        err = normalized_error(
             problem,
             state_at_end,
             embedded_state,
@@ -710,13 +710,13 @@ function step!(
         next_dt = suggested_dt(
             controller,
             attempt.dt,
-            error,
+            err,
             integrator.method.embedded_order,
         )
 
         # If that's accept, remember to the next_dt we determined and report an accepted
         # step.
-        if error < 1.
+        if err < 1.
             controller.next_dt = next_dt
             return AcceptedStep(
                 interval.t_end,

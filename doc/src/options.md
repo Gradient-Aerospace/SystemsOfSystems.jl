@@ -259,6 +259,8 @@ SystemsOfSystems.Logs.load_hdf5_log
 SystemsOfSystems.Logs.save_log_to_hdf5
 ```
 
+The [HDF5 file format](hdf5_format.md) describes the public model hierarchy, variable metadata, and sample storage for readers outside Julia.
+
 ### Standalone Time Series
 
 Individual time series can use the same HDF5 representation without constructing a complete log. These functions operate on an open HDF5 file, and loaded vectors remain usable only while that file is open.
