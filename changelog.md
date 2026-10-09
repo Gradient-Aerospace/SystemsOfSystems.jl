@@ -9,6 +9,7 @@
 * Changed default HDF5 group for `save_log_to_hdf5` from "/" to "/log".
 * Added `cleanup_errors` to `SimHistory`.
 * Added an API for termination reasons (`finished`, `failed`, `interrupted`, `describe`, and `details`).
+* Added `gc_policy` option to `SimOptions`.
 * Reduced allocations when logging continuous and discrete outputs with different field types.
 
 ## v1.1.0
