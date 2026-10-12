@@ -145,15 +145,21 @@ function propagate(
     gain,
     rates::RatesOutput,
 )
+
+    continuous_states = propagate_set(state.continuous_states, gain, rates.rates)
+    models = propagate_models(state.models, gain, rates.models)
+
+    # Reuse descriptions whose states and children were unchanged by propagation.
+    if continuous_states === state.continuous_states && models === state.models
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
-        continuous_states = propagate_set(
-            state.continuous_states,
-            gain,
-            rates.rates,
-        ),
-        models = propagate_models(state.models, gain, rates.models),
+        continuous_states,
+        models,
     )
+
 end
 
 # These helpers apply a statically sized linear combination of derivatives. Tuple recursion
@@ -262,19 +268,29 @@ function propagate(
     gains::Tuple,
     rates_at_stages::Tuple,
 )
+
+    continuous_states = propagate_set(
+        state.continuous_states,
+        gains,
+        map(rates -> rates.rates, rates_at_stages),
+    )
+    models = propagate_models(
+        state.models,
+        gains,
+        map(rates -> rates.models, rates_at_stages),
+    )
+
+    # Reuse descriptions whose states and children were unchanged by propagation.
+    if continuous_states === state.continuous_states && models === state.models
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
-        continuous_states = propagate_set(
-            state.continuous_states,
-            gains,
-            map(rates -> rates.rates, rates_at_stages),
-        ),
-        models = propagate_models(
-            state.models,
-            gains,
-            map(rates -> rates.models, rates_at_stages),
-        ),
+        continuous_states,
+        models,
     )
+
 end
 
 # The adaptive controller receives one normalized error per continuous variable through
