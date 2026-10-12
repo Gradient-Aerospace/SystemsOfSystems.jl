@@ -145,15 +145,27 @@ function propagate(
     gain,
     rates::RatesOutput,
 )
-    return copy_model_state_description_except(
-        state;
-        continuous_states = propagate_set(
-            state.continuous_states,
-            gain,
-            rates.rates,
-        ),
-        models = propagate_models(state.models, gain, rates.models),
-    )
+
+    # If there are no derivatives, and no output from submodels, then there's nothing that
+    # we can do here, so return the current state unchanged.
+    if isempty(rates.rates) && isempty(rates.models)
+        return state
+    end
+
+    # At this point, we'll try propagating.
+    continuous_states = propagate_set(state.continuous_states, gain, rates.rates)
+    models = propagate_models(state.models, gain, rates.models)
+
+    # If that _still_ doesn't result in a change, then we can definitely return. By using
+    # ===, we'll check full equality for bits types and check the pointer address for non-
+    # bits types (it will be the same pointer address if propagation also returned early).
+    if continuous_states === state.continuous_states && models === state.models
+        return state
+    end
+
+    # Something's different, so we need a nenw ModelStateDescription.
+    return copy_model_state_description_except(state; continuous_states, models)
+
 end
 
 # These helpers apply a statically sized linear combination of derivatives. Tuple recursion
@@ -262,19 +274,42 @@ function propagate(
     gains::Tuple,
     rates_at_stages::Tuple,
 )
-    return copy_model_state_description_except(
-        state;
-        continuous_states = propagate_set(
-            state.continuous_states,
-            gains,
-            map(rates -> rates.rates, rates_at_stages),
-        ),
-        models = propagate_models(
-            state.models,
-            gains,
-            map(rates -> rates.models, rates_at_stages),
-        ),
+
+    # If we don't have any outputs for this model, then obviously there's nothing to do.
+    if isempty(rates_at_stages)
+        return state
+    end
+
+    # If there are no derivatives, and no output from submodels, then there's nothing that
+    # we can do here, so return the current state unchanged. It's sufficient to just check
+    # one state, since all stages must be the same.
+    first_rates = first(rates_at_stages)
+    if isempty(first_rates.rates) && isempty(first_rates.models)
+        return state
+    end
+
+    # At this point, we'll try propagating.
+    continuous_states = propagate_set(
+        state.continuous_states,
+        gains,
+        map(rates -> rates.rates, rates_at_stages),
     )
+    models = propagate_models(
+        state.models,
+        gains,
+        map(rates -> rates.models, rates_at_stages),
+    )
+
+    # If that _still_ doesn't result in a change, then we can definitely return. By using
+    # ===, we'll check full equality for bits types and check the pointer address for non-
+    # bits types (it will be the same pointer address if propagation also returned early).
+    if continuous_states === state.continuous_states && models === state.models
+        return state
+    end
+
+    # Something's different, so we need a nenw ModelStateDescription.
+    return copy_model_state_description_except(state; continuous_states, models)
+
 end
 
 # The adaptive controller receives one normalized error per continuous variable through

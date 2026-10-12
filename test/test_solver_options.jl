@@ -73,6 +73,39 @@ function Solvers.step!(integrator::RecordingIntegrator, problem, request)
     return Solvers.step!(integrator.integrator, problem, request)
 end
 
+@testset "unchanged model propagation" begin
+
+    # Include a heap-backed constant and a child with continuous state. Empty or zero rates
+    # should preserve the description, even when a RatesOutput also carries outputs.
+    child = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        constants = (; table = ones(2, 2),),
+        continuous_states = (; x = 1.,),
+    )
+    state = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        models = (; child,),
+    )
+    empty_rates = RatesOutput(; outputs = (; value = 3.,),)
+    zero_rates = RatesOutput(; models = (; child = RatesOutput(; rates = (; x = 0.,)),),)
+    active_rates = RatesOutput(; models = (; child = RatesOutput(; rates = (; x = 2.,)),),)
+
+    # Exercise both the single-derivative and linear-combination propagation interfaces.
+    for propagate in (
+        rates -> ContinuousProblems.propagate(state, 1/2, rates),
+        rates -> ContinuousProblems.propagate(state, (1/4, 1/4), (rates, rates)),
+    )
+
+        @test (@inferred propagate(empty_rates)) === state
+        @test (@inferred propagate(zero_rates)) === state
+        advanced = @inferred propagate(active_rates)
+        @test advanced !== state
+        @test advanced.models.child.continuous_states.x == 2.
+        @test state.models.child.continuous_states.x == 1.
+        @test advanced.models.child.constants.table === child.constants.table
+
+    end
+
+end
+
 @testset "wide model propagation" begin
 
     # A wide, flat model hierarchy is where recursive Base.tail tuple processing becomes

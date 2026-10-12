@@ -162,6 +162,70 @@ end
 
 end
 
+@testset "unchanged model updates" begin
+
+    # Heap-backed constants and nested children should not prevent reusing a description
+    # when an update omits its states or supplies the values they already contain.
+    child = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        constants = (; table = ones(2, 2),),
+        continuous_states = (; x = 1.,),
+        discrete_states = (; count = 1,),
+    )
+    state = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        models = (; child,),
+        t_next = 1//2,
+    )
+    unchanged = UpdatesOutput(;
+        models = (; child = UpdatesOutput(; updates = (; x = 1., count = 1,),),),
+    )
+    @test (@inferred SystemsOfSystems.update(state, UpdatesOutput())) === state
+    @test (@inferred SystemsOfSystems.update(state, unchanged)) === state
+
+    # Outputs and stop requests remain usable even when the stored description is reused.
+    output_only = UpdatesOutput(; outputs = (; value = 3.,), stop = true,)
+    @test SystemsOfSystems.update(state, output_only) === state
+    @test !isnothing(SystemsOfSystems.find_model_requested_stop(output_only))
+
+    # A changed child must replace its ancestors, preserving the old state and constants.
+    for updates in ((; x = 2.,), (; count = 2,))
+
+        changed = UpdatesOutput(; models = (; child = UpdatesOutput(; updates,),),)
+        updated = SystemsOfSystems.update(state, changed)
+        @test updated !== state
+        @test updated.models.child !== child
+        @test updated.models.child.constants.table === child.constants.table
+        @test updated.models.child.continuous_states.x == get(updates, :x, 1.)
+        @test updated.models.child.discrete_states.count == get(updates, :count, 1)
+
+    end
+    @test child.continuous_states.x == 1.
+    @test child.discrete_states.count == 1
+
+    # Equal contents do not make distinct mutable state objects interchangeable.
+    heap_state = SystemsOfSystems.ModelStateDescription{Nothing}(;
+        discrete_states = (; values = [1., 2.],),
+    )
+    replacement = copy(heap_state.discrete_states.values)
+    updated_heap_state = SystemsOfSystems.update(
+        heap_state,
+        UpdatesOutput(; updates = (; values = replacement,),),
+    )
+    @test updated_heap_state !== heap_state
+    @test updated_heap_state.discrete_states.values === replacement
+
+    # Replacing or cancelling a time request is a real update even with unchanged states.
+    for t_next in (3//4, NO_T_NEXT)
+
+        updated = SystemsOfSystems.update(state, UpdatesOutput(; t_next,))
+        @test updated !== state
+        @test updated.t_next == t_next
+        @test updated.models.child === child
+
+    end
+    @test state.t_next == 1//2
+
+end
+
 @testset "independent exact model clocks at a large epoch" begin
 
     # Two nested models request unrelated periods and offsets. Each model owns only its
