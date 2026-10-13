@@ -100,7 +100,7 @@ end
         @test advanced !== state
         @test advanced.models.child.continuous_states.x == 2.
         @test state.models.child.continuous_states.x == 1.
-        @test advanced.models.child.constants.table === child.constants.table
+        @test advanced.models.child.constants[].table === child.constants[].table
 
     end
 

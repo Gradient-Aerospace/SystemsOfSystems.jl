@@ -193,7 +193,7 @@ end
         updated = SystemsOfSystems.update(state, changed)
         @test updated !== state
         @test updated.models.child !== child
-        @test updated.models.child.constants.table === child.constants.table
+        @test updated.models.child.constants[].table === child.constants[].table
         @test updated.models.child.continuous_states.x == get(updates, :x, 1.)
         @test updated.models.child.discrete_states.count == get(updates, :count, 1)
 
