@@ -145,6 +145,12 @@ function propagate(
     gain,
     rates::RatesOutput,
 )
+
+    # An omitted derivative hierarchy leaves this entire state subtree unchanged.
+    if isempty(rates.rates) && isempty(rates.models)
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
         continuous_states = propagate_set(
@@ -154,6 +160,7 @@ function propagate(
         ),
         models = propagate_models(state.models, gain, rates.models),
     )
+
 end
 
 # These helpers apply a statically sized linear combination of derivatives. Tuple recursion
@@ -252,16 +259,26 @@ end
 Returns a copy of `state` advanced by the linear combination of `rates_at_stages` described
 by `gains`.
 
-The stage tuple is expected to have a stable derivative structure: if the first stage omits
-a continuous state, later stages must omit it as well. This is the same modeling contract as
-the original solvers, made explicit here so it can eventually be validated during solver
-initialization rather than repeatedly inside the numerical loop.
+An empty stage tuple leaves `state` unchanged. Otherwise, all stages must have the same
+derivative structure: continuous states and submodels omitted from the first stage must
+also be omitted from every later stage.
 """
 function propagate(
     state::ModelStateDescription,
     gains::Tuple,
     rates_at_stages::Tuple,
 )
+
+    if isempty(rates_at_stages)
+        return state
+    end
+
+    # Every stage has the same derivative structure, so checking the first is sufficient.
+    first_rates = first(rates_at_stages)
+    if isempty(first_rates.rates) && isempty(first_rates.models)
+        return state
+    end
+
     return copy_model_state_description_except(
         state;
         continuous_states = propagate_set(
@@ -275,6 +292,393 @@ function propagate(
             map(rates -> rates.models, rates_at_stages),
         ),
     )
+
+end
+
+#############################
+# Provisional State Storage #
+#############################
+
+# These methods construct persistent descriptors and user-facing model values. A private
+# workspace is safe only while those standard adapters are in use; custom adapters may
+# retain a descriptor itself rather than just the model values passed to user callbacks.
+const PROVISIONAL_MODEL_METHODS = Tuple(methods(model))
+const PROVISIONAL_RATES_METHODS = Tuple(methods(evaluate_rates))
+const PROVISIONAL_PROPERTY_METHOD = which(getproperty, Tuple{ModelStateDescription, Symbol})
+const PROVISIONAL_RATES_PROPERTY_METHODS = Tuple(
+    methods(getproperty, Tuple{RatesOutput, Symbol}),
+)
+const PROVISIONAL_PROPAGATION_METHODS = (
+    Tuple(methods(propagate)),
+    Tuple(methods(propagate_set)),
+    Tuple(methods(propagate_models)),
+    Tuple(methods(propagate_model_values)),
+    Tuple(methods(complete_model_rates)),
+    Tuple(methods(copy_model_state_description_except)),
+    Tuple(methods(weighted_rate)),
+    Tuple(methods(propagate_variable)),
+)
+
+"""
+Private storage for provisional continuous stages belonging to one integrator.
+
+Every descriptor shell and child link is owned by this workspace. Configuration and state
+payloads preserve their ordinary shallow aliases. Assigning a field replaces its value;
+no user-owned array, returned derivative, or callback model is mutated by this workspace.
+The shells must never escape through public propagation or accepted solver results.
+"""
+mutable struct ProvisionalStateWorkspace{S, P}
+    state::S
+    active::Bool
+    method_world::UInt
+    compatible::Bool
+    stage_storage::Any
+end
+
+function copy_provisional_shells(state::S) where {S <: ModelStateDescription}
+    return S(
+        state.static,
+        state.continuous_states,
+        state.discrete_states,
+        state.continuous_random_variables,
+        state.discrete_random_variables,
+        map(copy_provisional_shells, state.models),
+        state.t_next,
+    )
+end
+
+function standard_model_adapter(state::ModelStateDescription)
+    selected = which(model, Tuple{typeof(state)})
+    property_method = which(getproperty, Tuple{typeof(state), Symbol})
+    return property_method === PROVISIONAL_PROPERTY_METHOD &&
+        any(method -> method === selected, PROVISIONAL_MODEL_METHODS) &&
+        all(standard_model_adapter, state.models)
+end
+
+function standard_provisional_adapters(problem::ContinuousProblem, state)
+
+    try
+        selected = which(evaluate_rates, Tuple{typeof(problem), Float64, typeof(state)})
+        any(method -> method === selected, PROVISIONAL_RATES_METHODS) || return false
+        standard_model_adapter(state) || return false
+
+        # Literal stage field reads bypass only the RatesOutput property boundary. Limit
+        # inspection to methods intersecting this type, not unrelated Base properties.
+        properties = Tuple(methods(getproperty, Tuple{RatesOutput, Symbol}))
+        length(properties) == length(PROVISIONAL_RATES_PROPERTY_METHODS) || return false
+        properties_unchanged = all(properties) do method
+            any(original -> original === method, PROVISIONAL_RATES_PROPERTY_METHODS)
+        end
+        properties_unchanged || return false
+        current = (
+            Tuple(methods(propagate)),
+            Tuple(methods(propagate_set)),
+            Tuple(methods(propagate_models)),
+            Tuple(methods(propagate_model_values)),
+            Tuple(methods(complete_model_rates)),
+            Tuple(methods(copy_model_state_description_except)),
+            Tuple(methods(weighted_rate)),
+            Tuple(methods(propagate_variable)),
+        )
+
+        # Method enumeration order can change when a precompiled module is loaded. Only
+        # membership matters: additions or replacements must still reject private reuse.
+        return all(zip(current, PROVISIONAL_PROPAGATION_METHODS)) do (methods, standard)
+            length(methods) == length(standard) && all(methods) do method
+                any(original -> original === method, standard)
+            end
+        end
+    catch error
+        # Ambiguous/custom dispatch must fail through its ordinary execution path rather
+        # than introducing a new initialization failure from this capability inspection.
+        error isa InterruptException && rethrow()
+        return false
+    end
+
+end
+
+function create_provisional_workspace(problem::ContinuousProblem, state)
+
+    # Reflection occurs during setup, without executing user constructors, rates, or draws.
+    # A custom adapter keeps the existing persistent path from its first invocation.
+    standard_provisional_adapters(problem, state) || return nothing
+    return ProvisionalStateWorkspace{typeof(state), typeof(problem)}(
+        copy_provisional_shells(state), false, Base.get_world_counter(), true, nothing,
+    )
+
+end
+
+provisional_workspace_available(::Nothing, problem, state) = false
+
+function provisional_workspace_available(
+    workspace::ProvisionalStateWorkspace{S, P},
+    problem::ContinuousProblem,
+    state,
+) where {S, P}
+
+    # A nested use of this integrator must not overwrite the outer call's active shells.
+    # The persistent path is also the compatibility adapter for a different state shape.
+    (workspace.active || typeof(state) !== S || typeof(problem) !== P) && return false
+
+    # Method additions between uses can introduce a retention-capable adapter. Revalidate
+    # only when Julia's method world changes; ordinary steps need no descriptor traversal.
+    method_world = Base.get_world_counter()
+    if method_world != workspace.method_world
+        workspace.compatible = standard_provisional_adapters(problem, state)
+        workspace.method_world = method_world
+    end
+    return workspace.compatible
+
+end
+
+# Copy all noncontinuous values from this attempt's beginning state. In particular, prior
+# discrete updates may have replaced random values, configuration, or a requested time.
+function refresh_provisional_fields!(destination, source, continuous_states)
+    setfield!(destination, :static, source.static)
+    setfield!(destination, :continuous_states, continuous_states)
+    setfield!(destination, :discrete_states, source.discrete_states)
+    setfield!(destination, :continuous_random_variables, source.continuous_random_variables)
+    setfield!(destination, :discrete_random_variables, source.discrete_random_variables)
+    setfield!(destination, :t_next, source.t_next)
+    return nothing
+end
+
+@generated function refresh_provisional_children!(destination::D, source::S) where {D, S}
+
+    statements = map(fieldnames(S)) do name
+        field = QuoteNode(name)
+        return :(refresh_provisional_tree!(
+            getfield(destination, $field), getfield(source, $field),
+        ))
+    end
+    return Expr(:block, statements..., :(nothing))
+
+end
+
+function refresh_provisional_tree!(destination, source)
+    refresh_provisional_fields!(destination, source, source.continuous_states)
+    refresh_provisional_children!(destination.models, source.models)
+    return destination
+end
+
+# Generate only field routing. The same propagate_set/weighted_rate operations as the
+# persistent path still define all numerical work, including zero-weight terms and order.
+@generated function propagate_provisional_children!(
+    destination::D,
+    source::S,
+    gains::G,
+    stages::R,
+) where {D <: NamedTuple, S <: NamedTuple, G <: Tuple, R <: Tuple}
+
+    statements = map(fieldnames(S)) do name
+        field = QuoteNode(name)
+        rates = map(1:fieldcount(R)) do index
+            models_type = fieldtype(fieldtype(R, index), :models)
+            if hasfield(models_type, name)
+                return :(getfield(getfield(getfield(stages, $index), :models), $field))
+            end
+            return :(RatesOutput())
+        end
+        return :(propagate_provisional!(
+            getfield(destination, $field), getfield(source, $field),
+            gains, $(Expr(:tuple, rates...)),
+        ))
+    end
+    return Expr(:block, statements..., :(nothing))
+
+end
+
+function propagate_provisional!(
+    destination::ModelStateDescription,
+    source::ModelStateDescription,
+    gains::Tuple,
+    stages::Tuple,
+)
+
+    if isempty(stages) || (isempty(first(stages).rates) && isempty(first(stages).models))
+        return refresh_provisional_tree!(destination, source)
+    end
+
+    # Parent arithmetic precedes child arithmetic, as in persistent propagation. Child
+    # links remain owned by the workspace even when a derivative subtree is omitted.
+    continuous_states = propagate_set(
+        source.continuous_states, gains, map(stage -> stage.rates, stages),
+    )
+    refresh_provisional_fields!(destination, source, continuous_states)
+    propagate_provisional_children!(destination.models, source.models, gains, stages)
+    return destination
+
+end
+
+function provisional_state(::Nothing, source, gains, stages)
+    return propagate(source, gains, stages)
+end
+
+function provisional_state(workspace::ProvisionalStateWorkspace, source, gains, stages)
+    return propagate_provisional!(workspace.state, source, gains, stages)
+end
+
+#####################
+# Typed Stage Access #
+#####################
+
+# These generation-time helpers describe field routing only. Every runtime derivative
+# remains in its original stage slot, with the publisher's existing payload references.
+stage_element_type(::Type{S}, index) where {S <: Tuple} = fieldtype(S, index)
+stage_element_type(::Type{Vector{D}}, index) where {D} = D
+
+function stage_node_type(type, path)
+
+    for name in path
+        models = fieldtype(type, :models)
+        hasfield(models, name) || return nothing
+        type = fieldtype(models, name)
+    end
+    return type
+
+end
+
+function stage_node_expression(type, index, path)
+
+    root = stage_element_type(type, index)
+    stage_node_type(root, path) === nothing && return :(RatesOutput())
+    value = type <: Tuple ? :(getfield(stages, $index)) : :(getindex(stages, $index))
+    for name in path
+        value = :(getfield(getfield($value, :models), $(QuoteNode(name))))
+    end
+    return value
+
+end
+
+function stage_subtree_is_empty(type, path)
+
+    node = stage_node_type(stage_element_type(type, 1), path)
+    return node === nothing ||
+        (isempty(fieldnames(fieldtype(node, :rates))) &&
+            isempty(fieldnames(fieldtype(node, :models))))
+
+end
+
+@generated function accessed_continuous_states(
+    states::X,
+    gains::G,
+    stages::R,
+    ::Val{P},
+) where {X <: NamedTuple, G <: Tuple, R, P}
+
+    first_node = stage_node_type(stage_element_type(R, 1), P)
+    rate_names = first_node === nothing ? () : fieldnames(fieldtype(first_node, :rates))
+    values = map(fieldnames(X)) do name
+        field = QuoteNode(name)
+        name in rate_names || return :(getfield(states, $field))
+        terms = map(1:fieldcount(G)) do index
+            node = stage_node_expression(R, index, P)
+            return :(getfield(gains, $index) * getfield(getfield($node, :rates), $field))
+        end
+        # Build the original right-recursive weighted sum, including every zero term.
+        # Julia evaluates each left multiplication before entering the right expression.
+        combination = last(terms)
+        for index in (length(terms) - 1):-1:1
+            combination = :($(terms[index]) + $combination)
+        end
+        original = gensym(:state_value)
+        return quote
+            $original = getfield(states, $field)
+            ($original + $combination)::typeof($original)
+        end
+    end
+    return :(NamedTuple{$(QuoteNode(fieldnames(X)))}($(Expr(:tuple, values...))))
+
+end
+
+@generated function accessed_provisional_children!(
+    destination::D,
+    source::S,
+    gains,
+    stages,
+    ::Val{P},
+) where {D <: NamedTuple, S <: NamedTuple, P}
+
+    calls = map(fieldnames(S)) do name
+        field = QuoteNode(name)
+        path = QuoteNode((P..., name))
+        return :(accessed_provisional!(
+            getfield(destination, $field), getfield(source, $field),
+            gains, stages, Val{$path}(),
+        ))
+    end
+    return Expr(:block, calls..., :(nothing))
+
+end
+
+@generated function accessed_provisional!(
+    destination::D,
+    source::S,
+    gains::G,
+    stages::R,
+    path::Val{P},
+) where {D <: ModelStateDescription, S <: ModelStateDescription, G <: Tuple, R, P}
+
+    if isempty(fieldnames(G)) || stage_subtree_is_empty(R, P)
+        return :(refresh_provisional_tree!(destination, source))
+    end
+    return quote
+        continuous_states = accessed_continuous_states(source.continuous_states,
+            gains, stages, path)
+        refresh_provisional_fields!(destination, source, continuous_states)
+        accessed_provisional_children!(
+            destination.models, source.models, gains, stages, path,
+        )
+        destination
+    end
+
+end
+
+function accessed_provisional_state(
+    workspace::ProvisionalStateWorkspace, source, gains, stages,
+)
+    return accessed_provisional!(workspace.state, source, gains, stages, Val(()))
+end
+
+@generated function accessed_persistent_children(
+    source::S,
+    gains,
+    stages,
+    ::Val{P},
+) where {S <: NamedTuple, P}
+
+    values = map(fieldnames(S)) do name
+        field = QuoteNode(name)
+        path = QuoteNode((P..., name))
+        return :(accessed_persistent_state(
+            getfield(source, $field), gains, stages, Val{$path}(),
+        ))
+    end
+    return :(NamedTuple{$(QuoteNode(fieldnames(S)))}($(Expr(:tuple, values...))))
+
+end
+
+@generated function accessed_persistent_state(
+    source::S,
+    gains::G,
+    stages::R,
+    path::Val{P},
+) where {S <: ModelStateDescription, G <: Tuple, R, P}
+
+    if isempty(fieldnames(G)) || stage_subtree_is_empty(R, P)
+        return :source
+    end
+    return quote
+        continuous_states = accessed_continuous_states(source.continuous_states,
+            gains, stages, path)
+        models = accessed_persistent_children(source.models, gains, stages, path)
+        copy_model_state_description_except(source; continuous_states, models)
+    end
+
+end
+
+function accessed_persistent_state(source, gains, stages)
+    return accessed_persistent_state(source, gains, stages, Val(()))
 end
 
 # The adaptive controller receives one normalized error per continuous variable through

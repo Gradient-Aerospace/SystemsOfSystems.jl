@@ -2,16 +2,22 @@
 The `Solvers` module contains continuous-time integration algorithms and their step-size
 controllers.
 
-The simulation loop and numerical solver deliberately meet at a narrow boundary: one call
-to `step!` attempts and returns exactly one accepted numerical step without crossing a
-rational time bound. Every accepted step remains visible to the simulation loop, which then
-logs the sample, runs hooks, draws discrete random variables, and performs discrete updates.
+The simulation loop and numerical solver meet at a narrow boundary: one call to `step!`
+returns one accepted numerical step or a solver failure. An accepted step never crosses its
+rational time bound. The simulation loop observes every accepted step, logs the sample, runs
+hooks, draws discrete random variables, and performs discrete updates.
 
-Numerical methods in this module do not know how SystemsOfSystems stores model state. They
-use the operations supplied by `ContinuousProblems` to prepare a random interval, evaluate
-rates, form linear combinations of derivatives, and measure normalized error. This
-separation makes a Butcher tableau a description of mathematics rather than a second
-implementation of the simulation engine.
+Each per-simulation integrator owns its controller history and private stage-derivative
+references. `ContinuousProblems` supplies model adaptation, derivative combinations, error
+measurement, and the owned descriptor shells used for provisional stages. A private attempt
+holds a lease on that storage from its first rates callback through final and embedded state
+construction and error evaluation. Stage references are cleared before the lease is released.
+
+Provisional shells remain internal. User callbacks receive ordinary constructed model
+values, and public propagation and accepted-step results preserve persistent ownership and
+the existing shallow payload aliases. Unsupported adapters and reentrant attempts use the
+persistent compatibility path. Butcher tableaux continue to describe numerical coefficients;
+model field routing and storage ownership are separate from those coefficients.
 """
 module Solvers
 
@@ -22,7 +28,9 @@ public AbstractSolverOptions, AbstractIntegrator, AbstractSolver,
     draw_continuous_random_variables, create_integrator, step!
 
 using ..ContinuousProblems: ContinuousProblem, evaluate_rates, normalized_error,
-    draw_continuous_random_variables, propagate
+    draw_continuous_random_variables, propagate, create_provisional_workspace,
+    provisional_workspace_available, provisional_state, accessed_provisional_state,
+    accessed_persistent_state
 using ..SimulationTimes: ExactTime, exact_time, float_duration, solver_time, time_isless
 using ..SystemsOfSystems: AbstractFailureReason, ModelStateDescription
 import ..SystemsOfSystems
@@ -298,9 +306,17 @@ A runtime explicit Runge-Kutta integrator composed from a tableau and a controll
 The same numerical kernel serves fixed and adaptive methods. Their behavior differs only in
 how the controller chooses an endpoint and whether the tableau supplies embedded weights.
 """
-struct RungeKuttaIntegrator{M, C} <: AbstractIntegrator
+struct RungeKuttaIntegrator{M, C, W} <: AbstractIntegrator
     method::M
     controller::C
+    workspace::W
+end
+
+# Directly constructed integrators retain the persistent compatibility path. Built-in
+# option initialization can additionally create private provisional storage for one run.
+RungeKuttaIntegrator(method, controller) = RungeKuttaIntegrator(method, controller, nothing)
+function RungeKuttaIntegrator{M, C}(method, controller) where {M, C}
+    return RungeKuttaIntegrator{M, C, Nothing}(method, controller, nothing)
 end
 
 #######################
@@ -392,6 +408,7 @@ function create_integrator(
     return RungeKuttaIntegrator(
         RALSTON_2_TABLEAU,
         FixedStepController(float(options.dt)),
+        create_provisional_workspace(problem, initial_state),
     )
 end
 
@@ -403,6 +420,7 @@ function create_integrator(
     return RungeKuttaIntegrator(
         RUNGE_KUTTA_4_TABLEAU,
         FixedStepController(float(options.dt)),
+        create_provisional_workspace(problem, initial_state),
     )
 end
 
@@ -421,6 +439,7 @@ function create_integrator(
             0.8,
             20,
         ),
+        create_provisional_workspace(problem, initial_state),
     )
 end
 
@@ -476,10 +495,18 @@ function choose_step_interval(t_start::Rational, t_bound::Rational, proposed_dt:
 
 end
 
-# `evaluate_remaining_stages` uses value recursion rather than a runtime loop. Each
-# recursive call has a different, statically known tuple of rates, so Julia can specialize
-# propagation without the type instability caused by repeatedly assigning
-# `(stages..., new_stage)` to one local variable in the original DP54 implementation.
+# Stage combinations need derivatives and their hierarchy, while accepted beginning
+# outputs and stop requests remain in `rates_at_start`. Preserve every child and derivative
+# field, including empty branches, so propagation sees the same structure and payloads.
+function derivative_stage(output::SystemsOfSystems.RatesOutput)
+    return SystemsOfSystems.RatesOutput(;
+        rates = output.rates,
+        models = map(derivative_stage, output.models),
+    )
+end
+
+# Compatibility stages use value recursion with a statically known tuple at each call.
+# This preserves specialization when consecutive derivative results have different types.
 
 @inline function evaluate_remaining_stages(
     method,
@@ -488,6 +515,7 @@ end
     dt,
     state_at_start,
     stages,
+    workspace,
     ::Val{N},
     ::Val{N},
 ) where {N}
@@ -501,12 +529,13 @@ end
     dt,
     state_at_start,
     stages,
+    workspace,
     ::Val{I},
     ::Val{N},
 ) where {I, N}
 
     gains = map(coefficient -> dt * coefficient, method.a[I])
-    stage_state = propagate(state_at_start, gains, stages)
+    stage_state = provisional_state(workspace, state_at_start, gains, stages)
     stage_time = t_start_f + dt * method.c[I]
     stage_rates = evaluate_rates(problem, stage_time, stage_state)
 
@@ -516,7 +545,8 @@ end
         t_start_f,
         dt,
         state_at_start,
-        (stages..., stage_rates),
+        (stages..., derivative_stage(stage_rates)),
+        workspace,
         Val(I + 1),
         Val(N),
     )
@@ -541,6 +571,36 @@ function evaluate_stages(
     t_end::Rational,
     dt::Float64,
     state_at_start::ModelStateDescription,
+    workspace = nothing,
+)
+
+    # Acquiring before the first callback also protects against reentry from that callback.
+    # Public callers without a workspace and unsupported adapters keep persistent stages.
+    if !provisional_workspace_available(workspace, problem, state_at_start)
+        return evaluate_stages_with_workspace(
+            method, problem, t_start, t_end, dt, state_at_start, nothing,
+        )
+    end
+
+    workspace.active = true
+    try
+        return evaluate_stages_with_workspace(
+            method, problem, t_start, t_end, dt, state_at_start, workspace,
+        )
+    finally
+        workspace.active = false
+    end
+
+end
+
+function evaluate_stages_with_workspace(
+    method,
+    problem,
+    t_start,
+    t_end,
+    dt,
+    state_at_start,
+    workspace,
 )
     t_start_f = float(t_start)
     rates_at_start = evaluate_rates(problem, t_start_f, state_at_start)
@@ -550,7 +610,8 @@ function evaluate_stages(
         t_start_f,
         dt,
         state_at_start,
-        (rates_at_start,),
+        (derivative_stage(rates_at_start),),
+        workspace,
         Val(1),
         stage_count(method),
     )
@@ -560,6 +621,178 @@ end
 function solution_state(state_at_start, dt, weights, stages)
     gains = map(coefficient -> dt * coefficient, weights)
     return propagate(state_at_start, gains, stages)
+end
+
+###########################
+# Private Attempt Storage #
+###########################
+
+# The store is initialized from an already evaluated derivative, without extra callbacks.
+# It retains the callback's payload references and is cleared before releasing its lease.
+struct DerivativeStageStore{D}
+    stages::Vector{D}
+end
+
+# This wrapper selects literal leaf access for private storage. Ordinary tuples remain the
+# persistent compatibility path when a later derivative changes its concrete structure.
+struct AccessedStages{S}
+    stages::S
+end
+
+function prepare_stage_store(workspace, first_stage::D, ::Val{N}) where {D, N}
+
+    stored = workspace.stage_storage
+    store = if stored isa DerivativeStageStore{D}
+        stored
+    else
+        created = DerivativeStageStore(Vector{D}())
+        sizehint!(created.stages, N)
+        workspace.stage_storage = created
+        created
+    end
+    empty!(store.stages)
+    push!(store.stages, first_stage)
+    return store
+
+end
+
+function clear_stage_store!(workspace)
+    store = workspace.stage_storage
+    store isa DerivativeStageStore && empty!(store.stages)
+    return nothing
+end
+
+@inline function evaluate_stored_stages(
+    method, problem, t_start_f, dt, state_at_start, workspace,
+    store::DerivativeStageStore, ::Val{N}, ::Val{N},
+) where {N}
+    return AccessedStages(store.stages)
+end
+
+@inline function evaluate_stored_stages(
+    method, problem, t_start_f, dt, state_at_start, workspace,
+    store::DerivativeStageStore{D}, ::Val{I}, count::Val{N},
+) where {D, I, N}
+
+    gains = map(coefficient -> dt * coefficient, method.a[I])
+    stage_state = accessed_provisional_state(workspace, state_at_start, gains, store.stages)
+    stage_time = t_start_f + dt * method.c[I]
+    stage_rates = evaluate_rates(problem, stage_time, stage_state)
+    derivative = derivative_stage(stage_rates)
+    if typeof(derivative) !== D
+        # Preserve the already evaluated prefix and new result. The persistent tuple path
+        # handles heterogeneous structures without conversion or callback replay.
+        prefix = ntuple(index -> store.stages[index], Val(I))
+        return evaluate_remaining_stages(method, problem, t_start_f, dt, state_at_start,
+            (prefix..., derivative), workspace, Val(I + 1), count)
+    end
+    push!(store.stages, derivative)
+    return evaluate_stored_stages(method, problem, t_start_f, dt, state_at_start,
+        workspace, store, Val(I + 1), count)
+
+end
+
+# Tuple-backed private attempts use the same literal leaf arithmetic. Their stage values
+# remain local until all persistent results have been constructed.
+@inline function evaluate_accessed_tuple_stages(
+    method, problem, t_start_f, dt, state_at_start, workspace,
+    stages::Tuple, ::Val{N}, ::Val{N},
+) where {N}
+    return AccessedStages(stages)
+end
+
+@inline function evaluate_accessed_tuple_stages(
+    method, problem, t_start_f, dt, state_at_start, workspace,
+    stages::Tuple, ::Val{I}, count::Val{N},
+) where {I, N}
+
+    gains = map(coefficient -> dt * coefficient, method.a[I])
+    stage_state = accessed_provisional_state(workspace, state_at_start, gains, stages)
+    stage_time = t_start_f + dt * method.c[I]
+    stage_rates = evaluate_rates(problem, stage_time, stage_state)
+    derivative = derivative_stage(stage_rates)
+    if typeof(derivative) !== typeof(first(stages))
+        return evaluate_remaining_stages(method, problem, t_start_f, dt, state_at_start,
+            (stages..., derivative), workspace, Val(I + 1), count)
+    end
+    return evaluate_accessed_tuple_stages(method, problem, t_start_f, dt, state_at_start,
+        workspace, (stages..., derivative), Val(I + 1), count)
+
+end
+
+function attempt_solution_state(state, dt, weights, stages::AccessedStages)
+    gains = map(coefficient -> dt * coefficient, weights)
+    return accessed_persistent_state(state, gains, stages.stages)
+end
+
+attempt_solution_state(state, dt, weights, stages::Tuple) =
+    solution_state(state, dt, weights, stages)
+
+function finish_attempt(
+    method, problem, dt, state_at_start, rates_at_start, stages, ::FixedStepController,
+)
+    state_at_end = attempt_solution_state(state_at_start, dt, method.b, stages)
+    return (; state_at_start, rates_at_start, state_at_end, dt, err = nothing)
+end
+
+function finish_attempt(
+    method, problem, dt, state_at_start, rates_at_start, stages,
+    controller::EmbeddedAdaptiveController,
+)
+
+    state_at_end = attempt_solution_state(state_at_start, dt, method.b, stages)
+    embedded_state = attempt_solution_state(state_at_start, dt, method.embedded_b, stages)
+    err = normalized_error(problem, state_at_end, embedded_state,
+        controller.absolute_tolerance, controller.relative_tolerance)
+    return (; state_at_start, rates_at_start, state_at_end, dt, err)
+
+end
+
+function private_attempt_stages(
+    method, problem, t_start_f, dt, state, workspace, first_stage, ::Val{:vector},
+)
+    store = prepare_stage_store(workspace, first_stage, stage_count(method))
+    return evaluate_stored_stages(method, problem, t_start_f, dt, state,
+        workspace, store, Val(1), stage_count(method))
+end
+
+function private_attempt_stages(
+    method, problem, t_start_f, dt, state, workspace, first_stage, ::Val{:tuple},
+)
+    return evaluate_accessed_tuple_stages(method, problem, t_start_f, dt, state,
+        workspace, (first_stage,), Val(1), stage_count(method))
+end
+
+function attempt_solutions(
+    integrator, problem, t_start, t_end, dt, state_at_start, storage = Val(:vector),
+)
+
+    workspace = integrator.workspace
+    if !provisional_workspace_available(workspace, problem, state_at_start)
+        attempt = evaluate_stages(integrator.method, problem,
+            t_start, t_end, dt, state_at_start)
+        return finish_attempt(integrator.method, problem, dt, attempt.state_at_start,
+            attempt.rates_at_start, attempt.stages, integrator.controller)
+    end
+
+    # The bank is private until every consumer is done, including final/embedded arithmetic
+    # and custom error policies. Reentrant use takes the persistent compatibility path.
+    workspace.active = true
+    try
+        rates_at_start = evaluate_rates(problem, float(t_start), state_at_start)
+        first_stage = derivative_stage(rates_at_start)
+        stages = private_attempt_stages(integrator.method, problem, float(t_start), dt,
+            state_at_start, workspace, first_stage, storage)
+        return finish_attempt(integrator.method, problem, dt, state_at_start,
+            rates_at_start, stages, integrator.controller)
+    finally
+        try
+            clear_stage_store!(workspace)
+        finally
+            workspace.active = false
+        end
+    end
+
 end
 
 """
@@ -603,23 +836,11 @@ function step!(
         t_next_crv_draw = request.t_next_crv_draw
     end
 
-    # Calculate each of the derivatives.
-    attempt = evaluate_stages(
-        integrator.method,
-        problem,
-        request.t_start,
-        interval.t_end,
-        interval.dt,
-        state_at_start,
+    # Evaluate the attempt and construct its persistent solution state.
+    attempt = attempt_solutions(
+        integrator, problem, request.t_start, interval.t_end, interval.dt, state_at_start,
     )
-
-    # Assemble the updated state.
-    state_at_end = solution_state(
-        attempt.state_at_start,
-        attempt.dt,
-        integrator.method.b,
-        attempt.stages,
-    )
+    state_at_end = attempt.state_at_end
 
     return AcceptedStep(
         interval.t_end,
@@ -674,39 +895,16 @@ function step!(
 
     for rejection_count in 0:controller.max_rejections
 
-        # Calculate each of the derivatives.
-        attempt = evaluate_stages(
-            integrator.method,
-            problem,
-            request.t_start,
-            interval.t_end,
-            interval.dt,
+        # Complete the full and embedded solutions and the custom error policy.
+        attempt = attempt_solutions(
+            integrator, problem, request.t_start, interval.t_end, interval.dt,
             state_at_start,
         )
+        state_at_end = attempt.state_at_end
 
-        # Assemble the updated state and embedded state.
-        state_at_end = solution_state(
-            attempt.state_at_start,
-            attempt.dt,
-            integrator.method.b,
-            attempt.stages,
-        )
-        embedded_state = solution_state(
-            attempt.state_at_start,
-            attempt.dt,
-            integrator.method.embedded_b,
-            attempt.stages,
-        )
-
-        # Figure out how much normalized error we have, and what dt that suggests for next
-        # time.
-        err = normalized_error(
-            problem,
-            state_at_end,
-            embedded_state,
-            controller.absolute_tolerance,
-            controller.relative_tolerance,
-        )
+        # The attempt finishes its persistent states and error policy before releasing
+        # private storage. Step-size selection uses the same error and coefficient order.
+        err = attempt.err
         next_dt = suggested_dt(
             controller,
             attempt.dt,

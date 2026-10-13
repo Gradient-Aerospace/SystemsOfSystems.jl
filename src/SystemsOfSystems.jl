@@ -794,19 +794,76 @@ end
 # ModelStateDescription #
 #########################
 
-# This is our internal representation of the stuff necessary to construct the model form.
-# It's mutable only to put it on the heap.
-@kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
-    constants::CT
+# Configuration is shared by all state snapshots. Reference storage keeps large isbits
+# configuration fields out of every propagated state descriptor. Fields are never mutated.
+mutable struct StaticModelData{CT, ST, RT}
+    const constants::CT
+    const schedules::ST
+    const resources::RT
+end
+
+# Dynamic state descriptions retain independent ownership across solver stages and updates.
+mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
+    static::StaticModelData{CT, ST, RT}
     continuous_states::XCT
     discrete_states::XDT
     continuous_random_variables::WCT
     discrete_random_variables::WDT
-    schedules::ST
     models::MT
-    resources::RT
     t_next::ExactTime
 end
+
+function Base.getproperty(desc::ModelStateDescription, name::Symbol)
+    if name === :constants || name === :schedules || name === :resources
+        return getfield(getfield(desc, :static), name)
+    end
+    return getfield(desc, name)
+end
+
+function Base.propertynames(::ModelStateDescription, private::Bool = false)
+    names = (
+        :constants, :continuous_states, :discrete_states, :continuous_random_variables,
+        :discrete_random_variables, :schedules, :models, :resources, :t_next,
+    )
+    return private ? (names..., :static) : names
+end
+
+# Preserve the concrete positional constructor used by existing state-description callers.
+function ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}(
+    constants,
+    continuous_states,
+    discrete_states,
+    continuous_random_variables,
+    discrete_random_variables,
+    schedules,
+    models,
+    resources,
+    t_next,
+) where {T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
+    return ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}(
+        StaticModelData{CT, ST, RT}(constants, schedules, resources), continuous_states,
+        discrete_states, continuous_random_variables, discrete_random_variables,
+        models, t_next,
+    )
+end
+
+function ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}(;
+    constants,
+    continuous_states,
+    discrete_states,
+    continuous_random_variables,
+    discrete_random_variables,
+    schedules,
+    models,
+    resources,
+    t_next,
+) where {T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
+    return ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}(
+        constants, continuous_states, discrete_states, continuous_random_variables,
+        discrete_random_variables, schedules, models, resources, t_next,
+    )
+end
+
 function ModelStateDescription{T}(;
     constants = (;),
     continuous_states = (;),
@@ -858,23 +915,33 @@ function model(desc::ModelStateDescription{T}) where {T}
     )
 end
 
-# This has no allocations for bits types.
+# Share configuration while preserving a fresh dynamic descriptor and its existing types.
 function copy_model_state_description_except(
     md::T;
-    kwargs...
+    constants = md.constants,
+    continuous_states = md.continuous_states,
+    discrete_states = md.discrete_states,
+    continuous_random_variables = md.continuous_random_variables,
+    discrete_random_variables = md.discrete_random_variables,
+    schedules = md.schedules,
+    models = md.models,
+    resources = md.resources,
+    t_next = md.t_next,
 ) where {T <: ModelStateDescription}
-    return T(;
-        md.constants,
-        md.continuous_states,
-        md.discrete_states,
-        md.continuous_random_variables,
-        md.discrete_random_variables,
-        md.schedules,
-        md.models,
-        md.resources,
-        md.t_next,
-        kwargs...
+
+    # A caller may explicitly replace configuration. Ordinary propagation and updates
+    # preserve its identity and require no new configuration object.
+    static = md.static
+    if constants !== static.constants || schedules !== static.schedules ||
+        resources !== static.resources
+        static = typeof(md.static)(constants, schedules, resources)
+    end
+
+    return T(
+        static, continuous_states, discrete_states, continuous_random_variables,
+        discrete_random_variables, models, t_next,
     )
+
 end
 
 ##############
@@ -1327,6 +1394,8 @@ find_model_requested_stop(::Nothing) = nothing
 # beginning-of-step rates evaluation requests a stop.
 first_stop(current, candidate) = isnothing(current) ? candidate : current
 
+include("UpdateTransactions.jl")
+
 """
     step!(...)
 
@@ -1351,6 +1420,7 @@ function step!(
     integrator,
     hooks,
     t_next_crv_draw,
+    update_transaction = nothing,
 )
 
     # Determine the hard upper bound for one accepted numerical step. Step-size suggestions
@@ -1440,28 +1510,8 @@ function step!(
     msd = draw_wd(t_next, ommd, msd)
 
     # Perform the discrete update from t_next^- to t_next^+.
-    updates = updates_fcn(t_next, model(msd))
-    validate_updates_output(ommd, updates)
-
-    # A model's first update stop is considered only if an earlier accepted rates evaluation
-    # or hook has not already supplied the reason for this sample to be the last.
-    stop = first_stop(stop, find_model_requested_stop(updates))
-
-    # Construct the authoritative post-update model state before logging. Sparse event
-    # logging still receives `msd` so it can record the pre-update side of continuous-state
-    # discontinuities, while snapshot logging reads complete discrete states from
-    # `updated_msd`.
-    updated_msd = update(msd, updates)
-
-    # Log the update events and any state snapshots selected at this time.
-    #
-    # If a discrete update changes continuous state, this records the pre-update side of the
-    # discontinuity. The next continuous state sample records the post-update side. Its
-    # matching output is recorded separately after rates have been evaluated successfully.
-    #
-    SimulationLogging.log_discrete_stuff!(
-        t_next, float(t_next), logging_runtime,
-        updates, msd, updated_msd,
+    updated_msd, stop = UpdateTransactions.consume!(
+        update_transaction, updates_fcn, t_next, ommd, msd, logging_runtime, stop,
     )
 
     # Now accept the update.
@@ -1658,10 +1708,11 @@ function make_runtime(inputs)
         # then rethrow.
         initial_model = model(msd)
         hooks = Hooks.AbstractHook[]
-        try
+        update_transaction = try
             for hook_options in inputs.options.hooks
                 push!(hooks, Hooks.create_hook(hook_options, t, initial_model))
             end
+            UpdateTransactions.make_transaction(inputs.updates_fcn, ommd, msd)
         catch err
             close_hooks(hooks, t_start, initial_model)
             rethrow(err)
@@ -1669,6 +1720,7 @@ function make_runtime(inputs)
 
         return (;
             inputs.updates_fcn,
+            update_transaction,
             ommd,
             t, schedules,
             msd,
@@ -1706,6 +1758,8 @@ function loop!(runtime)
     ommd = runtime.ommd
     problem = runtime.problem
     updates_fcn = runtime.updates_fcn
+    update_transaction = hasproperty(runtime, :update_transaction) ?
+        runtime.update_transaction : nothing
     integrator = runtime.integrator
     hooks = runtime.hooks
     t_end = last(runtime.t)
@@ -1731,6 +1785,7 @@ function loop!(runtime)
                 logging_runtime,
                 t, schedules, ommd, problem, updates_fcn, t_completed, msd,
                 integrator, hooks, t_next_crv_draw,
+                update_transaction,
             )
 
             # A successfully processed terminal sample receives one direct post-update
