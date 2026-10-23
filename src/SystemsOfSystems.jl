@@ -804,7 +804,7 @@ end
 # This is our internal representation of the stuff necessary to construct the model form.
 # It's mutable only to put it on the heap.
 @kwdef mutable struct ModelStateDescription{T, CT, XCT, XDT, WCT, WDT, ST, MT, RT}
-    constants::CT
+    constants::Base.RefValue{CT}
     continuous_states::XCT
     discrete_states::XDT
     continuous_random_variables::WCT
@@ -830,7 +830,7 @@ function ModelStateDescription{T}(;
         typeof(continuous_random_variables), typeof(discrete_random_variables),
         typeof(schedules), typeof(models), typeof(resources),
     }(
-        constants, continuous_states, discrete_states,
+        Ref(constants), continuous_states, discrete_states,
         continuous_random_variables, discrete_random_variables,
         schedules, models, resources,
         exact_time(t_next),
@@ -840,7 +840,7 @@ end
 # This has no allocations for bits types.
 function model(desc::ModelStateDescription{Nothing})
     return (;
-        desc.constants...,
+        desc.constants[]...,
         desc.schedules...,
         desc.continuous_states...,
         desc.continuous_random_variables...,
@@ -854,7 +854,7 @@ end
 # This has no allocations for bits types.
 function model(desc::ModelStateDescription{T}) where {T}
     return T(;
-        desc.constants...,
+        desc.constants[]...,
         desc.schedules...,
         desc.continuous_states...,
         desc.continuous_random_variables...,
