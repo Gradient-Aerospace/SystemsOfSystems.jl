@@ -133,7 +133,7 @@ details(stop::EncounteredError) = sprint(showerror, stop.exception, stop.trace)
 # A portable termination reason that represents the full API.
 
 """
-    TerminationSummary(; type, finished, failed, interrupted, summary, details)
+    TerminationSummary(; reason_type, finished, failed, interrupted, summary, details)
     TerminationSummary(reason::AbstractTerminationReason)
 
 Stores the results of the complete API for an `AbstractTerminationReason` in a portable way.
@@ -141,7 +141,7 @@ This simple type is easy to save to and load from an HDF5 file or YAML file, etc
 
 Fields:
 
-* `type::String`: The string representing the original termination reason's type
+* `reason_type::String`: The string representing the original termination reason's type
 * `finished::Bool`: The result of calling `finished` on the original termination
 * `failed::Bool`: The result of calling `failed` on the original termination
 * `interrupted::Bool`: The result of calling `interrupted` on the original termination
@@ -151,7 +151,7 @@ Fields:
 All defaults are `""` or `false`.
 """
 @kwdef struct TerminationSummary <: AbstractTerminationReason
-    type::String = ""
+    reason_type::String = ""
     finished::Bool = false
     failed::Bool = false
     interrupted::Bool = false
@@ -166,7 +166,7 @@ Returns a `TerminationSummary` for the given termination reason.
 """
 function TerminationSummary(stop::AbstractTerminationReason)
     return TerminationSummary(;
-        type = string(typeof(stop)),
+        reason_type = string(typeof(stop)),
         finished = finished(stop),
         failed = failed(stop),
         interrupted = interrupted(stop),

@@ -19,7 +19,7 @@ end
 
 function read_stop(group)
     return TerminationSummary(;
-        type = read(group["type"]),
+        reason_type = read(group["reason_type"]),
         finished = read(group["finished"]),
         failed = read(group["failed"]),
         interrupted = read(group["interrupted"]),

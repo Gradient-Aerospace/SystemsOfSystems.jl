@@ -169,7 +169,7 @@ end
         end
         @test read(fid["history/t_start"]) === Float64(history.t_start)
         @test read(fid["history/t_stop"]) === Float64(history.t_stop)
-        @test read(fid["history/stop/type"]) == string(typeof(history.stop))
+        @test read(fid["history/stop/reason_type"]) == string(typeof(history.stop))
         @test read(fid["history/stop/finished"])
         @test !read(fid["history/stop/failed"])
         @test !read(fid["history/stop/interrupted"])
@@ -300,7 +300,7 @@ end
         load_sim_history(filename) do restored
 
             @test restored.stop isa TerminationSummary
-            @test restored.stop.type == string(typeof(stop))
+            @test restored.stop.reason_type == string(typeof(stop))
             @test (finished(restored.stop), failed(restored.stop),
                 interrupted(restored.stop)) == classification
             for f in (finished, failed, interrupted, describe, details)
@@ -331,10 +331,10 @@ end
     copied = joinpath(mktempdir(), "copied.h5")
     save_sim_history(copied, restored)
     again = load_sim_history(copied)
-    @test again.stop.type == restored.stop.type == string(typeof(stop))
+    @test again.stop.reason_type == restored.stop.reason_type == string(typeof(stop))
     @test termination_api_values_are_equal(again.stop, restored.stop)
     HDF5.h5open(copied, "r") do file
-        @test read(file["history/stop/type"]) == string(typeof(stop))
+        @test read(file["history/stop/reason_type"]) == string(typeof(stop))
     end
     Logs.close_log(again.log)
     Logs.close_log(restored.log)
