@@ -1255,13 +1255,28 @@ function update_model_t_next(last_t_next, updated_t_next)
 end
 
 function update(msd::ModelStateDescription, updates_output::UpdatesOutput)
+
+    continuous_states = update_states(msd.continuous_states, updates_output.updates)
+    discrete_states = update_states(msd.discrete_states, updates_output.updates)
+    models = update_submodels(msd.models, updates_output.models)
+    t_next = update_model_t_next(msd.t_next, updates_output.t_next)
+
+    # Outputs and stop requests are handled separately from the model's stored state.
+    if continuous_states === msd.continuous_states &&
+       discrete_states === msd.discrete_states &&
+       models === msd.models &&
+       t_next == msd.t_next
+        return msd
+    end
+
     return copy_model_state_description_except(
         msd;
-        continuous_states = update_states(msd.continuous_states, updates_output.updates),
-        discrete_states = update_states(msd.discrete_states, updates_output.updates),
-        models = update_submodels(msd.models, updates_output.models),
-        t_next = update_model_t_next(msd.t_next, updates_output.t_next),
+        continuous_states,
+        discrete_states,
+        models,
+        t_next,
     )
+
 end
 
 update(msd::ModelStateDescription, ::Nothing) = msd

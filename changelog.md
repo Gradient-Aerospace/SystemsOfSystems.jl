@@ -11,6 +11,7 @@
 * Added an API for termination reasons (`finished`, `failed`, `interrupted`, `describe`, and `details`).
 * Added `gc_policy` option to `SimOptions`.
 * Reduced allocations when logging continuous and discrete outputs with different field types.
+* Reduced unnecessary propagation and allocations due to unnecessary copies when states do not change.
 
 ## v1.1.0
 
