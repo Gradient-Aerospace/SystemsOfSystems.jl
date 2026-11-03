@@ -1,6 +1,6 @@
 # SystemsOfSystems Change Log
 
-## Unreleased
+## v1.2.0
 
 ### Non-Breaking
 
@@ -11,7 +11,7 @@
 * Added an API for termination reasons (`finished`, `failed`, `interrupted`, `describe`, and `details`).
 * Added `gc_policy` option to `SimOptions`.
 * Reduced allocations when logging continuous and discrete outputs with different field types.
-* Reduced unnecessary propagation and allocations due to unnecessary copies when states do not change.
+* Reduced unnecessary propagation and allocations due to copies when states do not change.
 * Changed internal representation of constants to use a Ref to reduce unnecessary allocations when copying non-bits constants.
 
 ## v1.1.0
@@ -21,9 +21,6 @@
 * Added iteration over TimeSeries
 * Added `AlwaysTriggeringSchedule`
 * Added `Interrupted` stop reason for interruptions like the `InterruptException` resulting from ctrl+c. This is not considered a failure, and `succeeded(history)` will return true for interrupted runs.
-### Patch
-
-* Updated compat bounds for OrderedCollections to include 2.0.
 
 ### Patch
 
